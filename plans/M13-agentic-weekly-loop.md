@@ -9,12 +9,12 @@ the next strategy version — proposing only, never executing.
 
 - **Agent orchestration** (LangGraph.js or Vercel AI SDK) over the read-only MCP tools.
   - *Output:* a multi-step graph: fetch data → analyze → draft strategy → backtest → report.
-- **Draft-strategy step.** Produce a new `strategy_version` (params/code) linked via `parent_version_id`.
-  - *Output:* a draft version persisted as `draft`, not `active`.
-- **Backtest-and-report step.** Run the draft vs. the current active version; summarize.
-  - *Output:* a comparison report for human review.
-- **Halt-for-approval gate.** No promotion without explicit human approval.
-  - *Output:* drafts never auto-activate.
+- **Draft-strategy step (draft-only write path).** Produce a new `strategy_version` via a **constrained repository method that physically cannot set `status='active'`** — the agent's only DB capability. Linked via `parent_version_id`.
+  - *Output:* a draft version persisted as `draft`; the agent has no code path to activate it.
+- **Backtest-and-report step.** Run the draft vs. the current active version using the M8 out-of-sample + significance gate; summarize.
+  - *Output:* a statistically-qualified comparison report for human review.
+- **Promotion is a separate human-only path.** Activating a version is code the agent cannot reach.
+  - *Output:* drafts never auto-activate; promotion requires explicit human action.
 
 ## Definition of done
 

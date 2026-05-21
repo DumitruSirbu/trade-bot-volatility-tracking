@@ -73,6 +73,13 @@ instruments      id · symbol(unique) · base · quote · status · tick_size ·
 candles          id · symbol · interval · open_time(idx) · open · high · low · close · volume
                  UNIQUE(symbol, interval, open_time)
 
+tick_aggregates  id · symbol · ts(idx) · price · volume        -- sub-minute (1s/5s) data
+                 -- backtest replays this so intra-minute >2-3% triggers reproduce live
+                 UNIQUE(symbol, ts)
+
+universe_membership id · symbol · entered_at · left_at(null)   -- point-in-time top-300
+                 -- backtests replay the universe as it WAS (no survivorship bias)
+
 strategy_versions id · name · version(int) · direction(mean_reversion|momentum|hybrid)
                  params(jsonb) · status(draft|active|archived)
                  parent_version_id(fk→self, null) · created_at
@@ -84,8 +91,10 @@ positions        id · symbol · strategy_version_id(fk) · side(short|long)
                  opened_at · closed_at(null)
                  idx(strategy_version_id, status) · idx(symbol, status)
 
-transactions     id · position_id(fk) · type(open|add|reduce|close)
-                 side · price · qty · fee · exchange_order_id(unique) · created_at
+transactions     id · position_id(fk) · type(open|add|reduce|close|funding)
+                 side · price · qty · fee · client_order_id · exchange_order_id(unique) · created_at
+                 -- funding rows record periodic perpetual funding cashflows into realized PnL
+                 -- client_order_id is the reconciliation/idempotency match key
 
 decisions        id · symbol · strategy_version_id(fk) · ts
                  signal_type · market_snapshot(jsonb)

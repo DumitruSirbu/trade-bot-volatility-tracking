@@ -9,14 +9,16 @@ recorded faithfully.
 
 - **ExecutionModule** consuming approved order intents; places market/limit orders via ccxt on **testnet**.
   - *Output:* a live signal results in a real testnet order.
-- **Idempotency.** Client order IDs / dedup so a restart or retry can't double-fire.
-  - *Output:* replaying the same intent places at most one order.
+- **Idempotency across all actions.** Client order IDs / dedup so a restart or retry can't double-fire — applied to `open / add / reduce / close`, not just entries. On an order whose final state is **unknown** (timeout after submit), query by `clientOrderId` before any retry.
+  - *Output:* replaying any of the four actions, or recovering from a timeout, places at most one order.
 - **Open / reduce / close / add** order paths writing `transactions` and creating/updating `positions`.
   - *Output:* each action persists a transaction and updates position state.
-- **Partial-fill & error handling.** Track filled qty; surface and log exchange errors without crashing the loop.
-  - *Output:* partial fills reconciled; errors logged and recovered.
-- **Attach SL/TP** from the risk intent (exchange-side orders where supported).
-  - *Output:* protective orders present after entry.
+- **Partial-fill handling.** Track filled qty; **recompute position notional and SL/TP from the *actual* filled qty** (not the intended qty); define the unfilled-remainder policy (cancel + re-evaluate vs. leave resting with a timeout).
+  - *Output:* protective levels and exposure match the filled qty; remainder handled per policy.
+- **Error handling.** Surface and log exchange errors without crashing the loop.
+  - *Output:* errors logged and recovered.
+- **Attach SL/TP** from the risk intent (exchange-side orders where supported). When unsupported/rejected, the M6 local monitor owns protection — never leave a position unprotected.
+  - *Output:* protective orders present after entry, or the local monitor engaged.
 
 ## Definition of done
 

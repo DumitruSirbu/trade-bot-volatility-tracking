@@ -11,11 +11,15 @@ size.
   - *Output:* simulated drops recover automatically with an alert.
 - **Rate-limit guards.** Respect Binance limits; queue/throttle order calls.
   - *Output:* no rate-limit bans under burst conditions.
-- **Secrets handling.** Live keys outside the repo; least-privilege API key (no withdrawals).
-  - *Output:* keys sourced from secure env; verified withdrawal scope disabled.
+- **Secrets handling.** Live keys from the cloud secret manager, outside the repo; least-privilege API key (no withdrawals).
+  - *Output:* keys sourced from the secret manager; no secret in any committed file.
+- **Startup key-permission assertion.** On boot, query the exchange key's permissions/IP-restriction via ccxt and **abort startup if withdrawal scope is enabled or the IP allow-list is empty.** Makes the no-withdrawal invariant verifiable, not just asserted.
+  - *Output:* a key with withdrawal rights (or no IP allow-list) prevents the engine from starting.
+- **Network posture.** The engine API is **private** (VPC-only / security-group restricted to the dashboard origin), not internet-facing; TLS terminated; managed Postgres on a private subnet with no public IP, encrypted at rest and in transit.
+  - *Output:* the engine API and DB are unreachable from the public internet.
 - **Tight live caps.** Smallest viable position size; conservative daily/weekly loss limits for go-live.
   - *Output:* config profile for live with minimal risk.
-- **Runbook.** Start/stop, halt, recover-from-crash, incident steps.
+- **Runbook.** Start/stop, halt, recover-from-crash, incident steps, and a **key-compromise / token-rotation procedure** (suspected leaked exchange key or API token).
   - *Output:* `RUNBOOK.md`.
 - **Switch ccxt to live keys** and start trading at minimal size.
   - *Output:* first real trade with all safety rails active.
