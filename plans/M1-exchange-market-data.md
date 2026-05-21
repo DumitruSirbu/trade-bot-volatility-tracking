@@ -15,8 +15,12 @@ in-memory rolling windows that surface sharp short-term moves.
   - *Output:* one connection streaming all symbols; reconnect on drop.
 - **In-memory rolling windows** per symbol (configurable lookback, e.g. 1–5 min).
   - *Output:* per-symbol % change computed continuously.
-- **Emit events:** `price.update` and `volatility.detected` (when % change over the window crosses the configured threshold).
+- **Define the trigger formula ONCE (live + backtest share it).** Simple return `(p_last / p_first) − 1` over a rolling N-second window, evaluated **per tick** on trade price. State N and whether the threshold is on the windowed move (not bar high-low range). This exact function is reused by the M7 backtest so triggers can't diverge. Constant: `VOLATILITY_THRESHOLD_PCT`.
+  - *Output:* a single documented, shared trigger function; a unit test pins its behavior on a known series.
+- **Emit events:** `price.update` and `volatility.detected` (when the windowed return crosses `VOLATILITY_THRESHOLD_PCT`).
   - *Output:* console log of detected >2–3% moves across the universe.
+- **Universe-membership transitions.** MarketDataModule owns emitting enter/leave events that M2 persists to `universe_membership`.
+  - *Output:* enter/leave transitions recorded as the universe refreshes.
 
 ## Definition of done
 

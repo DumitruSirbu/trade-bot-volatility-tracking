@@ -11,10 +11,10 @@ winner — the mechanism that answers "short the spike vs. follow it."
   - *Output:* lineage queryable; new versions link to parents.
 - **Walk-forward / out-of-sample evaluation.** Compare versions on a train/validation/out-of-sample split (not a single in-sample range). A winner must hold up on held-out data.
   - *Output:* `compare_versions(a, b, range)` reports in-sample AND out-of-sample metrics.
-- **Statistical significance + minimum sample.** Require a minimum trade count and a significance criterion (e.g. bootstrap CI on the PnL/Sharpe difference) before declaring a winner — so "v(n+1) beat v(n)" is signal, not noise.
-  - *Output:* the report states sample size and a confidence measure; thin/insignificant results are flagged "inconclusive."
-- **Regime robustness.** Evaluate across at least one trending and one ranging period (guards the mean-reversion thesis from looking good only in chop).
-  - *Output:* per-regime breakdown in the report.
+- **Statistical significance + minimum sample (pinned method).** Require **≥30 trades per regime** and a **paired block bootstrap** (block size covering trade autocorrelation) on the per-trade return-difference series, comparing versions on identical trade timestamps — fixed n=10,000 resamples, **95% two-sided CI**. A winner must have a CI excluding zero; otherwise "inconclusive."
+  - *Output:* the report states sample size and a bootstrap CI; thin/insignificant results are flagged "inconclusive."
+- **Regime robustness with an objective classifier.** Label periods trending vs ranging by a defined rule (e.g. ADX or realized-volatility threshold over the market index) — not hand-picked — and evaluate across at least one of each.
+  - *Output:* reproducible per-regime breakdown using the documented classifier.
 - **Promotion.** Mark the chosen version `active` and archive others; the live engine reads the active version. Promotion is **gated on passing the out-of-sample + significance criteria**.
   - *Output:* promoting changes live behavior via config/state; an inconclusive winner cannot be promoted.
 - **v1 vs v2 decision.** Run mean-reversion vs momentum over the accumulated point-in-time dataset.

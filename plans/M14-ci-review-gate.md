@@ -13,8 +13,8 @@ logic, and security before merge.
   - *Output:* test coverage feedback per PR.
 - **Scribe agent.** Keep docs (`CLAUDE.md`, plans, README) in sync after merges.
   - *Output:* doc drift flagged/updated.
-- **Supply-chain / dependency gate.** SCA (`npm/pnpm audit`) + lockfile-integrity check on every PR; pin and verify exchange-touching dependencies (ccxt, decimal.js). Critical for a money-handling bot.
-  - *Output:* a vulnerable dependency or lockfile tampering blocks merge.
+- **Supply-chain / dependency gate.** SCA (`npm/pnpm audit`) + lockfile-integrity check on every PR; pin and verify exchange-touching dependencies (ccxt, decimal.js). **Block on high/critical advisories** (define the threshold), with a documented exception process for unfixable findings and provenance verification for the exchange-touching deps. Critical for a money-handling bot.
+  - *Output:* a high/critical advisory or lockfile tampering blocks merge; exceptions are tracked.
 - **Gate policy.** Block merge on critical security/logic findings.
   - *Output:* failing review blocks merge.
 

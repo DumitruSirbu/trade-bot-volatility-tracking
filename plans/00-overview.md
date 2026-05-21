@@ -80,6 +80,10 @@ tick_aggregates  id · symbol · ts(idx) · price · volume        -- sub-minute
 universe_membership id · symbol · entered_at · left_at(null)   -- point-in-time top-300
                  -- backtests replay the universe as it WAS (no survivorship bias)
 
+funding_rates    id · symbol · funding_time(idx) · rate         -- 8-hourly historical funding
+                 -- backtest replays actual funding; live PnL uses real funding events
+                 UNIQUE(symbol, funding_time)
+
 strategy_versions id · name · version(int) · direction(mean_reversion|momentum|hybrid)
                  params(jsonb) · status(draft|active|archived)
                  parent_version_id(fk→self, null) · created_at

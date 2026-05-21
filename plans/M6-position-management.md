@@ -8,8 +8,10 @@
 
 - **Authoritative position state** in memory + DB; single source the rest of the system reads.
   - *Output:* open positions queryable with current state.
-- **Reconciliation with an explicit match key + drift policy.** Match exchange positions to DB rows via `clientOrderId` ↔ `transactions.exchange_order_id`. Enumerate every drift case and its action: (a) exchange position not in DB → adopt as `manual` (alert) or flatten per config; (b) DB-open not on exchange → mark closed/reconciled; (c) qty mismatch → trust exchange, log. Exchange is truth.
+- **Reconciliation with an explicit match key + drift policy.** Match exchange orders/positions to DB rows via **`client_order_id` ↔ `transactions.client_order_id`** (the bot-controlled key, usable even on a post-timeout query; `exchange_order_id` is only the post-fill unique record). Enumerate every drift case and its action: (a) exchange position not in DB → adopt as `manual` **but require human ack before the bot manages it** (alert), or flatten per config; (b) DB-open not on exchange → mark closed/reconciled; (c) qty mismatch → trust exchange, log. Exchange is truth.
   - *Output:* each drift case is detected and handled per the stated policy; injected drift resolves correctly.
+- **Release leaked exposure reservations.** When an order's final state is permanently unknown (M5 post-timeout), reconciliation releases its in-flight risk reservation (reservation has a TTL; reconciliation is the authoritative release path).
+  - *Output:* a timed-out intent's reservation is freed at reconciliation, not leaked.
 - **Local SL/TP monitor (fallback).** When an exchange-side protective order is unavailable or fails/expires, a price-driven monitor closes the position **through the risk gate** at the SL/TP level. (Reviewer blocker: otherwise positions are unprotected.)
   - *Output:* with exchange-side SL/TP disabled, the local monitor still closes at the level.
 - **Held symbols stay subscribed.** A coin leaving the top-300 universe must keep its price subscription + SL/TP monitoring until its position closes. (Reviewer blocker: universe churn must not drop tracking.)

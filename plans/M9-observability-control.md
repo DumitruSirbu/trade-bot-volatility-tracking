@@ -7,16 +7,16 @@ dashboard will consume.
 
 ## Tasks
 
-- **Auth FIRST (prerequisite gate).** Stand up the auth guard before any endpoint is wired. **Bearer tokens (or mTLS) from the secret manager, with rotation** — no static/basic credentials, none committed. A CORS allow-list restricts origins to the dashboard only. No endpoint — especially halt — exists before the guard is in place.
-  - *Output:* every endpoint rejects unauthenticated/cross-origin requests from the moment it exists.
-- **Telegram alerts** on open/close/error/halt + a daily PnL summary. Redact secrets; no keys/tokens in messages.
-  - *Output:* a phone message on every trade and error, no sensitive leakage.
+- **Auth FIRST (prerequisite gate).** Stand up the auth guard before any endpoint is wired. **Short-lived bearer tokens (or mTLS) from the secret manager, with server-side revocation** — define TTL and a revocation path; no static/basic credentials, none committed. A CORS allow-list restricts origins to the dashboard only. No endpoint — especially halt — exists before the guard is in place.
+  - *Output:* every endpoint rejects unauthenticated/cross-origin requests; a revoked token stops working immediately.
+- **Telegram alerts (strictly outbound)** on open/close/error/halt + a daily PnL summary (aligned to the UTC risk-day). **No inbound command handling** — Telegram is never a control path. Redact secrets; no keys/tokens in messages.
+  - *Output:* a phone message on every trade and error, outbound-only, no sensitive leakage.
 - **Kill switch.** Authenticated endpoint over the M0 halt flag; execution refuses new entries when halted. **Flatten-on-halt is a config flag with a stated default.** The endpoint is **rate-limited** and every toggle is **audit-logged** (actor, timestamp, source IP).
   - *Output:* one action stops new trading; honored by ExecutionModule; toggles are throttled and audited.
 - **Read API (REST).** Snapshots: open positions, PnL, recent decisions, performance-by-version, account equity. Authenticated; least-disclosure payloads.
   - *Output:* authenticated REST endpoints returning current state.
-- **Live updates (WS/SSE) gateway.** Push position/PnL/decision updates to authenticated subscribers.
-  - *Output:* a WS client receives live ticks only when authenticated.
+- **Live updates (WS/SSE) gateway.** Push position/PnL/decision updates to authenticated subscribers. **Validate the token at handshake AND re-validate on expiry** — a long-lived connection authenticated once must not stream forever; force re-auth on token expiry/revocation.
+  - *Output:* a WS client receives live ticks only while holding a valid, unexpired token.
 
 ## Definition of done
 

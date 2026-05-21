@@ -7,8 +7,10 @@ and record every decision.
 
 ## Tasks
 
-- **`Strategy` interface.** Pure function of market state → optional signal. No I/O, no LLM, no wall-clock dependence beyond inputs (so it runs identically live and in backtest).
-  - *Output:* documented interface + signal type.
+- **`Strategy` interface.** Pure function of market state **+ current open-position state for the symbol** → optional signal. The signal vocabulary is `open | add | reduce | close` — being position-aware lets a strategy scale in (`add`), scale out (`reduce`), or exit (`close`), matching the downstream action set. No I/O, no LLM, no wall-clock dependence beyond inputs (so it runs identically live and in backtest).
+  - *Output:* documented interface + signal type covering all four actions.
+- **Protective exits are NOT the strategy's job.** Stop-loss, trailing-take-profit, and time-stop closes are owned by the risk/position layer (M4/M6), not the strategy. The strategy expresses *thesis* signals; protection is enforced centrally.
+  - *Output:* clear split documented — strategy emits thesis actions, risk layer emits protective closes.
 - **v1 — mean-reversion strategy.** Sharp pump → short; sharp dump → long. Configurable threshold/window via `params`.
   - *Output:* deterministic signals on the live stream (dry-run).
 - **v2 — momentum strategy.** Follow the move (opposite trade on the same trigger).

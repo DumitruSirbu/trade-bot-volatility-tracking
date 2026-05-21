@@ -7,8 +7,10 @@ the next strategy version — proposing only, never executing.
 
 ## Tasks
 
-- **Agent orchestration** (LangGraph.js or Vercel AI SDK) over the read-only MCP tools.
-  - *Output:* a multi-step graph: fetch data → analyze → draft strategy → backtest → report.
+- **Agent orchestration** (LangGraph.js or Vercel AI SDK) over the read-only MCP tools, **run as a separate process/container** with its own **least-privilege DB role** (read-only views + the draft-insert method only; no engine secret-manager access, no exchange keys).
+  - *Output:* a multi-step graph: fetch data → analyze → draft strategy → backtest → report, isolated from the trading engine's credentials.
+- **LLM data-egress policy.** Document and bound what enters LLM context — aggregated metrics/returns only; **no API keys, no raw account/equity secrets**. The agent ships prompts to an external LLM, so this boundary is explicit.
+  - *Output:* a stated allowlist of what may be serialized into prompts.
 - **Draft-strategy step (draft-only write path).** Produce a new `strategy_version` via a **constrained repository method that physically cannot set `status='active'`** — the agent's only DB capability. Linked via `parent_version_id`.
   - *Output:* a draft version persisted as `draft`; the agent has no code path to activate it.
 - **Backtest-and-report step.** Run the draft vs. the current active version using the M8 out-of-sample + significance gate; summarize.

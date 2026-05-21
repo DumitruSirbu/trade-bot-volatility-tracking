@@ -13,8 +13,8 @@ exposure discipline.
   - *Output:* breaching the limit blocks further entries; logged.
 - **Daily AND weekly windows defined.** State the exact boundary (UTC day; rolling-7d or ISO-week) and the source of realized PnL for each. `risk_state` is daily-keyed; the weekly figure is the defined aggregation over days.
   - *Output:* documented window definitions; weekly limit computed from them.
-- **Exposure caps with in-flight reservation.** Max concurrent positions and max exposure per coin, evaluated against *confirmed + submitted-but-unfilled* intents. Reserve exposure at approval time; release on reject/fill-fail. (Reviewer high: prevents N simultaneous approvals breaching the cap in one tick.)
-  - *Output:* concurrent signals cannot collectively exceed the caps.
+- **Exposure caps with in-flight reservation.** Max concurrent positions and max exposure per coin, evaluated against *confirmed + submitted-but-unfilled* intents. Reserve exposure at approval time; release on reject/fill-fail, **and on a TTL expiry reconciled by M6** when an order's outcome is permanently unknown (so reservations can't leak). The per-coin cap is **liquidity-scaled** (e.g. a fraction of rolling volume / book depth), not one flat USDT constant across 300 heterogeneous coins.
+  - *Output:* concurrent signals cannot collectively exceed the caps; a thin-book altcoin gets a smaller cap than BTC; no reservation leaks.
 - **Liquidity & funding filters.** Skip coins below a volume floor; account for perpetual funding direction/cost.
   - *Output:* illiquid/unfavorable-funding signals rejected with reason.
 - **Stop-loss & trailing-take-profit rules.** Compute protective levels per position at entry. **The stop must sit inside the liquidation distance** (sizing accounts for worst-case adverse move + funding drag). Optional **max-hold time-stop** so a never-reverting mean-reversion trade can't sit indefinitely accruing funding.
