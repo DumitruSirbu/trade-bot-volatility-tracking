@@ -1,0 +1,49 @@
+# Source-only build context — Docker builds compile from sources, never from host artefacts.
+# Keep this list aligned with .gitignore plus build outputs that would otherwise leak in.
+
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Node / pnpm artefacts
+**/node_modules
+**/.pnpm-store
+**/.pnpm-debug.log*
+**/npm-debug.log*
+
+# Build outputs (each Dockerfile stage rebuilds these from source)
+**/dist
+**/build
+**/.next
+**/coverage
+**/.turbo
+**/.cache
+
+# Local env files — never bake secrets into image layers (see docs/development/docker.md)
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+*.swp
+*.swo
+
+# Tests / docs / CI not needed at runtime
+**/test
+**/*.spec.ts
+**/*.test.ts
+docs
+milestones
+.github
+.claude
+.agents
+skills-lock.json
+
+# Compose & Dockerfiles themselves (build context only needs sources)
+docker-compose*.yml
+**/Dockerfile
+**/.dockerignore

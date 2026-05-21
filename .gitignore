@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.tsbuildinfo
+*.tsbuildinfo
+
+# Vite / frontend
+.vite/
+.next/
+.turbo/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing / coverage
+coverage/
+.nyc_output/
+
+# Docker
+.docker/
+
+# Claude Code — personal/local settings
+.claude/settings.local.json
+
+# Misc
+*.tgz
+.pnpm-debug.log

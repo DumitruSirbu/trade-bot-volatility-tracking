@@ -1,0 +1,47 @@
+{
+    "$schema": "https://json.schemastore.org/claude-code-settings.json",
+    "permissions": {
+        "allow": [
+            "Bash(pnpm:*)",
+            "Bash(npx:*)",
+            "Bash(nest:*)",
+            "Bash(vite:*)",
+            "Bash(tsc:*)",
+            "Bash(eslint:*)",
+            "Bash(prettier:*)",
+            "Bash(jest:*)",
+            "Bash(vitest:*)",
+            "Bash(node:*)",
+            "Bash(docker:*)",
+            "Bash(docker-compose:*)",
+            "Bash(docker compose:*)",
+            "Bash(git status)",
+            "Bash(git diff:*)",
+            "Bash(git log:*)",
+            "Bash(git add:*)",
+            "Bash(git commit:*)",
+            "Bash(git branch:*)",
+            "Bash(git checkout:*)",
+            "Bash(git stash:*)",
+            "Bash(git show:*)",
+            "Bash(ls:*)",
+            "Bash(cat:*)",
+            "Bash(grep:*)",
+            "Bash(find:*)",
+            "Bash(mkdir:*)",
+            "Bash(rm:*)",
+            "Bash(cp:*)",
+            "Bash(mv:*)",
+            "Bash(ln:*)",
+            "Bash(curl:*)",
+            "Bash(psql:*)",
+            "Bash(redis-cli:*)"
+        ],
+        "deny": [
+            "Bash(git push --force:*)",
+            "Bash(git push -f:*)",
+            "Bash(git reset --hard:*)",
+            "Bash(rm -rf /:*)"
+        ]
+    }
+}
