@@ -1,10 +1,9 @@
 # Trade Bot — Volatility Tracking · Overview
 
 A crypto volatility-tracking trading bot. It watches the top 200–300 coins by
-volume on Binance Futures, detects sharp short-term price moves (>2–3% in a short
-window), and opens minimum-leverage positions with disciplined risk management.
-Every decision and trade is persisted so strategy versions can be compared and
-improved over time.
+volume on Binance USDT-M Futures, detects VWAP deviation spikes on 5-minute candles,
+and opens maximum 3 positions at a time with a central risk gate. Every decision and
+trade is persisted so strategy versions can be compared and improved over time.
 
 ## Locked decisions
 
@@ -16,7 +15,11 @@ improved over time.
 | Decimals | **decimal.js** | Never use JS floats for prices/PnL |
 | Trading mode | **Binance testnet first**, then live at minimal size | Zero capital risk during validation |
 | Jurisdiction | Outside US | Full Binance Futures available |
-| Signal direction | **Backtest decides** — build mean-reversion + momentum | Direction is an empirical question, not a guess |
+| Candle interval | **5-minute** (not 1-minute) | 1-min VWAP is too noisy; 5-min is the validated standard for intraday VWAP mean-reversion |
+| Signal trigger | **VWAP deviation ±2σ + volume confirmation** | σ-bands adapt automatically to volatility regime and coin tier |
+| Signal direction | **Backtest decides** — v1 mean-reversion, v2 momentum (same signal, opposite direction) | Direction is an empirical question, not a guess |
+| Max open positions | **3** — slots A+B = idiosyncratic; slot C = at most 1 BTC-correlated | Prevents correlated cluster losses during BTC-driven moves |
+| Starting capital | **$3,000 USDT** at 3× max leverage | Sized to target ~$30/day; increase only after 30 days of confirmed live edge |
 | LLM in trade loop | **No** — deterministic only | Determinism enables reproducible backtests; safety; auditability |
 | LLM role | **Outer loop only** — proposes reviewed, backtested code; never executes | Improve the algo between cycles, not within it |
 | Dashboard | **Read-only + kill-switch button**, real-time WS/SSE, built after core engine | Observability without an attack surface |
@@ -53,8 +56,8 @@ risk gate.
 ### Modules
 
 - **ExchangeModule** — ccxt wrapper; the only code that talks to Binance (market WS, orders, account, symbol metadata). Exchange-agnostic interface.
-- **MarketDataModule** — one `!ticker@arr` subscription; maintains the universe (top 200–300 by volume) and in-memory rolling windows; emits `price.update` / `volatility.detected`; writes 1m candles.
-- **StrategyModule** — `Strategy` interface + versioned, pure, deterministic implementations; registry + active-version selection; writes `decisions`.
+- **MarketDataModule** — one `!ticker@arr` subscription; maintains the universe (top 200–300 by volume) with tier assignment; aggregates 5-min candles; computes per-symbol VWAP/σ bands, ATR, ADX, RSI, volume ratio, idiosyncrasy score, and regime label; emits `price.update` / `volatility.detected` (enriched payload); writes 1m + 5m candles.
+- **StrategyModule** — `Strategy` interface + versioned, pure, deterministic implementations; registry + active-version selection; writes `decisions` with full `market_snapshot`.
 - **RiskModule** — gatekeeper: sizing, daily/weekly loss limits, exposure caps, liquidity/funding filters, stop-loss + trailing-take-profit, cooldowns. Signal → approved/rejected order intent.
 - **ExecutionModule** — places/reduces/closes orders; idempotent; partial-fill handling.
 - **PositionModule** — authoritative position state; reconciles against exchange; unrealized/realized PnL.
@@ -72,9 +75,10 @@ instruments      id · symbol(unique) · base · quote · status · tick_size ·
 
 candles          id · symbol · interval · open_time(idx) · open · high · low · close · volume
                  UNIQUE(symbol, interval, open_time)
+                 -- intervals: 1m (metrics/views) and 5m (primary strategy candle)
 
 tick_aggregates  id · symbol · ts(idx) · price · volume        -- sub-minute (1s/5s) data
-                 -- backtest replays this so intra-minute >2-3% triggers reproduce live
+                 -- backtest uses this to reconstruct 5-min candle + VWAP indicator state
                  UNIQUE(symbol, ts)
 
 universe_membership id · symbol · entered_at · left_at(null)   -- point-in-time top-300
@@ -91,8 +95,12 @@ strategy_versions id · name · version(int) · direction(mean_reversion|momentu
 positions        id · symbol · strategy_version_id(fk) · side(short|long)
                  status(open|closed) · leverage · entry_price · qty · entry_notional
                  exit_price(null) · realized_pnl(null)
-                 exit_reason(null: take_profit|stop_loss|signal|manual|kill_switch)
+                 exit_reason(null: take_profit|stop_loss|time_stop|signal|manual|kill_switch)
                  opened_at · closed_at(null)
+                 -- analysis / algo columns (captured at entry, immutable)
+                 vwap_at_entry · atr_at_entry · vwap_deviation_at_entry
+                 idiosyncrasy_at_entry · coin_tier · signal_score_at_entry
+                 position_slot(A|B|C) · time_stop_at · slippage_model_pct
                  idx(strategy_version_id, status) · idx(symbol, status)
 
 transactions     id · position_id(fk) · type(open|add|reduce|close|funding)
