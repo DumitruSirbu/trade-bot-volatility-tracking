@@ -12,7 +12,7 @@ You design the system. You do not implement it. Your output is markdown — ADRs
 # Responsibilities
 
 - Write and maintain ADRs under `docs/architecture/adr/NNNN-title.md`. One decision per file. Format: Context → Decision → Consequences → Alternatives considered.
-- Maintain `docs/architecture/overview.md` — the highest-level view of how the engine fits together (ingest → strategy → risk → execution → persistence), with an ASCII/mermaid diagram. Keep it consistent with `plans/00-overview.md`.
+- Maintain `docs/architecture/overview.md` — the highest-level view of how the engine fits together (ingest → strategy → risk → execution → persistence), with an ASCII/mermaid diagram. Keep it consistent with `docs/plans/00-overview.md`.
 - Maintain `docs/architecture/data-model.md` — entity-relationship diagram and per-table column intent. The engine agent translates this into TypeORM entities + migrations.
 - Maintain `docs/architecture/strategy-and-risk.md` — the `Strategy` interface contract, the determinism rule (no wall-clock/RNG so live and backtest match), and the central risk-gate rules.
 - Maintain `docs/architecture/execution-and-reconciliation.md` — order lifecycle, idempotency, partial fills, and exchange reconciliation.

@@ -17,8 +17,33 @@ size.
   - *Output:* a key with withdrawal rights (or no IP allow-list) prevents the engine from starting.
 - **Network posture.** The engine API is **private** (VPC-only / security-group restricted to the dashboard origin), not internet-facing; TLS terminated; managed Postgres on a private subnet with no public IP, encrypted at rest and in transit.
   - *Output:* the engine API and DB are unreachable from the public internet.
-- **Tight live caps.** Smallest viable position size; conservative daily/weekly loss limits for go-live.
-  - *Output:* config profile for live with minimal risk.
+- **Restricted live profile (documented config).** Replace generic "tight caps" with an explicit, documented profile for first go-live. The first live trader is the **restricted, exhaustion-confirmed v1** (v0 is the no-trade baseline; v3 is the deferred end-state target). Profile:
+  - capital $500–$1,000; **1 position max**; risk **0.10–0.25%** of account per trade;
+  - **top-50 (tier 1) only**; no tier-3; skip fresh universe entrants; **require OI data**;
+  - skip during market stress; **halt after 2 consecutive losses**; small hard daily-trade cap (≈3); **isolated margin**.
+
+  Example profile (illustrative — matches ANALYSIS-GBT "Practical Live Starting Policy"):
+  ```json
+  {
+    "live_mode": "restricted",
+    "max_open_positions": 1,
+    "max_coin_tier": 1,
+    "risk_per_trade_pct": 0.25,
+    "allow_mean_reversion": true,
+    "allow_momentum": false,
+    "require_exhaustion_confirmation": true,
+    "require_oi_available": true,
+    "skip_fresh_universe_entrants": true,
+    "skip_market_stress": true,
+    "max_trades_per_day": 3,
+    "halt_after_consecutive_losses": 2,
+    "margin_mode": "isolated"
+  }
+  ```
+  - *Output:* a documented restricted live config profile with minimal risk; no daily profit target.
+
+- **Scaling gate (deferred relaxation).** Relax toward 3 positions / higher risk **only after ≥30–60 days** where: realized slippage matches model; live expectancy is positive; stop behavior matches backtest; no hidden operational failures; and the chosen version beats the others on net risk-adjusted metrics. Until then, the restricted profile holds.
+  - *Output:* a documented checklist that must pass before any cap is relaxed; relaxation is a deliberate, evidence-gated step.
 - **Runbook.** Start/stop, halt, recover-from-crash, incident steps, and a **key-compromise / token-rotation procedure** (suspected leaked exchange key or API token).
   - *Output:* `RUNBOOK.md`.
 - **Switch ccxt to live keys** and start trading at minimal size.

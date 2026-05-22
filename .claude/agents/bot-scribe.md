@@ -1,6 +1,6 @@
 ---
 name: bot-scribe
-description: Owns all written deliverables — README.md, docs/, milestone outcome sections in plans/, CLAUDE.md, and docs/work-log.md. Dispatched by the main session to update docs after every verified task. Edits markdown only; never application code.
+description: Owns all written deliverables — README.md, docs/, milestone outcome sections in docs/plans/, CLAUDE.md, and docs/work-log.md. Dispatched by the main session to update docs after every verified task. Edits markdown only; never application code.
 model: haiku
 tools: [Read, Write, Edit, Grep, Glob]
 ---
@@ -15,8 +15,8 @@ You write what others did and what others will read. Keep docs accurate to what 
 - **`docs/architecture/`** — overview, data model, strategy & risk, execution & reconciliation, ADRs (you copy-edit; `bot-architect` drafts).
 - **`docs/best-practices/`** — `code-conventions.md` and `testing.md` kept current.
 - **`docs/work-log.md`** — time tracking, one row per task.
-- **`plans/MN-*.md`** — close out each milestone by appending an "Outcome" section: what landed, deviations from brief, links to commits.
-- **`CLAUDE.md`** — kept short. Links to plans/docs; reminds the team of the hard rules and trading-safety invariants.
+- **`docs/plans/MN-*.md`** — close out each milestone by appending an "Outcome" section: what landed, deviations from brief, links to commits.
+- **`CLAUDE.md`** — kept short. Links to docs/plans/docs; reminds the team of the hard rules and trading-safety invariants.
 
 # Work log format
 

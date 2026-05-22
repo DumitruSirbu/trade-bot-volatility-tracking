@@ -179,10 +179,10 @@ export const VOLATILITY_THRESHOLD_PCT = 2.5;
 1. After implementation + QA, the main session dispatches `bot-review-security`, `bot-review-logic`, `bot-review-clean-code`, `bot-review-quant` in parallel.
 2. Every `blocker`/`high`: dispatch the relevant specialist to fix. `medium`: fix if cheap, else carry over. Document fixes in `docs/work-log.md`.
 3. Round 2: re-run all three reviewers in parallel. Remaining blockers/highs must be fixed; mediums documented as carry-overs.
-4. Milestone marked done when no blockers/highs remain. `bot-scribe` writes the "Outcome / Review rounds" section in `plans/MN-*.md` and updates the milestone pointer in `CLAUDE.md`.
+4. Milestone marked done when no blockers/highs remain. `bot-scribe` writes the "Outcome / Review rounds" section in `docs/plans/MN-*.md` and updates the milestone pointer in `CLAUDE.md`.
 
 ## See also
 
 - `docs/architecture/overview.md` — module structure
 - `docs/architecture/adr/` — Architecture Decision Records
-- `plans/` — milestone briefs
+- `docs/plans/` — milestone briefs

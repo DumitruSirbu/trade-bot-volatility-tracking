@@ -5,9 +5,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project
 
 A crypto volatility-tracking trading bot. Watches the top 200–300 coins by volume on
-Binance USDT-M Futures, detects sharp short-term moves (>2–3%), opens minimum-leverage
-positions with central risk management, and persists every decision/trade so strategy
-versions can be compared and improved. Full design in `plans/` (start with `plans/00-overview.md`).
+Binance USDT-M Futures and uses a VWAP-deviation spike on 5-minute candles as a
+**direction-agnostic event detector**, then classifies the flow behind each event
+(Open Interest + funding) to decide whether to fade, follow, or — most often — skip.
+It opens minimum-leverage positions through a central risk gate (architectural max 3;
+live starts at 1) and persists every decision/trade so strategy versions can be
+compared and improved. The priority is **conservative, stable, low-risk operation over
+returns**: there is no daily profit target, `skip` is a first-class output, and live
+capital starts at $500–$1,000 under a restricted profile. Full design in `docs/plans/`
+(start with `docs/plans/00-overview.md`).
 
 ## Recommended model
 
@@ -63,10 +69,13 @@ Verify the actual diff after each wave — agent summaries describe intent, not 
 - **Money is `decimal`, never float.**
 - **Exchange keys never committed; key is least-privilege (no withdrawals).**
 - **Validate on testnet first**; go live only at minimal size.
+- **The VWAP trigger is a detector, not a direction.** Trade direction (fade / follow / skip) is decided empirically per `flow_type` and regime — never assume mean-reversion.
+- **No daily profit target.** Success is risk-adjusted survival (drawdown, loss limits, expectancy-per-risk, tail loss), not a profit quota. `skip` is the expected outcome for most triggers.
+- **Live starts restricted** ($500–$1,000, 1 position, tier-1 only, isolated margin); caps relax only after weeks of confirmed live edge matching backtest.
 
 ## Documentation map
 
-- Milestone plans → `plans/`
+- Milestone plans → `docs/plans/`
 - Architecture → `docs/architecture/`
 - Code conventions (AUTHORITATIVE) → `docs/best-practices/code-conventions.md`
 - Testing → `docs/best-practices/testing.md`
@@ -74,4 +83,4 @@ Verify the actual diff after each wave — agent summaries describe intent, not 
 
 ## Project status
 
-Greenfield. Design complete (`plans/`). Implementation starts at **M0 — Foundation & scaffolding**.
+Greenfield. Design complete (`docs/plans/`). Implementation starts at **M0 — Foundation & scaffolding**.

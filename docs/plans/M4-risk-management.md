@@ -37,6 +37,27 @@ exposure discipline including correlation-aware position slot management.
 - **Cooldown.** After a closed loss on a symbol, suppress re-entry for a configurable window.
   - *Output:* no immediate re-entry on the same symbol post-loss.
 
+- **Global market-stress halt (overrides ADX).** Driven by the M1 fast-stress inputs — BTC/ETH 1m & 5m return shock, market breadth, `same_bar_trigger_count`, OI shock, funding-extreme, spread-widening, depth-collapse. When stress indicates trend-initiation, **skip mean-reversion even if ADX says "ranging"** (ADX is lagging and labels the market "ranging" exactly as a new trend begins). The halt is visible to M9 and alerts via Telegram.
+  - *Output:* during a synthetic stress window, mean-reversion entries are blocked with reason `market_stress` regardless of ADX label.
+
+- **Consecutive-loss halt.** Max consecutive losses per day → halt new entries (default `consecutive_loss_halt: 2` for restricted live).
+  - *Output:* after N consecutive losses, new entries blocked for the rest of the UTC day.
+
+- **Overtrading caps.** Enforce `max_trades_per_symbol_per_day`, `max_trades_per_bar_universe` (max trades per 5-minute bar across the whole universe), and a max same-direction portfolio exposure cap. Note: daily/weekly loss limits are necessary but **not sufficient** — a bot can bleed via overtrading while staying inside them; hence these per-symbol / per-bar / consecutive-loss caps.
+  - *Output:* unit tests proving each cap blocks the (N+1)th entry; same-direction exposure cap enforced.
+
+- **Require OI data; no unvalidated tier-3 live.** Reject an entry if OI data is unavailable for the symbol (`require_oi_available`). **No tier-3 live trading until validated.**
+  - *Output:* entries on symbols missing OI rejected with reason `oi_unavailable`; tier-3 live entries rejected until the version is validated.
+
+- **Funding-as-skip flow rules.** Refine the funding logic for fade candidates: rising OI + funding-not-yet-extreme on a fade candidate → **skip** (trend may still have room); deeply negative funding + rising price (short squeeze) → **skip**; OI **falling** on the spike (liquidation cascade) → the valid reversion case. These complement the existing size-reduction/suppression thresholds.
+  - *Output:* the three flow cases produce skip/allow decisions with explicit reasons.
+
+- **Isolated margin by default for live.** Use isolated margin unless there is a strong, documented reason for cross.
+  - *Output:* live config defaults to isolated margin; any cross-margin use is documented.
+
+- **Model-divergence kill switch.** Halt if realized live slippage exceeds modeled slippage beyond a threshold, or if the realized win/loss distribution deviates materially from paper expectations. Surfaced and alerted by M9.
+  - *Output:* a synthetic slippage/distribution divergence triggers the halt; the trigger is logged and alerted.
+
 - **Risk gate covers ALL order actions.** The gate vets `open / add / reduce / close`. Exits and kill-switch flattens are always *allowed* but still routed through the gate. Rejections written as `decisions` with reason.
   - *Output:* unit tests proving (a) over-limit/over-exposure/wrong-slot entries are blocked and (b) reduce/close/flatten still pass through the gate, never around it.
 

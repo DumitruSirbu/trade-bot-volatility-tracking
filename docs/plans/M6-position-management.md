@@ -24,6 +24,9 @@
   - *Output:* closed positions carry final PnL + reason.
 - **Crash recovery with re-association.** On restart, rebuild state from exchange + DB, re-associating each exchange position with its DB row (strategy_version, SL/TP, cooldown) via the match key; orphans handled per the drift policy.
   - *Output:* positions survive a restart, match the exchange, and keep their strategy/risk context.
+- **Lifetime position instrumentation.** Track, over each position's life, and persist to the M2 lifetime columns: `mae_pct` (max adverse excursion), `mfe_pct` (max favorable excursion), `time_to_reversion_secs`, `stop_gap_pct` (fill slippage beyond the stop), `protective_order_type` (`exchange_side` | `local_fallback`), `mark_vs_last_max_divergence_pct`, and `min_liquidation_distance_pct`. These are the primary evidence for whether the strategy is actually low-risk (feeds M8 tail-risk metrics and the M4 model-divergence kill switch).
+  - *Output:* each closed position carries its full lifetime instrumentation; values verified against a hand-traced position.
+
 - **`account_snapshots`** written on a schedule (balance/equity/unrealized).
   - *Output:* equity history accumulating.
 

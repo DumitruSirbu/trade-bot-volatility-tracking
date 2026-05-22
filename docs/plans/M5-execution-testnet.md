@@ -20,6 +20,9 @@ recorded faithfully.
 - **Attach SL/TP** from the risk intent (exchange-side orders where supported). When unsupported/rejected, the M6 local monitor owns protection — never leave a position unprotected.
   - *Output:* protective orders present after entry, or the local monitor engaged.
 
+- **Order-policy realism.** For mean-reversion, a plain market order at peak spread destroys the edge. Use a **marketable-limit-with-max-slippage** or **post-only maker entry after confirmation**; cancel if not filled quickly; **no chasing missed entries**. Order policy may vary by tier/regime. The M7 backtest must mirror this policy and model **missed fills** for limit orders, so live and replay agree on fill quality.
+  - *Output:* entries use a slippage-bounded/maker policy; unfilled orders cancel within a timeout; missed entries are not chased; the policy is documented for M7 to mirror.
+
 ## Definition of done
 
 The bot opens and closes a real testnet short end-to-end from a live signal, with

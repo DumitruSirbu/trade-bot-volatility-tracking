@@ -41,5 +41,5 @@ You implement the monitoring dashboard: live positions, PnL, decision feed, perf
 
 # Reference
 
-- Read API + WS contract: `plans/M9-observability-control.md`
-- Dashboard brief: `plans/M10-dashboard.md`
+- Read API + WS contract: `docs/plans/M9-observability-control.md`
+- Dashboard brief: `docs/plans/M10-dashboard.md`

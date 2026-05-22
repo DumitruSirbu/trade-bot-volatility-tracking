@@ -1,9 +1,18 @@
 # Trade Bot — Volatility Tracking · Overview
 
 A crypto volatility-tracking trading bot. It watches the top 200–300 coins by
-volume on Binance USDT-M Futures, detects VWAP deviation spikes on 5-minute candles,
-and opens maximum 3 positions at a time with a central risk gate. Every decision and
-trade is persisted so strategy versions can be compared and improved over time.
+volume on Binance USDT-M Futures, uses a VWAP-deviation spike on 5-minute candles as a
+**direction-agnostic event detector**, classifies the flow behind each event, and opens
+positions through a central risk gate (architectural max 3; live starts at 1). Every
+decision and trade is persisted so strategy versions can be compared and improved over time.
+
+The priority is **conservative, stable, low-risk operation over returns**. Profit is an
+outcome of edge, not a target — there is no daily profit goal. `Skip` is a first-class,
+high-value output: the bot is judged on avoiding bad trades, not on trade frequency. Most
+triggers should resolve to `skip`. Live capital starts at $500–$1,000 at minimum leverage,
+and the heavier go-live caps relax only after weeks of confirmed live behavior matching
+backtest. A RESTRICTED v1 goes live first; the flow-classifying hybrid router (v3) is the
+end-state target — go-live is **not** blocked on v3.
 
 ## Locked decisions
 
@@ -15,11 +24,12 @@ trade is persisted so strategy versions can be compared and improved over time.
 | Decimals | **decimal.js** | Never use JS floats for prices/PnL |
 | Trading mode | **Binance testnet first**, then live at minimal size | Zero capital risk during validation |
 | Jurisdiction | Outside US | Full Binance Futures available |
-| Candle interval | **5-minute** (not 1-minute) | 1-min VWAP is too noisy; 5-min is the validated standard for intraday VWAP mean-reversion |
-| Signal trigger | **VWAP deviation ±2σ + volume confirmation** | σ-bands adapt automatically to volatility regime and coin tier |
-| Signal direction | **Backtest decides** — v1 mean-reversion, v2 momentum (same signal, opposite direction) | Direction is an empirical question, not a guess |
-| Max open positions | **3** — slots A+B = idiosyncratic; slot C = at most 1 BTC-correlated | Prevents correlated cluster losses during BTC-driven moves |
-| Starting capital | **$3,000 USDT** at 3× max leverage | Sized to target ~$30/day; increase only after 30 days of confirmed live edge |
+| Candle interval | **5-minute** (not 1-minute) | Reduces noise vs 1m; primary strategy bar (execution sims still use 1s/aggTrade) |
+| Signal trigger | **VWAP deviation event detector + volume confirmation** (direction-agnostic) | Locates an event; does **not** imply a trade direction. Bands are **empirically calibrated** (percentile / MAD / winsorized σ), **not** assumed Gaussian — crypto returns are fat-tailed, 3–5σ moves are common, so σ is a normalized distance, not a probability |
+| Flow context | **Open Interest + funding are first-class signal inputs** | Used to classify a liquidation-cascade (fade-able) vs new-money / catalyst (skip or follow) event |
+| Signal direction | **Empirical, never assumed** — v0 no-trade baseline (logs every trigger), v1 exhaustion-confirmed mean-reversion (first live), v2 momentum, v3 flow-classifying hybrid router (end-state target) | Direction decided by out-of-sample evidence + live shadow on the same event |
+| Max open positions | **3** architectural max — slots A+B = idiosyncratic; slot C = at most 1 BTC-correlated. **Live starts at 1 position.** | Prevents correlated cluster losses; restricted live profile proves edge before scaling |
+| Starting capital | **$500–$1,000 USDT** at minimum leverage; **no daily profit target** | Goal is survival + measured edge. Success = max drawdown, daily/weekly loss limits, expectancy per unit risk, Sharpe/Sortino, expected shortfall, longest losing streak. Scale only after weeks of confirmed live edge matching backtest |
 | LLM in trade loop | **No** — deterministic only | Determinism enables reproducible backtests; safety; auditability |
 | LLM role | **Outer loop only** — proposes reviewed, backtested code; never executes | Improve the algo between cycles, not within it |
 | Dashboard | **Read-only + kill-switch button**, real-time WS/SSE, built after core engine | Observability without an attack surface |
@@ -40,8 +50,9 @@ risk gate.
                                   ▼                         │
                             MarketData ──price.update──▶ Strategy ──signal──▶ Risk ──order──▶ Execution
                             (rolling windows,            engine     (limits,    (place/        │
-                             universe filter)         (v1,v2,v3…)   exposure,   reduce/        │
-                                  │                       │         stops)      close)         │
+                             universe filter,        (v0,v1,v2,v3)  exposure,   reduce/        │
+                             flow + stress)          skip-first    stress halt)  close)        │
+                                  │                       │                                    │
                                   │ candles               │ decisions            │ fills       │
                                   ▼                        ▼                      ▼             │
                             ┌───────────── Persistence (TypeORM ─ Postgres) ──────────────────┐│
@@ -56,9 +67,9 @@ risk gate.
 ### Modules
 
 - **ExchangeModule** — ccxt wrapper; the only code that talks to Binance (market WS, orders, account, symbol metadata). Exchange-agnostic interface.
-- **MarketDataModule** — one `!ticker@arr` subscription; maintains the universe (top 200–300 by volume) with tier assignment; aggregates 5-min candles; computes per-symbol VWAP/σ bands, ATR, ADX, RSI, volume ratio, idiosyncrasy score, and regime label; emits `price.update` / `volatility.detected` (enriched payload); writes 1m + 5m candles.
-- **StrategyModule** — `Strategy` interface + versioned, pure, deterministic implementations; registry + active-version selection; writes `decisions` with full `market_snapshot`.
-- **RiskModule** — gatekeeper: sizing, daily/weekly loss limits, exposure caps, liquidity/funding filters, stop-loss + trailing-take-profit, cooldowns. Signal → approved/rejected order intent.
+- **MarketDataModule** — one `!ticker@arr` subscription for breadth + broad mark/ticker streams; maintains the universe (top 200–300 by volume) with tier assignment and symbol-universe age; aggregates 5-min candles; computes per-symbol VWAP/σ bands (with empirical-percentile / MAD calibration), ATR, ADX, RSI, volume ratio + acceleration, idiosyncrasy score, and regime label; tracks **flow context** (Open Interest + change, funding, aggressor imbalance) and **order-book depth** for triggered symbols; computes **market breadth** and **fast market-stress inputs** (BTC/ETH return shock, spread-widening, depth-collapse, OI shock, funding-extreme) independent of ADX; emits `price.update` / `volatility.detected` (enriched payload, with `flow_type` placeholder); writes 1m + 5m candles, OI history, and depth snapshots around decisions.
+- **StrategyModule** — `Strategy` interface + versioned, pure, deterministic implementations: **v0** no-trade baseline, **v1** exhaustion-confirmed mean-reversion, **v2** momentum, **v3** flow-classifying hybrid router (end-state target). `skip` is a first-class output. Registry + active-version selection; writes `decisions` with full `market_snapshot` and a stable `event_id`.
+- **RiskModule** — gatekeeper: sizing, daily/weekly loss limits, **consecutive-loss / per-symbol / per-bar caps**, exposure caps, liquidity/funding filters, **global market-stress halt** (driven by the fast-stress inputs, overrides ADX), **model-divergence kill switch**, stop-loss (ATR or structural) + take-profit, cooldowns. Signal → approved/rejected order intent.
 - **ExecutionModule** — places/reduces/closes orders; idempotent; partial-fill handling.
 - **PositionModule** — authoritative position state; reconciles against exchange; unrealized/realized PnL.
 - **PersistenceModule** — TypeORM entities, repositories, migrations.
@@ -88,6 +99,13 @@ funding_rates    id · symbol · funding_time(idx) · rate         -- 8-hourly h
                  -- backtest replays actual funding; live PnL uses real funding events
                  UNIQUE(symbol, funding_time)
 
+open_interest    id · symbol · ts(idx) · value                  -- OI time-series (live + backtest replay)
+                 -- polled via REST GET /fapi/v1/openInterest per universe symbol
+                 UNIQUE(symbol, ts)
+
+book_snapshots   id · symbol · ts(idx) · spread · depth_10bps · depth_50bps
+                 -- top-of-book + depth, persisted ONLY around decisions/open positions
+
 strategy_versions id · name · version(int) · direction(mean_reversion|momentum|hybrid)
                  params(jsonb) · status(draft|active|archived)
                  parent_version_id(fk→self, null) · created_at
@@ -101,6 +119,14 @@ positions        id · symbol · strategy_version_id(fk) · side(short|long)
                  vwap_at_entry · atr_at_entry · vwap_deviation_at_entry
                  idiosyncrasy_at_entry · coin_tier · signal_score_at_entry
                  position_slot(A|B|C) · time_stop_at · slippage_model_pct
+                 -- flow + liquidity context at entry (immutable)
+                 open_interest_at_entry · oi_change_5m_at_entry · flow_type_at_entry
+                 funding_annualized_at_entry · book_depth_10bps_at_entry · spread_at_entry_pct
+                 vwap_anchor_type · symbol_universe_age_hours
+                 -- lifetime instrumentation (tracked through the position's life)
+                 mae_pct · mfe_pct · time_to_reversion_secs · stop_gap_pct
+                 min_liquidation_distance_pct · protective_order_type(exchange_side|local_fallback)
+                 mark_vs_last_max_divergence_pct
                  idx(strategy_version_id, status) · idx(symbol, status)
 
 transactions     id · position_id(fk) · type(open|add|reduce|close|funding)
@@ -109,9 +135,11 @@ transactions     id · position_id(fk) · type(open|add|reduce|close|funding)
                  -- client_order_id is the reconciliation/idempotency match key
 
 decisions        id · symbol · strategy_version_id(fk) · ts
-                 signal_type · market_snapshot(jsonb)
+                 event_id · signal_type · market_snapshot(jsonb)
+                 -- event_id = one stable id per VWAP trigger event, so v0/v1/v2/v3 are
+                 --   compared on the SAME event under the same market path (M8)
                  action(open|add|reduce|close|skip) · reason · position_id(fk, null)
-                 idx(strategy_version_id, ts)
+                 idx(strategy_version_id, ts) · idx(event_id)
 
 risk_state       id · date(unique) · realized_pnl_day · open_exposure
                  trades_count · is_halted · halt_reason

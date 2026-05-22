@@ -13,12 +13,25 @@
 - **Causality / look-ahead guard.** At time *t* the strategy sees only **closed bars** with `open_time < t`. Assert this invariant and add a test that proves no same-bar or future-bar data leaks into a decision. Entry fills at **next-bar open**, not at the signal bar's close or extreme.
   - *Output:* a test fails if any future/same-bar data leaks into a decision.
 
-- **Tier-based, liquidity-aware fill model.** Fill at next-bar open + slippage, where slippage is drawn from the tier model in `strategy_versions.params`:
+- **Tier-based, liquidity-aware fill model (the floor).** Fill at next-bar open + slippage, where slippage is drawn from the tier model in `strategy_versions.params`:
   - Tier 1 (top 50): `slippage_tier1_pct` (default 0.15%)
   - Tier 2 (51–150): `slippage_tier2_pct` (default 0.50%)
   - Tier 3 (151–300): `slippage_tier3_pct` (default 1.00%)
   - Slippage is applied in the adverse direction (entry and exit). Never fill at the same-bar high/low extreme.
   - *Output:* fills are tier-appropriate and adverse; no optimistic spike-extreme fills.
+
+- **Depth-aware slippage (target; extends the tier floor).** Around trigger windows, compose slippage as:
+  `slippage = base_tier + spread_component + volatility_component + depth_component + market_stress_component + adverse_selection_component`, drawing spread/depth from persisted `book_snapshots` (M2) where available. **State explicitly:** if historical L2 depth is unavailable, the backtest can only **REJECT bad strategies, not PROVE live fill quality**. Mean-reversion enters exactly when spreads widen, depth thins, and adverse selection is highest — so the fixed tier model understates the bad fills that matter most.
+  - *Output:* depth-aware slippage applied when book data exists; the fidelity limit is documented in the report.
+
+- **Missed-fill model.** When limit orders are used (per the M5 order policy), model orders that do **not** fill within the cancel timeout as missed — no fill, no PnL. Mirrors the live "no chasing" rule.
+  - *Output:* limit-order backtests show a realistic fill rate; missed entries are excluded from PnL.
+
+- **Latency model.** Apply a configurable latency between signal and order so fills reflect realistic delay, not instantaneous next-bar open.
+  - *Output:* latency is parameterized and applied to entry/exit timing.
+
+- **Intrabar stop/TP path simulation.** Simulate the within-bar price path from 1s / aggTrade data (M2 `tick_aggregates`) to decide stop/TP hits, instead of assuming next-bar open. Use mark-price-vs-last-price for stop/liquidation logic. Replay `open_interest` history for OI-dependent strategy/flow logic.
+  - *Output:* intrabar stop/TP and liquidation logic driven by sub-minute path + OI replay; not next-bar open alone.
 
 - **Shared cost model.** Fees (maker/taker), the slippage function, and funding come from the *same* source used by live execution/position PnL (M5/M6) — defined once, consumed by both. Backtest funding uses the persisted `funding_rates` history (M2), not a constant.
   - *Output:* live and backtest PnL use identical cost inputs and real historical funding.
@@ -34,6 +47,15 @@
 
 - **Metrics with pinned definitions.** All trade-level metrics computed on **net PnL (after fees + funding + slippage)**. Win rate, profit factor, trade count, avg hold time, regime breakdown. **Max drawdown = peak-to-trough on the mark-to-market equity curve, expressed as %**, plus drawdown duration. **Sharpe/Sortino on daily-resampled equity returns, annualized with √365** (crypto trades 24/7/365); Sortino target = 0. Emit the per-trade return series.
   - *Output:* a risk-adjusted metrics report with explicit, comparable definitions.
+
+- **Stress-period test set (mandatory).** Maintain a dedicated set of adverse windows and run every candidate against them: FTX collapse, LUNA, major BTC ETF days, exchange outages, high-liquidation days, and strong bull/bear trend windows. Handle symbol delisting/death within the window.
+  - *Output:* every candidate reports metrics over each stress window; delisted symbols handled without crashing.
+
+- **Robustness gates (edge must survive all).** The edge must survive: doubling slippage assumptions; removing the best 5% of trades; the stress windows above; and must **not** be concentrated in one symbol or one week.
+  - *Output:* a robustness report per candidate covering each gate; failures flagged.
+
+- **Same-event multi-version simulation.** Simulate v0 / v1 / v2 / v3 (and no-trade) on the **same `event_id` under the same market path**, so versions are compared on identical events (feeds M8).
+  - *Output:* per-`event_id` outcomes for all versions over one replay.
 
 - **`run_backtest(version, dateRange)` entry point** (CLI/command).
   - *Output:* reproducible report for a given version + range.

@@ -52,4 +52,4 @@ Highlights:
 - Data model: `docs/architecture/data-model.md`
 - Strategy & risk: `docs/architecture/strategy-and-risk.md`
 - Execution & reconciliation: `docs/architecture/execution-and-reconciliation.md`
-- Milestones: `plans/`
+- Milestones: `docs/plans/`
