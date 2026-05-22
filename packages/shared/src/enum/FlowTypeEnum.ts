@@ -1,8 +1,7 @@
-// PLACEHOLDER — values are provisional; flow is classified in M3.
-// Carried as a placeholder field on the M1 payload so the contract is stable.
 export enum FlowTypeEnum {
-    UNCLASSIFIED = 'unclassified',
-    LIQUIDATION_CASCADE = 'liquidation_cascade',
-    NEW_MONEY = 'new_money',
-    CATALYST = 'catalyst',
+    FORCED_EXHAUSTION = 'forced_exhaustion',
+    TREND_INITIATION = 'trend_initiation',
+    MARKET_BETA = 'market_beta',
+    CATALYST_RISK = 'catalyst_risk',
+    LOW_QUALITY_NOISE = 'low_quality_noise',
 }

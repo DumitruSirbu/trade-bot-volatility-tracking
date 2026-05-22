@@ -74,4 +74,8 @@ export class AppConfigService {
     get accountCapitalUsdt(): number {
         return this.configService.get('ACCOUNT_CAPITAL_USDT', { infer: true });
     }
+
+    get activeStrategyVersionId(): number {
+        return this.configService.get('ACTIVE_STRATEGY_VERSION_ID', { infer: true });
+    }
 }

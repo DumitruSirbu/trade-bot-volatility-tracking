@@ -3,8 +3,11 @@ import { FlowTypeEnum, IVolatilityDetectedEvent } from '@bot/shared';
 import { formatMoney, MoneyValue } from '../common/utils/money';
 import { IVolatilityEventInputs } from './interface';
 
-// Builds the enriched volatility.detected payload. flowType is the M1 placeholder
-// (FlowTypeEnum.UNCLASSIFIED) — the flow classifier lands in M3.
+// Builds the enriched volatility.detected payload. eventId is the stable per-trigger id
+// (symbol + closed-bar open time) shared by every version (ADR 0003 §6). flowType is set
+// to a defined pre-classification default here — the StrategyService orchestrator is the
+// single owner of the classified flow_type and overwrites it on the persisted snapshot
+// via classifyFlowType (ADR 0003 §4/§6): the mapper has no params, so it cannot classify.
 export function toVolatilityDetectedEvent(inputs: IVolatilityEventInputs): IVolatilityDetectedEvent {
     const { snapshot, flow } = inputs;
 
@@ -12,6 +15,7 @@ export function toVolatilityDetectedEvent(inputs: IVolatilityEventInputs): IVola
         symbol: snapshot.symbol,
         side: inputs.side,
         entryCandleOpenTime: snapshot.closedBarOpenTimeMs,
+        eventId: `${snapshot.symbol}:${snapshot.closedBarOpenTimeMs}`,
 
         vwapSession: formatMoney(snapshot.vwapSession),
         vwap20bar: formatMoney(snapshot.vwap20bar),
@@ -55,7 +59,8 @@ export function toVolatilityDetectedEvent(inputs: IVolatilityEventInputs): IVola
         btc1mMovePct: inputs.btc1mMovePct,
         eth5mMovePct: inputs.eth5mMovePct,
 
-        flowType: FlowTypeEnum.UNCLASSIFIED,
+        // Pre-classification default; the orchestrator stamps the real classified value.
+        flowType: FlowTypeEnum.LOW_QUALITY_NOISE,
     };
 }
 

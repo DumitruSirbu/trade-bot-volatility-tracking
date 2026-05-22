@@ -61,4 +61,5 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 **M0 — Foundation & scaffolding:** DONE (pnpm + Docker + NestJS 11 + TypeORM + event bus + halt-flag + money helpers).
 **M1 — Exchange & market data:** DONE (ccxt/Binance testnet, MarketDataModule, shared trigger, 251 tests, 3 review rounds, zero blockers).
 **M2 — Persistence & data model:** DONE (13 domain-owned entities, 353 tests, reversible migrations + 90-day partitioned tick_aggregates, 2 review rounds + post-review smoke test, zero blockers, testnet persistence verified).
-**Next:** **M3 — Strategy engine** (`docs/plans/M3-strategy-engine.md`).
+**M3 — Strategy engine:** DONE (4 pure strategies v0–v3, registry + config-selected active version, orchestrator stamps flow_type/signal_score/event_id and writes dry-run decisions, 202 tests, 2 review rounds, zero blockers).
+**Next:** **M4 — Risk management** (`docs/plans/M4-risk-management.md`).

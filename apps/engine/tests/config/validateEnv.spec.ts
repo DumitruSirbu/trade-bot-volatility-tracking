@@ -19,6 +19,7 @@ const VALID_ENV: Record<string, unknown> = {
     DAILY_LOSS_LIMIT_USDT: '50',
     COOLDOWN_AFTER_LOSS_MS: '900000',
     ACCOUNT_CAPITAL_USDT: '500',
+    ACTIVE_STRATEGY_VERSION_ID: '1',
 };
 
 function buildEnv(overrides: Record<string, unknown> = {}): Record<string, unknown> {

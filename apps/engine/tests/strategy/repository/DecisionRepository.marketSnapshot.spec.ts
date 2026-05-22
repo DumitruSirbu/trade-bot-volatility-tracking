@@ -43,7 +43,7 @@ function buildValidSnapshot(): Record<string, unknown> {
         symbol_universe_age_hours: 240.0,
         btc_1m_move_pct: -0.3,
         eth_5m_move_pct: -0.9,
-        flow_type: FlowTypeEnum.UNCLASSIFIED,
+        flow_type: FlowTypeEnum.FORCED_EXHAUSTION,
     };
 }
 

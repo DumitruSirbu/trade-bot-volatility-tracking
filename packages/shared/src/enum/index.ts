@@ -10,3 +10,8 @@ export { PositionSlotEnum } from './PositionSlotEnum.js';
 export { TransactionTypeEnum } from './TransactionTypeEnum.js';
 export { StrategyDirectionEnum } from './StrategyDirectionEnum.js';
 export { StrategyStatusEnum } from './StrategyStatusEnum.js';
+export { SignalActionEnum } from './SignalActionEnum.js';
+export { SkipReasonEnum } from './SkipReasonEnum.js';
+export { SignalTypeEnum } from './SignalTypeEnum.js';
+export { StopTypeEnum } from './StopTypeEnum.js';
+export { CorrelationModeEnum } from './CorrelationModeEnum.js';

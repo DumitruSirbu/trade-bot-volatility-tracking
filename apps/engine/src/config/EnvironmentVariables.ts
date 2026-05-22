@@ -106,4 +106,11 @@ export class EnvironmentVariables {
     @IsNumber()
     @Min(0)
     ACCOUNT_CAPITAL_USDT!: number;
+
+    // Selects the active strategy_versions.id the engine runs on each trigger (ADR 0003
+    // §7). Switching the active version is a config change + restart — no code change.
+    @Transform(({ value }) => Number.parseInt(String(value), 10))
+    @IsInt()
+    @Min(1)
+    ACTIVE_STRATEGY_VERSION_ID!: number;
 }

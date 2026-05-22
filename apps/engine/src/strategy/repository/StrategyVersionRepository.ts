@@ -21,4 +21,8 @@ export class StrategyVersionRepository extends BaseRepository<StrategyVersionEnt
     async findByNameAndVersion(name: string, version: number): Promise<StrategyVersionEntity | null> {
         return this.repository.findOne({ where: { name, version } });
     }
+
+    async findById(id: number): Promise<StrategyVersionEntity | null> {
+        return this.repository.findOne({ where: { id } });
+    }
 }

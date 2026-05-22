@@ -9,6 +9,7 @@ export interface IVolatilityDetectedEvent {
     symbol: string;
     side: DeviationSideEnum;          // deviation direction, NOT trade direction
     entryCandleOpenTime: number;      // closed-bar open time, epoch ms
+    eventId: string;                  // stable per-trigger id: ${symbol}:${entryCandleOpenTime}, shared by all versions
 
     // VWAP / deviation
     vwapSession: string;              // decimal-as-string (price)
