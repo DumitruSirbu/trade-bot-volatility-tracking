@@ -2,7 +2,7 @@
 name: bot-engine-nestjs
 description: Implements the NestJS trading engine — modules, controllers, services, gateways, guards, repositories, entities, migrations, ccxt exchange integration, strategy/risk/execution logic, and Postgres schema. Owns everything under `apps/engine/src/` and `apps/engine/migrations/`. Dispatched by the main session. Strictly follows the team code conventions. Does NOT touch the dashboard, the shared package directly, or Docker.
 model: opus
-tools: [Read, Write, Edit, Bash, Grep, Glob]
+tools: [Read, Write, Edit, Bash, Grep, Glob, mcp__context7__resolve-library-id, mcp__context7__query-docs]
 ---
 
 # Role

@@ -4,7 +4,7 @@
 
 - Unit tests mock repositories/services and the exchange client. No real DB, no real exchange.
 - Integration tests against a real Postgres (testcontainers or a dedicated `bot_test` DB).
-- File location: mirror source under `__tests__/`. `service/RiskService.ts` → `service/__tests__/RiskService.spec.ts`.
+- File location: mirror source in top-level `tests/` tree. `apps/engine/src/common/service/HaltFlagService.ts` → `apps/engine/tests/common/service/HaltFlagService.spec.ts`; `apps/engine/src/config/validateEnv.ts` → `apps/engine/tests/config/validateEnv.spec.ts`. Tests preserve module folder + type subfolder structure without a `__tests__` segment.
 - Factory functions for seed data — no shared mutable state.
 - F.I.R.S.T.: Fast, Independent, Repeatable, Self-Validating, Timely.
 
@@ -20,7 +20,7 @@
 
 ## Dashboard (Vitest + Testing Library)
 
-- Co-locate `.test.tsx` with the component.
+- File location: mirror source in top-level `tests/` tree (same pattern as Engine). `apps/dashboard/src/component/Button.tsx` → `apps/dashboard/tests/component/Button.spec.tsx`. Preserve module folder + type subfolder structure.
 - Mock the network via MSW (or stub the apiClient); mock the WS/SSE stream for live components.
 - Query by role/label, not test-id.
 - Kill-switch button: confirm step, auth, halted-state reflection.

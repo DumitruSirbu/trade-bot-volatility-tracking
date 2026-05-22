@@ -1,0 +1,17 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "module": "commonjs",
+        "moduleResolution": "node",
+        "rootDir": "src",
+        "outDir": "dist",
+        "baseUrl": ".",
+        "incremental": true,
+        "tsBuildInfoFile": "dist/.tsbuildinfo",
+        "declaration": false,
+        "sourceMap": true,
+        "types": ["node", "jest"]
+    },
+    "include": ["src/**/*.ts", "tests/**/*.ts"],
+    "exclude": ["node_modules", "dist", "**/*.spec.ts", "test"]
+}

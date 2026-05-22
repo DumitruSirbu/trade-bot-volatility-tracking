@@ -1,0 +1,41 @@
+# Local development stack for M0: Postgres + Adminer.
+# Engine and dashboard services are added in later milestones (own Dockerfiles).
+# Credentials come from the root .env (see .env.example) — never hard-coded here.
+
+services:
+    postgres:
+        image: postgres:18.4-alpine
+        container_name: trade-bot-postgres
+        restart: unless-stopped
+        environment:
+            POSTGRES_USER: ${DB_USER}
+            POSTGRES_PASSWORD: ${DB_PASSWORD}
+            POSTGRES_DB: ${DB_NAME}
+        ports:
+            - '${DB_PORT}:5432'
+        volumes:
+            # Postgres 18+ images store data in a major-version subdir under this path.
+            # Mount the parent (NOT /var/lib/postgresql/data) per docker-library/postgres#1259.
+            - postgres-data:/var/lib/postgresql
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U ${DB_USER} -d ${DB_NAME}']
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 10s
+
+    adminer:
+        image: adminer:5.4.2
+        container_name: trade-bot-adminer
+        restart: unless-stopped
+        ports:
+            - '${ADMINER_PORT}:8080'
+        environment:
+            ADMINER_DEFAULT_SERVER: postgres
+        depends_on:
+            postgres:
+                condition: service_healthy
+
+volumes:
+    postgres-data:
+        name: trade-bot-postgres-data

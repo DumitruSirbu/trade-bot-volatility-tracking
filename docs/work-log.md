@@ -1,0 +1,5 @@
+# Work Log
+
+| Date (UTC) | Start | End | Duration | Phase / Task | Agent(s) | Outcome / Notes |
+|---|---|---|---|---|---|---|
+| 2026-05-22 | — | — | — | **M0 — Foundation & scaffolding** | bot-engine-nestjs, bot-shared-maintainer, bot-qa-engineer, bot-review-* | **DONE.** pnpm monorepo + Docker Compose (Postgres + Adminer) + NestJS 11 app (typed AppConfig, HaltFlagService kill-switch, decimal.js money helpers + redaction scrubber, event bus, scheduler, `/health` liveness). 93 Jest tests, all gates green (build, lint, tsc, test). Two review rounds complete: Round 1 fixed money-helper dead guard, config NaN gap, EXCHANGE_TESTNET typo, single-level redaction, BaseRepository `as never`, barrel nits; Round 2 fixed magic-string const + dead-export + test nit. Carry-overs: float risk-limit config→parseMoney (M3), dual rounding context HALF_EVEN (M3), HaltReasonEnum (M6), ValidationPipe+throttler (M9), Node 22 CI (M14), .env.example DB_PASSWORD annotation (CI/prod). TypeScript version gap (packages/shared ^5.4.5 vs root 5.9.3) noted, non-blocking. See `docs/plans/M0-foundation.md` Outcome section and this log. |
