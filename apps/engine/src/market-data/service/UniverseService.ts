@@ -11,7 +11,7 @@ import {
     UNIVERSE_SYMBOL_TIER_CHANGED_EVENT,
 } from '../../common/const';
 import { Money, MoneyValue, parseMoney } from '../../common/utils/money';
-import { COIN_TIER_BY_MAX_RANK, UNIVERSE_MAX_SYMBOLS, UNIVERSE_MIN_QUOTE_VOLUME_USDT, UNIVERSE_REFRESH_CRON } from '../const';
+import { COIN_TIER_BY_MAX_RANK, STABLECOIN_BASE_SYMBOLS, UNIVERSE_MAX_SYMBOLS, UNIVERSE_MIN_QUOTE_VOLUME_USDT, UNIVERSE_REFRESH_CRON } from '../const';
 import { EXCHANGE_CLIENT, IExchangeClient, IMarketInfo, ITickerSnapshot } from '../../exchange/interface';
 import { IInstrumentRefreshedEvent, IUniverseEntry, IUniverseTransition } from '../interface';
 
@@ -232,6 +232,6 @@ export class UniverseService {
     }
 
     private isTradablePerpetual(market: IMarketInfo): boolean {
-        return market.active && market.isLinearPerpetual;
+        return market.active && market.isLinearPerpetual && !STABLECOIN_BASE_SYMBOLS.has(market.base);
     }
 }

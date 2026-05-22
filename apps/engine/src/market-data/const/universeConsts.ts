@@ -1,7 +1,12 @@
 import { CoinTierEnum } from '@bot/shared';
 
 // Universe sizing (M1 task: top 200–300 by 24h volume with a liquidity floor).
-export const UNIVERSE_MAX_SYMBOLS = 300;
+export const UNIVERSE_MAX_SYMBOLS = 50;
+
+// Stablecoins by base symbol — excluded from the universe regardless of volume rank.
+// These have negligible VWAP deviation and produce zero signal; tracking them wastes
+// DB space and pollutes breadth / sameBarTriggerCount metrics.
+export const STABLECOIN_BASE_SYMBOLS: ReadonlySet<string> = new Set(['USDC', 'BUSD', 'TUSD', 'FDUSD', 'USDD', 'DAI', 'USDP', 'GUSD', 'FRAX', 'LUSD']);
 
 // Liquidity floor in 24h quote (USDT) volume — below this a symbol is too thin to
 // trade safely regardless of rank. Decimal-as-string (money never float).
