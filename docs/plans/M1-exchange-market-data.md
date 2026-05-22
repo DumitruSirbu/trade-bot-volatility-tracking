@@ -65,3 +65,27 @@ A live stream of VWAP-deviation signal events prints to the console, each carryi
 the full indicator snapshot needed by the strategy and risk modules. Trigger formula
 is documented, shared with backtest, and unit-tested. Driven by one WebSocket
 connection. No DB writes or orders yet.
+
+## Outcome / Review rounds
+
+**Shipped:**
+- **ExchangeModule:** ccxt-backed Binance USDT-M futures testnet client, the sole Binance chokepoint. Exposes read-only `IExchangeClient` (account balance, instrument list, mark-price stream). No order path.
+- **MarketDataModule:** universe loader (top 200–300 by 24h volume, tier assignment tier-1/2/3) with periodic refresh, single `!ticker@arr` WebSocket, 5-min candle aggregation (forming/closed separation), and closed-bars-only indicators (session+20bar VWAP with multi-anchor, σ-band, ATR14, ADX14±DI, RSI14, Bollinger %B, volume ratio).
+- **Enriched signal events:** `volatility.detected` (trigger fire) and `price.update` (tick), including BTC reference move, idiosyncrasy score, regime label (ADX-derived), OI polling (REST), funding rate, aggressor imbalance (triggered symbols), order-book depth (triggered), market breadth, symbol universe age, fast market-stress flags (OI/funding shocks, spread widening, depth collapse), empirical band calibration, multiple VWAP anchors.
+- **Trigger formula:** shared pure/deterministic `evaluateTrigger` detector (direction-agnostic, fires on closed bar when σ-deviation, volume, and tier-specific move bounds align); unit-tested; used by both live and M7 backtest.
+- **251 Jest tests:** all pass. Build, lint, tsc gates green.
+
+**Architecture:** See `docs/architecture/adr/0001-exchange-and-market-data.md`.
+
+**Review rounds:**
+- **Round 1:** Security (no blockers), Logic (2 blockers: bar-close depended on tick arrival → quiet symbols never graduated; enrichment used `Date.now()` instead of bar-close time), Clean-Code (memory-leak patterns), Quant (highs: session VWAP never reset at UTC; universe seeded from partial WS frame; double snapshot recompute; idiosyncrasy denominator window mismatch; ccxt error strings bypassed log redaction → credential leak).
+- **Round 2:** Verified fixes but found REGRESSION: bar-close fix was half-applied (tick path graduated but only sweep evaluated/emitted/calibrated → active symbols never evaluated; late-tick double-close race). Residual high: header-form API key not redacted.
+- **Round 3:** Unified `handleClosedBars` close authority + `lastClosedBucketOpenTimeMs` exactly-once watermark resolved bar-close blocker; sanitizer header-form fix resolved security high; batched tick pass fixed sameBarTriggerCount undercount. Zero blockers/highs. All 251 tests green.
+
+**Carry-over mediums (deferred, documented):**
+- (a) Registry cleanup not wired to universe-leave events (stale SymbolMarketState recompute/calibration for departed symbols — guarded, no stale event emitted).
+- (b) Market-stress flags (oiShock/fundingExtreme/spreadWidening) BTC-only; depthCollapse is hardcoded M4 placeholder.
+- (c) volume-per-bar is deterministic approximation from cumulative 24h quote-volume deltas; M7 backtest must replicate exactly.
+- (d) Calibration percentile uses nearest-rank floor — align convention with M7 band-fitting.
+- (e) base62 `{40,}` token redaction may over-redact diagnostics (safe direction).
+- (f) `getClosedBars` returns array by reference.

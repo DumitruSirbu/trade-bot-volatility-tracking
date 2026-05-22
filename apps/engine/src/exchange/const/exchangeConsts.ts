@@ -1,0 +1,36 @@
+// USDT-margined linear perpetuals are the only instruments this bot trades.
+// ccxt tags them with this settle currency + swap=true; the universe filter
+// keys off these to drop spot, inverse, options, and dated futures.
+export const PERPETUAL_SETTLE_CURRENCY = 'USDT';
+
+// Depth requested from watchOrderBook for triggered symbols. Top-of-book plus a
+// shallow ladder is enough to estimate 10bps/50bps notional without streaming a
+// full book (ADR §2 tiering — never deep books for the whole universe).
+export const ORDER_BOOK_DEPTH_LIMIT = 20;
+
+// ccxt's built-in rate-limiter is mandatory: a single client fans out hundreds of
+// REST OI/funding polls, and tripping Binance's weight ban would blind the bot.
+export const ENABLE_RATE_LIMIT = true;
+
+// Censor substituted for any credential-bearing token found inside a ccxt error
+// string before it reaches the logs.
+export const EXCHANGE_ERROR_CENSOR = '[REDACTED]';
+
+// Binance signed-request query params, the header-form API key, and any long secret
+// token (HMAC signature or API key) that a ccxt AuthenticationError/RequestError can
+// embed verbatim in its message. We strip these at the exchange boundary before
+// logging so credentials never reach disk/stdout (deepRedactLog only scrubs object
+// KEYS, not strings).
+//
+// Patterns, in order:
+//  1. Signed-request query params in `key=value` form.
+//  2. The Binance API key in HEADER form (X-MBX-APIKEY) — base62, not hex, separated
+//     by `=`, `:`, or `":"` (JSON-echoed headers), so patterns 1/3 miss it.
+//  3. Any standalone hex token of length >= 64 (HMAC signature).
+//  4. Any standalone base62 token of length >= 40 (an API key echoed without a label).
+export const EXCHANGE_ERROR_SENSITIVE_PATTERNS: ReadonlyArray<RegExp> = [
+    /(signature|apiKey|api_key|timestamp|sign)=[^&\s"']+/gi,
+    /(x-mbx-apikey)("?\s*[:=]\s*"?)([^&\s"']+)/gi,
+    /\b[a-f0-9]{64,}\b/gi,
+    /\b[A-Za-z0-9]{40,}\b/g,
+];

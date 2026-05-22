@@ -12,5 +12,9 @@ export default {
     testEnvironment: 'node',
     moduleNameMapper: {
         '^@bot/shared$': '<rootDir>/../../packages/shared/src/index.ts',
+        // The shared package uses ESM-style `.js` extension imports internally.
+        // Jest (CommonJS mode) cannot resolve `.js` to `.ts`, so we strip the
+        // extension and let the TypeScript resolver find the `.ts` source file.
+        '^(\\.{1,2}/.+)\\.js$': '$1',
     },
 };

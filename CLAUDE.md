@@ -59,4 +59,5 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 ## Status
 
 **M0 — Foundation & scaffolding:** DONE (pnpm + Docker + NestJS 11 + TypeORM + event bus + halt-flag + money helpers).
-**Next:** **M1 — Exchange & market data** (`docs/plans/M1-exchange-market-data.md`).
+**M1 — Exchange & market data:** DONE (ccxt/Binance testnet, MarketDataModule, shared trigger, 251 tests, 3 review rounds, zero blockers).
+**Next:** **M2 — Persistence & data model** (`docs/plans/M2-persistence.md`).
