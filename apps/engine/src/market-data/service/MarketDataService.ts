@@ -3,13 +3,13 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Interval } from '@nestjs/schedule';
 import { IClosedBarTriggerInput, IPriceUpdateEvent, ITriggerResult } from '@bot/shared';
 
-import { PRICE_UPDATE_EVENT, VOLATILITY_DETECTED_EVENT } from '../../common/const';
+import { CANDLE_CLOSED_EVENT, PRICE_UPDATE_EVENT, TICK_AGGREGATE_EVENT, VOLATILITY_DETECTED_EVENT } from '../../common/const';
 import { Money, MoneyValue, parseMoney } from '../../common/utils/money';
 import { sanitizeExchangeError } from '../../exchange/utils';
 import { APPROACHING_TRIGGER_FRACTION, BAR_CLOSE_SWEEP_MS, BREADTH_WINDOW_5M_MS, CANDLE_5M_INTERVAL_MS, OI_CHANGE_15M_MS, OI_CHANGE_5M_MS } from '../const';
 import { computeIdiosyncrasyScore, computeIndicatorSnapshot, computeRegimeLabel } from '../indicator';
 import { EXCHANGE_CLIENT, IExchangeClient, ITickerSnapshot } from '../../exchange/interface';
-import { IEscalationBaseline, IFlowLiquidityContext, IIndicatorSnapshot } from '../interface';
+import { ICandleClosedEvent, IEscalationBaseline, IFlowLiquidityContext, IIndicatorSnapshot, ITickAggregateEvent } from '../interface';
 import { toVolatilityDetectedEvent } from '../marketData.mapper';
 import { SymbolMarketState } from '../state';
 import { evaluateTrigger } from '../trigger';
@@ -92,6 +92,12 @@ export class MarketDataService implements OnApplicationBootstrap {
     private closeBarIfElapsed(state: SymbolMarketState, nowMs: number): IIndicatorSnapshot | null {
         const closedBar = state.closeElapsedBars(nowMs);
 
+        // Flush a quiet symbol's elapsed 1-second bucket on the same sweep that flushes its
+        // candles, mirroring the closed-candle drain on both close paths (finding #1).
+        state.closeElapsedTickBucket(nowMs);
+        this.emitClosedTickBuckets(state);
+        this.emitClosedCandles(state);
+
         if (closedBar === null) {
             return null;
         }
@@ -155,11 +161,47 @@ export class MarketDataService implements OnApplicationBootstrap {
         const state = this.registry.getOrCreate(ticker.symbol, entry.tier);
         const volumeDelta = this.deriveVolumeDelta(ticker);
         const closedBar = state.ingestTick(price, volumeDelta, ticker.timestampMs);
+
+        this.emitClosedTickBuckets(state);
+        this.emitClosedCandles(state);
+
         const snapshot = closedBar !== null ? this.processClosedBar(state) : null;
 
         this.manageEscalation(ticker.symbol, state, price);
 
         return snapshot;
+    }
+
+    // Sub-minute persistence (ADR 0002 §4 / finding #1): drains every CLOSED fixed 1-second
+    // OHLCV bucket the state aggregated since the last drain and emits ONE TICK_AGGREGATE_EVENT
+    // per bucket (ts = bucket start). Multiple ticks/sec collapse into a single row keyed
+    // (symbol, ts), so concurrent same-second ticks no longer overwrite each other, and the
+    // per-second open/high/low/close preserves the intra-candle spike the backtest reconstructs.
+    private emitClosedTickBuckets(state: SymbolMarketState): void {
+        for (const bucket of state.drainClosedTickBuckets()) {
+            const event: ITickAggregateEvent = {
+                symbol: state.symbol,
+                tsMs: bucket.tsMs,
+                open: bucket.open,
+                high: bucket.high,
+                low: bucket.low,
+                close: bucket.close,
+                volume: bucket.volume,
+            };
+
+            this.eventEmitter.emit(TICK_AGGREGATE_EVENT, event);
+        }
+    }
+
+    // Drains and emits every closed 1m+5m bar buffered by this symbol's state since the
+    // last drain. BOTH close paths (tick and sweep) call this, so each closed bar is
+    // persisted exactly once on the same boundary live and in backtest (ADR 0002 §4).
+    private emitClosedCandles(state: SymbolMarketState): void {
+        for (const { interval, candle } of state.drainClosedCandles()) {
+            const event: ICandleClosedEvent = { symbol: state.symbol, interval, candle };
+
+            this.eventEmitter.emit(CANDLE_CLOSED_EVENT, event);
+        }
     }
 
     // Single recompute per closed bar (ADR §4): build the snapshot once here, cache a

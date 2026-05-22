@@ -11,3 +11,8 @@ export * from './IBreadthSnapshot';
 export * from './IAdxResult';
 export * from './IBollingerResult';
 export * from './IVolatilityEventInputs';
+export * from './ICandleClosedEvent';
+export * from './ITickAggregateEvent';
+export * from './IOpenInterestSampledEvent';
+export * from './IFundingRateObservedEvent';
+export * from './IInstrumentRefreshedEvent';

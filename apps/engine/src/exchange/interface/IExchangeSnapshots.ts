@@ -13,6 +13,12 @@ export interface IMarketInfo {
     contractSize: string | null;
     pricePrecision: number | null;
     amountPrecision: number | null;
+    // Real exchange filters for M5 sizing/quantization, sourced from ccxt market.limits
+    // (decimal-as-string, never float): price increment, amount increment, min order
+    // notional. Null when the exchange does not report the limit (caller falls back).
+    tickSize: string | null;
+    stepSize: string | null;
+    minNotional: string | null;
 }
 
 export interface ITickerSnapshot {
@@ -41,7 +47,12 @@ export interface IOpenInterestSnapshot {
 
 export interface IFundingRateSnapshot {
     symbol: string;
+    // Quote/poll wall-clock time of THIS observation (when we fetched it).
     timestampMs: number;
+    // The 8h SETTLEMENT boundary this rate applies to (ccxt fundingTimestamp). Kept
+    // separate from timestampMs so funding_rates de-dups to one row per settlement,
+    // not one per poll, and the backtest replays funding as it actually settled.
+    fundingTimestampMs: number | null;
     fundingRate: number | null;
     markPrice: string | null;
     fundingIntervalHours: number | null;

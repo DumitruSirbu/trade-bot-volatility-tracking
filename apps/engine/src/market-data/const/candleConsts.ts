@@ -1,6 +1,3 @@
-// Generic time conversions used across market-data math.
-export const MS_PER_HOUR = 60 * 60 * 1000;
-
 // Candle timeframes. The 5-minute bar drives indicators + the trigger; the
 // 1-minute bar is accumulated for M2 persistence and short-window breadth.
 export const CANDLE_5M_INTERVAL_MS = 5 * 60 * 1000;
@@ -26,10 +23,6 @@ export const OPEN_INTEREST_HISTORY_RETENTION_MS = 20 * 60 * 1000;
 // OI-change lookback windows (M1: open_interest_change_5m_pct / _15m_pct).
 export const OI_CHANGE_5M_MS = 5 * 60 * 1000;
 export const OI_CHANGE_15M_MS = 15 * 60 * 1000;
-
-// One UTC day in ms — session VWAP resets on this boundary (using bar close time,
-// not wall-clock) so vwapSession reflects the current session, not all history.
-export const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 // A full UTC session of 5-min bars (288). Caps sessionBars even if a reset is
 // somehow missed, so the array can never grow unbounded in a 24/7 process.

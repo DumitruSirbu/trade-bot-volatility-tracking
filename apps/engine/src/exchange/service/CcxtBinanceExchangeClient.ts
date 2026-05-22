@@ -145,6 +145,15 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
             contractSize: this.numberToString(market.contractSize),
             pricePrecision: market.precision?.price ?? null,
             amountPrecision: market.precision?.amount ?? null,
+            // Binance runs ccxt in TICK_SIZE precisionMode (binance.js parseMarket sets
+            // precision.price = PRICE_FILTER.tickSize, precision.amount = LOT_SIZE.stepSize),
+            // so precision.price/amount ARE the real increments (e.g. BTC 0.1, ETH 0.01) —
+            // NOT decimal-place counts. limits.price.min is PRICE_FILTER.minPrice (a min
+            // ALLOWED price, not the tick) and must NOT be used here. limits.cost.min is the
+            // min order notional (MIN_NOTIONAL) and is the correct source for minNotional.
+            tickSize: this.numberToString(market.precision?.price),
+            stepSize: this.numberToString(market.precision?.amount),
+            minNotional: this.numberToString(market.limits?.cost?.min),
         };
     }
 
@@ -191,6 +200,10 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
         return {
             symbol,
             timestampMs: fundingRate.timestamp ?? Date.now(),
+            // ccxt FundingRate.fundingTimestamp is the current 8h settlement boundary.
+            // Prefer it; fall back to nextFundingTimestamp, never the poll wall-clock —
+            // a wall-clock value would defeat the per-settlement de-dup in funding_rates.
+            fundingTimestampMs: fundingRate.fundingTimestamp ?? fundingRate.nextFundingTimestamp ?? null,
             fundingRate: fundingRate.fundingRate ?? null,
             markPrice: this.numberToString(fundingRate.markPrice),
             fundingIntervalHours: this.parseFundingIntervalHours(fundingRate.interval),

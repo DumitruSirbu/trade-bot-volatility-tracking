@@ -7,6 +7,9 @@ dashboard will consume.
 
 ## Tasks
 
+- **Startup schema validation (prerequisite gate).** Before market-data persistence pipeline starts, verify all TypeORM migrations are applied or expected tables exist; fail-fast with alarm instead of booting silently and swallowing persistence writes. Observed in M2 testnet: engine ran against reverted/unmigrated DB, logged schema-not-found errors but booted normally, creating silent data gaps (ADR 0002 §6). Validate at PersistenceModule bootstrap; throw rather than degrade.
+  - *Output:* engine refuses to boot if required schema is missing; loud alarm instead of silent data loss.
+
 - **Auth FIRST (prerequisite gate).** Stand up the auth guard before any endpoint is wired. **Short-lived bearer tokens (or mTLS) from the secret manager, with server-side revocation** — define TTL and a revocation path; no static/basic credentials, none committed. A CORS allow-list restricts origins to the dashboard only. No endpoint — especially halt — exists before the guard is in place.
   - *Output:* every endpoint rejects unauthenticated/cross-origin requests; a revoked token stops working immediately.
 - **Telegram alerts (strictly outbound)** on open/close/error/halt + a daily PnL summary (aligned to the UTC risk-day). **No inbound command handling** — Telegram is never a control path. Redact secrets; no keys/tokens in messages.

@@ -72,7 +72,7 @@ risk gate.
 - **RiskModule** — gatekeeper: sizing, daily/weekly loss limits, **consecutive-loss / per-symbol / per-bar caps**, exposure caps, liquidity/funding filters, **global market-stress halt** (driven by the fast-stress inputs, overrides ADX), **model-divergence kill switch**, stop-loss (ATR or structural) + take-profit, cooldowns. Signal → approved/rejected order intent.
 - **ExecutionModule** — places/reduces/closes orders; idempotent; partial-fill handling.
 - **PositionModule** — authoritative position state; reconciles against exchange; unrealized/realized PnL.
-- **PersistenceModule** — TypeORM entities, repositories, migrations.
+- **PersistenceModule** — Cross-cutting infra: NUMERIC↔decimal.js transformer, migration timeline. Domain modules own their entities/repositories (see ADR 0002).
 - **BacktestModule** — replays stored candles through a strategy version with simulated fills/fees/slippage; same strategy code as live.
 - **NotificationModule** — Telegram alerts + kill switch (global halt flag + endpoint).
 - **CommonModule** — config, decimal helpers, logging, event bus (`@nestjs/event-emitter`), scheduler (`@nestjs/schedule`).

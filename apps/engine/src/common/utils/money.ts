@@ -21,6 +21,12 @@ export const Money = Decimal.clone({
 
 export type MoneyValue = InstanceType<typeof Money>;
 
+// Domain-neutral decimal alias for NON-monetary NUMERIC columns (durations, scores,
+// pcts/ratios/rates). Same underlying decimal.js value and the same
+// decimalColumnTransformer apply, but MoneyValue stays reserved for actual
+// prices/qty/notional/fees/PnL so a reviewer can tell money from a ratio at a glance.
+export type DecimalValue = InstanceType<typeof Money>;
+
 // Parse an exchange/DB string into a money value. A JS number is intentionally
 // NOT accepted: a float would already be corrupted before Decimal ever sees it.
 export function parseMoney(value: string | MoneyValue): MoneyValue {

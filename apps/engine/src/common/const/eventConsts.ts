@@ -10,3 +10,13 @@ export const VOLATILITY_DETECTED_EVENT = 'marketData.volatility.detected';
 // Universe-membership transitions (M2 persists these to universe_membership).
 export const UNIVERSE_SYMBOL_ENTERED_EVENT = 'marketData.universe.symbolEntered';
 export const UNIVERSE_SYMBOL_LEFT_EVENT = 'marketData.universe.symbolLeft';
+
+// M2 persistence events (ADR 0002 §4). Emitted by MarketData where the value is already
+// computed; consumed by the passive MarketDataPersistenceListener which upserts via
+// repositories (idempotent on each table's UNIQUE constraint).
+export const CANDLE_CLOSED_EVENT = 'marketData.candle.closed';
+export const TICK_AGGREGATE_EVENT = 'marketData.tick.aggregate';
+export const OPEN_INTEREST_SAMPLED_EVENT = 'marketData.openInterest.sampled';
+export const FUNDING_RATE_OBSERVED_EVENT = 'marketData.fundingRate.observed';
+export const INSTRUMENT_REFRESHED_EVENT = 'marketData.instrument.refreshed';
+export const UNIVERSE_SYMBOL_TIER_CHANGED_EVENT = 'marketData.universe.tierChanged';

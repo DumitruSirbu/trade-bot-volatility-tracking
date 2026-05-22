@@ -3,11 +3,17 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron } from '@nestjs/schedule';
 import { CoinTierEnum } from '@bot/shared';
 
-import { UNIVERSE_SYMBOL_ENTERED_EVENT, UNIVERSE_SYMBOL_LEFT_EVENT } from '../../common/const';
-import { parseMoney } from '../../common/utils/money';
-import { COIN_TIER_BY_MAX_RANK, MS_PER_HOUR, UNIVERSE_MAX_SYMBOLS, UNIVERSE_MIN_QUOTE_VOLUME_USDT, UNIVERSE_REFRESH_CRON } from '../const';
+import {
+    INSTRUMENT_REFRESHED_EVENT,
+    MS_PER_HOUR,
+    UNIVERSE_SYMBOL_ENTERED_EVENT,
+    UNIVERSE_SYMBOL_LEFT_EVENT,
+    UNIVERSE_SYMBOL_TIER_CHANGED_EVENT,
+} from '../../common/const';
+import { Money, MoneyValue, parseMoney } from '../../common/utils/money';
+import { COIN_TIER_BY_MAX_RANK, UNIVERSE_MAX_SYMBOLS, UNIVERSE_MIN_QUOTE_VOLUME_USDT, UNIVERSE_REFRESH_CRON } from '../const';
 import { EXCHANGE_CLIENT, IExchangeClient, IMarketInfo, ITickerSnapshot } from '../../exchange/interface';
-import { IUniverseEntry, IUniverseTransition } from '../interface';
+import { IInstrumentRefreshedEvent, IUniverseEntry, IUniverseTransition } from '../interface';
 
 // Owns the tradable universe: filters tradable USDT-M perps, ranks by 24h quote
 // volume above a liquidity floor, keeps the top N, assigns coin tiers, and emits
@@ -20,6 +26,10 @@ export class UniverseService {
     private readonly entries = new Map<string, IUniverseEntry>();
 
     private linearPerpetualSymbols: Set<string> = new Set();
+
+    // Market metadata by symbol (base/quote/status/precision), held so the universe can
+    // emit INSTRUMENT_REFRESHED_EVENT with the full instrument shape (ADR 0002 §4).
+    private readonly marketsBySymbol = new Map<string, IMarketInfo>();
 
     constructor(
         @Inject(EXCHANGE_CLIENT) private readonly exchangeClient: IExchangeClient,
@@ -53,8 +63,14 @@ export class UniverseService {
     // run; the membership snapshot itself is built by refresh() from ticker volume.
     async loadTradableSymbols(): Promise<void> {
         const markets = await this.exchangeClient.loadMarkets();
+        const tradable = markets.filter((market) => this.isTradablePerpetual(market));
 
-        this.linearPerpetualSymbols = new Set(markets.filter((market) => this.isTradablePerpetual(market)).map((market) => market.symbol));
+        this.linearPerpetualSymbols = new Set(tradable.map((market) => market.symbol));
+        this.marketsBySymbol.clear();
+
+        for (const market of markets) {
+            this.marketsBySymbol.set(market.symbol, market);
+        }
 
         this.logger.log(`Loaded ${this.linearPerpetualSymbols.size} tradable USDT-M perpetual markets`);
     }
@@ -104,23 +120,91 @@ export class UniverseService {
     private applyRanked(ranked: IUniverseEntry[], nowMs: number): void {
         for (const entry of ranked) {
             const existing = this.entries.get(entry.symbol);
-            const enteredAtMs = existing?.enteredAtMs ?? nowMs;
+            const tierChanged = existing !== undefined && existing.tier !== entry.tier;
+            // A tier change opens a fresh membership window (ADR §4 point-in-time), so the
+            // entered-at clock resets; otherwise carry the original entry time forward.
+            const enteredAtMs = existing === undefined || tierChanged ? nowMs : existing.enteredAtMs;
 
             this.entries.set(entry.symbol, { ...entry, enteredAtMs });
+            this.emitInstrumentRefreshed(entry);
 
             if (existing === undefined) {
                 this.emitEntered(entry);
+
+                continue;
+            }
+
+            if (tierChanged) {
+                this.emitTierChanged(entry);
             }
         }
+    }
+
+    // Universe metadata is freshly ranked here (ADR §4) → emit so the persistence listener
+    // UPSERTs `instruments` with the CURRENT tradable universe. tick_size/step_size/
+    // min_notional are the real ccxt market limits (needed for M5 sizing/quantization).
+    private emitInstrumentRefreshed(entry: IUniverseEntry): void {
+        const market = this.marketsBySymbol.get(entry.symbol);
+
+        if (market === undefined) {
+            return;
+        }
+
+        this.emitInstrument(market, entry.quoteVolume24h, entry.tier, market.active && market.isLinearPerpetual);
+    }
+
+    private emitInstrument(market: IMarketInfo, volume24h: MoneyValue, coinTier: CoinTierEnum, isTradable: boolean): void {
+        const event: IInstrumentRefreshedEvent = {
+            symbol: market.symbol,
+            base: market.base,
+            quote: market.quote,
+            status: market.active ? 'active' : 'inactive',
+            tickSize: this.toMoneyOrZero(market.tickSize),
+            stepSize: this.toMoneyOrZero(market.stepSize),
+            minNotional: this.toMoneyOrZero(market.minNotional),
+            isTradable,
+            volume24h,
+            coinTier,
+        };
+
+        this.eventEmitter.emit(INSTRUMENT_REFRESHED_EVENT, event);
+    }
+
+    private toMoneyOrZero(value: string | null): MoneyValue {
+        if (value === null) {
+            return new Money(0);
+        }
+
+        return parseMoney(value);
+    }
+
+    private emitTierChanged(entry: IUniverseEntry): void {
+        const transition: IUniverseTransition = { symbol: entry.symbol, tier: entry.tier, volumeRank: entry.volumeRank };
+
+        this.eventEmitter.emit(UNIVERSE_SYMBOL_TIER_CHANGED_EVENT, transition);
+        this.logger.debug(`Universe TIER CHANGE ${entry.symbol} → ${entry.tier} (rank ${entry.volumeRank})`);
     }
 
     private emitLeavers(nextSymbols: Set<string>): void {
         for (const [symbol, entry] of this.entries) {
             if (!nextSymbols.has(symbol)) {
                 this.entries.delete(symbol);
+                this.emitInstrumentNonTradable(entry);
                 this.emitLeft(entry);
             }
         }
+    }
+
+    // A symbol that left the universe is no longer tradable; `instruments` reflects the
+    // CURRENT tradable set, so flip is_tradable=false (the row is retained for history).
+    private emitInstrumentNonTradable(entry: IUniverseEntry): void {
+        const market = this.marketsBySymbol.get(entry.symbol);
+
+        if (market === undefined) {
+            return;
+        }
+
+        this.emitInstrument(market, entry.quoteVolume24h, entry.tier, false);
     }
 
     private emitEntered(entry: IUniverseEntry): void {

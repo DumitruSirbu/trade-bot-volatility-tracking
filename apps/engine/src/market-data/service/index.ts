@@ -5,3 +5,5 @@ export * from './DepthAggressorService';
 export * from './FlowPollService';
 export * from './DeviationCalibrationService';
 export * from './MarketDataService';
+export * from './MarketDataPersistenceListener';
+export * from './TickAggregatePartitionService';
