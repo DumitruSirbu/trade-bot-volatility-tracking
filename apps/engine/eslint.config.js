@@ -11,6 +11,13 @@ const NODE_GLOBALS = {
     require: 'readonly',
     console: 'readonly',
     Buffer: 'readonly',
+    setTimeout: 'readonly',
+    clearTimeout: 'readonly',
+    setInterval: 'readonly',
+    clearInterval: 'readonly',
+    setImmediate: 'readonly',
+    clearImmediate: 'readonly',
+    NodeJS: 'readonly',
 };
 
 // Jest injects these into the spec runtime; declare them so test files lint clean.

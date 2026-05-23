@@ -1,10 +1,12 @@
 import { CoinTierEnum } from '@bot/shared';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, IsNull, Repository } from 'typeorm';
+import { EntityManager, IsNull, QueryFailedError, Repository } from 'typeorm';
 
 import { BaseRepository } from '../../common/repository/BaseRepository';
 import { UniverseMembershipEntity } from '../entity';
+
+const OPEN_MEMBERSHIP_UNIQUE_INDEX = 'uq_universe_membership_open_symbol';
 
 // Maintains a gap-free point-in-time tier timeline (ADR 0002 §4). enter → openMembership;
 // leave → closeOpenMembership; tier change → close prior + open new. The open row is the
@@ -40,17 +42,44 @@ export class UniverseMembershipRepository extends BaseRepository<UniverseMembers
         });
     }
 
-    private async openMembershipWith(manager: EntityManager, symbol: string, coinTier: CoinTierEnum, enteredAt: Date): Promise<void> {
+    private async openMembershipWith(manager: EntityManager, symbol: string, coinTier: CoinTierEnum, enteredAt: Date): Promise<UniverseMembershipEntity> {
         const existing = await manager.findOne(UniverseMembershipEntity, { where: { symbol, leftAt: IsNull() } });
 
         if (existing !== null) {
-            return;
+            return existing;
         }
 
-        await manager.save(manager.create(UniverseMembershipEntity, { symbol, coinTier, enteredAt, leftAt: null }));
+        try {
+            return await manager.save(manager.create(UniverseMembershipEntity, { symbol, coinTier, enteredAt, leftAt: null }));
+        } catch (cause) {
+            // Partial-unique-index contract (ADR 0002 §point-in-time universe): a concurrent caller
+            // racing on the same symbol observes uq_universe_membership_open_symbol as a no-op, not an error.
+            if (this.isOpenMembershipUniqueViolation(cause)) {
+                const concurrent = await manager.findOne(UniverseMembershipEntity, { where: { symbol, leftAt: IsNull() } });
+
+                if (concurrent !== null) {
+                    return concurrent;
+                }
+            }
+
+            throw cause;
+        }
     }
 
     private async closeOpenMembershipWith(manager: EntityManager, symbol: string, leftAt: Date): Promise<void> {
         await manager.update(UniverseMembershipEntity, { symbol, leftAt: IsNull() }, { leftAt });
+    }
+
+    // Postgres SQLSTATE 23505 (`unique_violation`) on the partial unique index is the structured
+    // signal driverError carries; we test SQLSTATE + constraint name, not message text, to avoid
+    // locale/driver drift (mirrors TransactionRepository.isUniqueViolation).
+    private isOpenMembershipUniqueViolation(cause: unknown): boolean {
+        if (!(cause instanceof QueryFailedError)) {
+            return false;
+        }
+
+        const driverError = (cause as QueryFailedError & { driverError?: { code?: string; constraint?: string } }).driverError;
+
+        return driverError?.code === '23505' && driverError?.constraint === OPEN_MEMBERSHIP_UNIQUE_INDEX;
     }
 }

@@ -196,7 +196,7 @@ row; on **tier change** close the open row (`left_at = now`) and open a fresh on
 new tier and a new `entered_at`. This yields a gap-free timeline of which tier a symbol held
 at any instant — required for survivorship-free backtest replay. `UniverseService` must be
 extended to detect a tier change in `applyRanked` (compare `existing.tier` to the new tier)
-and emit `UNIVERSE_SYMBOL_TIER_CHANGED_EVENT`. **`book_snapshots`** is written only around
+and emit `UNIVERSE_SYMBOL_TIER_CHANGED_EVENT`. **Open-row contract:** `openMembership(symbol, …)` is idempotent. A concurrent caller observing the same symbol with `left_at IS NULL` MUST receive a successful no-op, not a unique-violation error. The DB-level partial unique index `uq_universe_membership_open_symbol` is the source of truth; repository callers are NOT required to hold an external lock. **`book_snapshots`** is written only around
 decisions/open positions (per ADR 0001 / the M1 compromise); in M2 it is reached by the
 same listener pattern when a `volatility.detected` carries depth — the row is keyed
 `(symbol, ts)` and lined up with the triggering decision in M3.

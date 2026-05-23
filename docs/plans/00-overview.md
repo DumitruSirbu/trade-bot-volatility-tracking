@@ -179,3 +179,31 @@ dashboard talks to an authenticated read API. Full topology in `M11-go-live-hard
 | M12 | Analysis MCP (phase 2) | `M12-analysis-mcp.md` |
 | M13 | Agentic weekly loop (phase 2) | `M13-agentic-weekly-loop.md` |
 | M14 | CI review gate (phase 2) | `M14-ci-review-gate.md` |
+
+## Cross-cutting risks
+
+Tracked here when they cross a single milestone's scope. Each item links to the ADR or
+plan that owns the resolution.
+
+- **`positions.protective_order_type` nullability** (raised by ADR 0008 §5). M2's schema
+  allows `NULL`; the always-protected invariant is much easier to enforce structurally
+  with `NOT NULL DEFAULT 'local_fallback'`. **Action:** add a small migration in M5 W1
+  (or W2) flipping the column, or document a code-only enforcement path. Recommendation:
+  migrate.
+- **ccxt 4.5.54 futures testnet auth** (memory note). Verified working with
+  `options.disableFuturesSandboxWarning: true` in `CcxtBinanceExchangeClient`. Long-term
+  migration to Binance demo trading before go-live (M11). M5 stays on testnet.
+- **Order-policy matrix as shared truth** (ADR 0005 §1, §5; live-vs-backtest contract C5).
+  Both ExecutionModule (M5) and BacktestModule (M7) import the matrix from
+  `executionConsts`. A divergence is a must-fix; CI smoke (M14 phase 2) should pin the
+  shared import.
+- **Backtest fidelity gap when `book_snapshots` is missing** (live-vs-backtest contract
+  C6, C9). M2 captures depth only around decisions; pre-M5 historical depth coverage is
+  sparse. M7 falls back to tier-floor slippage and flags `low_fidelity=true`. Versions
+  whose edge depends on low-fidelity trades **do not graduate to live** — operator
+  policy, not engine enforcement.
+- **Sizing inputs absent from params/config** (ADR 0004 Conflicts §1, carry-over from M4
+  review). `riskPerTradePct`, `allocatedCapital`, daily/weekly loss limits, exposure
+  caps live as operator-level config in `executionConsts`/`riskConsts`, not in
+  `strategy_versions.params`. Decision pending main session if any need
+  per-version-comparability.

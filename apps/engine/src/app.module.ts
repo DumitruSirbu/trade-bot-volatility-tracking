@@ -4,6 +4,7 @@ import { CommonModule } from './common/CommonModule';
 import { AppConfigModule } from './config/AppConfigModule';
 import { DatabaseModule } from './database/DatabaseModule';
 import { ExchangeModule } from './exchange/ExchangeModule';
+import { ExecutionModule } from './execution/ExecutionModule';
 import { HealthModule } from './health/HealthModule';
 import { MarketDataModule } from './market-data/MarketDataModule';
 import { PositionModule } from './position/PositionModule';
@@ -11,6 +12,17 @@ import { RiskModule } from './risk/RiskModule';
 import { StrategyModule } from './strategy/StrategyModule';
 
 @Module({
-    imports: [AppConfigModule, CommonModule, DatabaseModule, HealthModule, ExchangeModule, MarketDataModule, StrategyModule, PositionModule, RiskModule],
+    imports: [
+        AppConfigModule,
+        CommonModule,
+        DatabaseModule,
+        HealthModule,
+        ExchangeModule,
+        MarketDataModule,
+        StrategyModule,
+        PositionModule,
+        RiskModule,
+        ExecutionModule,
+    ],
 })
 export class AppModule {}

@@ -31,9 +31,10 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 
 1. Follow the dispatch waves for every non-trivial change. Don't skip reviewers or the scribe.
 2. **Read `docs/best-practices/code-conventions.md` before engine code.** Authoritative; overrides generic Clean Code where they conflict.
-3. **Use `context7-mcp` before calling any third-party API** (per `~/.claude/CLAUDE.md`).
-4. **Shared types live in `packages/shared/`** — route changes through `bot-shared-maintainer`.
-5. Two mandatory review rounds per milestone (see conventions doc).
+3. **Read `docs/best-practices/dev-qa-cycle.md` before dispatching any fix or QA wave.** Authoritative process rules — ≤5 items/files per dispatch, adversarial QA, architect on contract touches, reviewer continuity across rounds, paired tests per fix item, orchestrator verifies every diff. Distilled from the M5 retrospective.
+4. **Use `context7-mcp` before calling any third-party API** (per `~/.claude/CLAUDE.md`).
+5. **Shared types live in `packages/shared/`** — route changes through `bot-shared-maintainer`.
+6. Quality over speed. Smaller iterations even if there are more of them. Cycle review/fix until zero blockers, zero highs, majority of mediums resolved.
 
 ## Trading-safety invariants (non-negotiable)
 
@@ -53,6 +54,7 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 - Milestone plans → `docs/plans/`
 - Architecture → `docs/architecture/`
 - Code conventions (AUTHORITATIVE) → `docs/best-practices/code-conventions.md`
+- Dev + QA cycle rules (AUTHORITATIVE) → `docs/best-practices/dev-qa-cycle.md`
 - Testing → `docs/best-practices/testing.md`
 - Work log → `docs/work-log.md`
 
@@ -63,4 +65,7 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 **M2 — Persistence & data model:** DONE (13 domain-owned entities, 353 tests, reversible migrations + 90-day partitioned tick_aggregates, 2 review rounds + post-review smoke test, zero blockers, testnet persistence verified).
 **M3 — Strategy engine:** DONE (4 pure strategies v0–v3, registry + config-selected active version, orchestrator stamps flow_type/signal_score/event_id and writes dry-run decisions, 202 tests, 2 review rounds, zero blockers).
 **M4 — Risk management:** DONE (bypass-proof risk gate, 3-slot position model, BTC-correlated single-candidate, daily/weekly loss windows, in-flight reservation ledger, funding suppression + flow rules, spread/liquidity/SL/time-stop/cooldown/market-stress/consecutive-loss/overtrading/OI/tier-3 gates, isolated-margin default, model-divergence kill-switch, 700 tests, 2 review rounds, zero blockers).
-**Next:** **M5 — Execution (testnet)** (`docs/plans/M5-execution-testnet.md`).
+**M5 — Execution (testnet):** DONE (ExecutionModule idempotent open/add/reduce/close, marketable-limit-IOC + post-only-maker + reduce-market policies, partial-fill FillAccumulator, LocalProtectiveMonitor arm/disarm, ccxt testnet, EXECUTION_MODE config, 898 tests, 5 review rounds, zero blockers, testnet smoke runbook documented).
+**M5.5 — Adversarial backfill (pre-M6 hardening):** DONE (2 production bugs fixed in M2, 172 adversarial tests added across M1–M5, dev-qa-cycle validation complete, 3-round strict cap held, zero blockers/highs at close, pre-M6 deferred items catalogued).
+**Pre-M6 deferred:** M2 partition-rollover task for fresh Postgres volume (narrow scope, test-harness or service pre-create partitions for current/upcoming date window).
+**Next:** **M6 — Position management & reconciliation** (`docs/plans/M6-position-management.md`).

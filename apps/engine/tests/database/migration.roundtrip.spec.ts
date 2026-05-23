@@ -40,6 +40,29 @@ async function listUserTables(dataSource: DataSource): Promise<string[]> {
     return rows.map((row) => row.tablename);
 }
 
+// Revert every applied migration. Loops on the migrations table (executed-migration count)
+// so the test is robust to any future migration count — no hardcoded triple-undo.
+async function revertAllMigrations(dataSource: DataSource): Promise<void> {
+    const maxIterations = 50;
+
+    for (let i = 0; i < maxIterations; i += 1) {
+        try {
+            const executed = (await dataSource.query(`SELECT COUNT(*)::int AS count FROM migrations`)) as { count: number }[];
+
+            if (executed[0]!.count === 0) {
+                return;
+            }
+        } catch {
+            // migrations table does not exist yet — nothing to revert.
+            return;
+        }
+
+        await dataSource.undoLastMigration({ transaction: 'each' });
+    }
+
+    throw new Error(`revertAllMigrations exceeded ${maxIterations} iterations — possible infinite loop`);
+}
+
 async function listTickPartitions(dataSource: DataSource): Promise<string[]> {
     const rows = (await dataSource.query(
         `SELECT c.relname FROM pg_class c
@@ -63,9 +86,7 @@ describe('Migration round-trip (integration — requires Postgres)', () => {
         // Start from a clean slate: revert any prior run so the up() path is exercised
         // from scratch. Errors here are tolerated (nothing to revert on a fresh DB).
         try {
-            await dataSource.undoLastMigration({ transaction: 'each' });
-            await dataSource.undoLastMigration({ transaction: 'each' });
-            await dataSource.undoLastMigration({ transaction: 'each' });
+            await revertAllMigrations(dataSource);
         } catch {
             // Acceptable: migrations table may not exist yet.
         }
@@ -148,10 +169,8 @@ describe('Migration round-trip (integration — requires Postgres)', () => {
     });
 
     it('migration:revert drops all 13 tables cleanly', async () => {
-        // Revert seed first, then schema, then baseline.
-        await dataSource.undoLastMigration({ transaction: 'each' });
-        await dataSource.undoLastMigration({ transaction: 'each' });
-        await dataSource.undoLastMigration({ transaction: 'each' });
+        // Revert every applied migration — loop-until-empty future-proofs against new migrations.
+        await revertAllMigrations(dataSource);
 
         const tables = await listUserTables(dataSource);
 

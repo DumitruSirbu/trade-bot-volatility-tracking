@@ -3,7 +3,7 @@
  * Tests override only the fields under test — see F.I.R.S.T. / Clean Code §Tests.
  */
 
-import { CoinTierEnum, CorrelationModeEnum, OrderIntentActionEnum, PositionSideEnum, PositionSlotEnum } from '@bot/shared';
+import { CoinTierEnum, CorrelationModeEnum, FlowTypeEnum, OrderIntentActionEnum, PositionSideEnum, PositionSlotEnum } from '@bot/shared';
 import { StopTypeEnum } from '@bot/shared';
 
 import { Money } from '../../../src/common/utils/money';
@@ -76,10 +76,12 @@ export function buildOrderIntent(overrides: Partial<IOrderIntent> = {}): IOrderI
         coinTier: CoinTierEnum.TIER_1,
         idiosyncrasyScore: 0.8, // above default min of 0.7
         entryPrice: new Money('30000'),
+        midAtTrigger: new Money('30000'),
         maintenanceMarginRate: new Money(DEFAULT_MAINTENANCE_MARGIN_RATE),
         proposedExit: buildProposedExit({ timeStopAtMs: NOW_MS + 30 * 60_000 }),
         openPosition: null,
         sizing: buildSizing(),
+        flowType: FlowTypeEnum.TREND_INITIATION,
         ...overrides,
     };
 }

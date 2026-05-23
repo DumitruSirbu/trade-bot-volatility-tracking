@@ -1,4 +1,4 @@
-import { CoinTierEnum, CorrelationModeEnum, OrderIntentActionEnum, PositionSideEnum } from '@bot/shared';
+import { CoinTierEnum, CorrelationModeEnum, FlowTypeEnum, OrderIntentActionEnum, PositionSideEnum } from '@bot/shared';
 
 import { IProposedExit, IOpenPositionState } from '../../strategy/interface';
 import { DecimalValue, MoneyValue } from '../../common/utils/money';
@@ -16,9 +16,21 @@ export interface IOrderIntent {
     readonly correlationMode: CorrelationModeEnum; // idiosyncratic|correlated (drives slot eligibility)
     readonly coinTier: CoinTierEnum;
     readonly idiosyncrasyScore: number; // clamped [0,1], drives A/B eligibility
-    readonly entryPrice: MoneyValue; // deterministic reference price (bar close)
+    // Bar-close reference price used for SL/TP DISTANCE math (ADR 0003 §3, ADR 0004 §8).
+    // NOT the IOC-limit-price reference — see midAtTrigger for that (ADR 0005 §2).
+    readonly entryPrice: MoneyValue;
+    // Trigger-time order-book mid carried on the intent (ADR 0005 §2). Sourced by the
+    // strategy from the persisted book_snapshots row stamped at the trigger event; the
+    // orchestrator passes it through and the executor's OrderPolicyRouter uses it as the
+    // entryRef in the IOC-limit formula. Kept separate from `entryPrice` so SL/TP distance
+    // math (bar close) and IOC microstructure math (book mid) never get cross-wired.
+    readonly midAtTrigger: MoneyValue;
     readonly maintenanceMarginRate: DecimalValue; // fraction of notional; locates the real liquidation price (§8)
     readonly proposedExit: IProposedExit; // strategy SL/TP/time-stop (ADR 0003 §3)
     readonly openPosition: IOpenPositionState | null; // for add/reduce/close; null for open
     readonly sizing: IIntentSizing; // §8 concrete decimal sizing
+    // Classified flow type stamped by the strategy onto decisions.flow_type and threaded
+    // through the gate (pass-through) → executor. The executor reads this directly as a
+    // row key into the order-policy matrix (ADR 0005 §1) — no `resolveFlowType` heuristic.
+    readonly flowType: FlowTypeEnum;
 }

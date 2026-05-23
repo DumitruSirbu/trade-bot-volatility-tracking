@@ -1,7 +1,7 @@
-import { PositionStatusEnum } from '@bot/shared';
+import { PositionSlotEnum, PositionStatusEnum } from '@bot/shared';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { And, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
+import { And, DeepPartial, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
 
 import { BaseRepository } from '../../common/repository/BaseRepository';
 import { PositionEntity } from '../entity';
@@ -20,6 +20,13 @@ export class PositionRepository extends BaseRepository<PositionEntity> {
 
     async findOpenBySymbol(symbol: string): Promise<PositionEntity[]> {
         return this.repository.find({ where: { symbol, status: PositionStatusEnum.OPEN } });
+    }
+
+    // Slot-scoped lookup used by the ADD path: an ADD against the existing slot must target
+    // that exact row — never an arbitrary `findOpenBySymbol(...)[0]`, which would pick the
+    // wrong leg if two slots on the same symbol were ever open simultaneously.
+    async findOpenBySymbolAndSlot(symbol: string, slot: PositionSlotEnum): Promise<PositionEntity | null> {
+        return this.repository.findOne({ where: { symbol, positionSlot: slot, status: PositionStatusEnum.OPEN } });
     }
 
     // Closed positions whose realized PnL booked on the given UTC day (ADR 0004 §5: realized
@@ -53,5 +60,13 @@ export class PositionRepository extends BaseRepository<PositionEntity> {
         return this.repository.count({
             where: { symbol, openedAt: And(MoreThanOrEqual(dayStart), LessThan(nextDay)) },
         });
+    }
+
+    // M5: persist a fresh OPEN position from the entry-fill outcome. Returns the saved row
+    // (with assigned id) so the executor can arm SL/TP + protection against the real positionId.
+    async createOpen(entityLike: DeepPartial<PositionEntity>): Promise<PositionEntity> {
+        const entity = this.create({ ...entityLike, status: PositionStatusEnum.OPEN });
+
+        return this.repository.save(entity);
     }
 }

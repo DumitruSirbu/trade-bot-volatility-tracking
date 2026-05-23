@@ -1,4 +1,12 @@
-import { CoinTierEnum, CorrelationModeEnum, ExitReasonEnum, PositionSideEnum, PositionSlotEnum, VwapAnchorTypeEnum } from '@bot/shared';
+import {
+    CoinTierEnum,
+    CorrelationModeEnum,
+    ExitReasonEnum,
+    PositionSideEnum,
+    PositionSlotEnum,
+    ProtectiveOrderTypeEnum,
+    VwapAnchorTypeEnum,
+} from '@bot/shared';
 import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
 
 import { decimalColumnTransformer, DecimalValue, MoneyValue } from '../../common/utils';
@@ -134,8 +142,11 @@ export class PositionEntity {
     @Column({ name: 'min_liquidation_distance_pct', type: 'numeric', precision: 18, scale: 8, nullable: true, transformer: decimalColumnTransformer })
     minLiquidationDistancePct?: DecimalValue | null;
 
-    @Column({ name: 'protective_order_type', type: 'varchar', nullable: true })
-    protectiveOrderType?: string | null;
+    // Always non-null on open positions (ADR 0008 §4/§5: the local-fallback row default makes
+    // "no protection" unrepresentable). Starts as LOCAL_FALLBACK at row creation and is
+    // upgraded to EXCHANGE_SIDE only after both SL+TP submits ack.
+    @Column({ name: 'protective_order_type', type: 'varchar', default: ProtectiveOrderTypeEnum.LOCAL_FALLBACK })
+    protectiveOrderType!: ProtectiveOrderTypeEnum;
 
     @Column({ name: 'mark_vs_last_max_divergence_pct', type: 'numeric', precision: 18, scale: 8, nullable: true, transformer: decimalColumnTransformer })
     markVsLastMaxDivergencePct?: DecimalValue | null;

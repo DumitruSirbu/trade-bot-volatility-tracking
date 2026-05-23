@@ -249,6 +249,7 @@ the gate's verdict before the decision is persisted.
   C is *available to an idiosyncratic trade* when no BTC-correlated position is open (the
   brief). So a third concurrent idiosyncratic position may take C iff C is free of a
   correlated position.
+- **Concurrency cap: 3 total positions across A+B+C. The fourth concurrent intent — idiosyncratic or correlated — rejects `MAX_POSITIONS_REACHED`.**
 
 **Assignment algorithm (deterministic; reads live state via §7 ports):**
 

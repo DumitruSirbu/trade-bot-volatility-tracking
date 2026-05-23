@@ -9,16 +9,21 @@ import { PositionEntity } from './PositionEntity';
 // or restart can never double-record a fill (ADR/idempotency). No live writer in M2.
 @Entity({ name: 'transactions', synchronize: false })
 @Unique('uq_transactions_exchange_order_id', ['exchangeOrderId'])
+@Unique('uq_transactions_client_order_id', ['clientOrderId'])
 export class TransactionEntity {
     @PrimaryGeneratedColumn({ name: 'transactions_id' })
     id!: number;
 
-    @Column({ name: 'position_id', type: 'integer' })
-    positionId!: number;
+    // Nullable per ADR 0007 §3 + M5 migration 20260524020000: a zero-fill OPEN/ADD audit
+    // row has no position to reference yet. The CHECK constraint enforces null is allowed
+    // ONLY when qty=0 AND type IN ('open','add'); partial/reduce/close/funding rows still
+    // require a position.
+    @Column({ name: 'position_id', type: 'integer', nullable: true })
+    positionId?: number | null;
 
-    @ManyToOne(() => PositionEntity, { onDelete: 'CASCADE', onUpdate: 'CASCADE' })
+    @ManyToOne(() => PositionEntity, { onDelete: 'CASCADE', onUpdate: 'CASCADE', nullable: true })
     @JoinColumn({ name: 'position_id', referencedColumnName: 'id' })
-    position!: PositionEntity;
+    position?: PositionEntity | null;
 
     @Column({ name: 'type', type: 'varchar' })
     type!: TransactionTypeEnum;

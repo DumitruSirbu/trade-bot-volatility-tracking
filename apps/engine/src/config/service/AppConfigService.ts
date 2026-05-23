@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { EnvironmentVariables } from '../EnvironmentVariables';
-import { LogLevelEnum, NodeEnvEnum } from '../enum';
+import { ExecutionModeEnum, LogLevelEnum, NodeEnvEnum } from '../enum';
 
 // Typed, DI-friendly accessor over the validated environment. Other modules
 // depend on this — never on raw process.env or the untyped ConfigService — so
@@ -85,5 +85,13 @@ export class AppConfigService {
 
     get activeStrategyVersionId(): number {
         return this.configService.get('ACTIVE_STRATEGY_VERSION_ID', { infer: true });
+    }
+
+    get executionMode(): ExecutionModeEnum {
+        return this.configService.get('EXECUTION_MODE', { infer: true });
+    }
+
+    get isExecutionLive(): boolean {
+        return this.executionMode === ExecutionModeEnum.LIVE;
     }
 }

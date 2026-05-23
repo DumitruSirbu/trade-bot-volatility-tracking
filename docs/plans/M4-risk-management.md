@@ -105,3 +105,24 @@ without passing it.
 **Tests:** 700 passing tests (152 new round-1, ~30 round-2 additions) covering all 20+ gate tasks (sizing, slots, BTC-correlated, daily/weekly loss, reservations, funding suppression + flows, spread + universe floor, SL math, time-stop, cooldown, market-stress, consecutive-loss, per-bar/per-symbol/portfolio caps, OI/tier-3 gates, isolated margin, model-divergence, gate-covers-all-actions including de-risking). Zero non-DB failures; build/lint/tsc clean.
 
 **Carry-overs (documented, not blockers):** ADD-not-vetted-by-gate (gate vets open via pre-gate skip, intended M4 scope; ADD execution safety validated M5); trailing-bar correlated idle flush (M6 scheduler); weekly SUM query (M5+); StrategyService 12-dep refactor (M5+); env defaults for restricted-live must be set in live env file (code safe, config is policy).
+
+## Adversarial backfill — 2026-05-23
+
+**Surfaces (5):**
+
+1. **Two simultaneous intents racing for the same slot** — two `volatility.detected` events in same event-loop tick with only one slot remaining; exactly one reservation lands, second rejected `max_positions_reached`. Mirror: slot C, two BTC-correlated candidates, same bar window.
+2. **Reservation leak on mid-flight throw** — approve intent (reservation written), downstream handler throws before order intent emitted; confirm reservation TTL releases, subsequent intent on same slot approved. Crash window between insert and downstream emit.
+3. **Loss window straddling UTC midnight and rolling-7-day cutoff** — realized loss at 23:59:59.999 vs 00:00:00.000 UTC; daily reset at boundary, rolling-7-day SUM excludes day rolling off.
+4. **Halt fired between reservation and order-intent emission** — reservation approved, `HaltFlagService` flips true before order intent published; intent dropped, reservation released. Reverse: kill-switch flatten while gate mid-evaluate.
+5. **Cooldown / per-bar / consecutive-loss evasion via rapid resubmit** — same symbol re-emits post-loss, same-bar second trigger, (N+1)th consecutive-loss-day entry; includes round-2 per-bar off-by-one (`createdAtMs === nowMs` boundary).
+
+**Findings:**
+
+- **Round 1 (0 real bugs; 2 findings reclassified as test-harness fidelity):**
+  - **(Fidelity, Surface 1):** Concurrent slot race — initial test findings reclassified by architect: production is correct, tests had wrong cap assumption. Real cap is 3 total positions with C-overflow to idiosyncratic when no correlated holds C (per `docs/plans/00-overview.md:31` + ADR 0004 §4 lines 248-251). 2 assertions corrected, 2 new tests added covering actual 4th-intent rejection + correlated-blocks-C path. ADR 0004 §4 got 1-line clarification: "Concurrency cap: 3 total positions across A+B+C. The fourth concurrent intent — idiosyncratic or correlated — rejects MAX_POSITIONS_REACHED."
+  - 5 surfaces tested, 26 adversarial tests added (after corrections).
+- **Round 1 post-correction:** Zero blockers, zero highs. M4 confirmed correct as shipped.
+
+**Tests added:** 26 adversarial tests in round 1 (all unit-level, no DB-integration needed).
+
+**Round count: 1.** Zero blockers, zero highs. End state: clean.

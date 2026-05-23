@@ -70,6 +70,41 @@ export interface IOrderBookSnapshot {
     asks: IOrderBookLevel[];
 }
 
+// Boundary type for an order placed/queried via IExchangeClient. ccxt's Order shape is
+// normalised into decimal-as-string fields so no float math precedes Decimal upstream. The
+// `status` is the lower-case ccxt status ('open' | 'closed' | 'canceled' | 'expired' |
+// 'rejected') — ExecutionService maps it to the internal SubmitStateEnum (ADR 0006 §2).
+export interface IExchangeOrderSnapshot {
+    exchangeOrderId: string | null;
+    clientOrderId: string | null;
+    symbol: string;
+    status: string;
+    type: string;
+    side: string;
+    price: string | null;
+    average: string | null;
+    amount: string | null;
+    filled: string | null;
+    remaining: string | null;
+    cost: string | null;
+    fee: string | null;
+    feeCurrency: string | null;
+    timestampMs: number | null;
+}
+
+// Request shape consumed by IExchangeClient.createOrder. Money/qty/price arrive as decimal
+// strings (the ExecutionModule keeps everything in decimal.js up to the boundary). Optional
+// `params` carry exchange-specific knobs (reduceOnly, closePosition, workingType, etc.).
+export interface ICreateOrderRequest {
+    symbol: string;
+    type: string; // 'market' | 'limit' | 'stop_market' | 'take_profit_market'
+    side: string; // 'buy' | 'sell'
+    amount: string; // decimal-as-string
+    price?: string | null;
+    clientOrderId: string;
+    params?: Record<string, unknown>;
+}
+
 export interface ITradeSnapshot {
     symbol: string;
     timestampMs: number;

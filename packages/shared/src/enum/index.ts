@@ -18,3 +18,5 @@ export { CorrelationModeEnum } from './CorrelationModeEnum.js';
 export { RejectReasonEnum } from './RejectReasonEnum.js';
 export { RiskOutcomeEnum } from './RiskOutcomeEnum.js';
 export { OrderIntentActionEnum } from './OrderIntentActionEnum.js';
+export { OrderPolicyEnum } from './OrderPolicyEnum.js';
+export { ProtectiveOrderTypeEnum } from './ProtectiveOrderTypeEnum.js';

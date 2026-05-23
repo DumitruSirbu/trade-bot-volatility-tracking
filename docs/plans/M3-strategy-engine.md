@@ -92,3 +92,21 @@ suppresses entries in adverse regimes. No risk checks or orders yet.
 - *Round 2*: logic, security, quant all clear to close; clean-code found 6 residual must-fixes (comment/`if`-and-`return` blank-line spacing in the shared utils, redundant runtime tier-band throw removed in favour of the load-time `.refine`, named the neutral idiosyncrasy constant, `marketSnapshotSchema` tabs→4-space + `.strict()`) — all fixed. End state: zero blockers/highs.
 
 **Carry-overs (document, not blockers):** prior-candle-extreme-break exhaustion confirmation omitted (no field on the event wire — candidate event-contract addition later); v1 `market_stress` skip deferred to M4 (stress params are risk-layer, strategies must not read them); `signal_score` funding term is side-agnostic (a single per-event score can't know trade side — M4 applies true directional carry); orchestrator snapshot placeholders (`active_positions_count=0`, `position_slot=A`) until M4 owns slot assignment.
+
+## Adversarial backfill — 2026-05-23
+
+**Surfaces (5):**
+
+1. **Strategy determinism** under repeated evaluation of the same `IStrategyInput`; v0–v3 N times → bit-identical `ISignal`, no hidden state, no clock read.
+2. **`nowMs` derivation from bar, never wall-clock** — input with far-past `entry_candle_open_time` → time_stop computed off bar, not `Date.now()`. Backtest-vs-live parity.
+3. **`flow_type` + `signal_score` stamped exactly once** on `market_snapshot`; same event replayed → classification runs once, versions see orchestrator-stamped value; adversarial: pre-populated stale `flow_type` → overwrite check.
+4. **v1 exhaustion confirmation tightness** — still-extended spike where `%B` has not crossed back, boundary at `%B = 0.8` / `0.2` exact → emit `skip` with `no_exhaustion_confirmation`.
+5. **v3 router fallthrough** on unknown / missing `flow_type`, future enum value, `low_quality_noise` → route to `skip`, never raise, never invent direction.
+
+**Findings:**
+
+- **Round 1 (0 blockers, 0 highs):** 5 surfaces tested, 30 adversarial tests added. **No findings — clean.** Strategy purity invariant ("no Date.now / Math.random / I/O") holds across v0–v3 under all adversarial scenarios. Determinism, nowMs bar-sourcing, single-stamp orchestrator, v1 confirmation tightness, v3 fallthrough all verified correct.
+
+**Tests added:** 30 adversarial tests in round 1 (all unit-level).
+
+**Round count: 1.** Zero blockers, zero highs. End state: clean.

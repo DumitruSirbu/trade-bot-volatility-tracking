@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { pro as ccxtPro } from 'ccxt';
-import type { Balances, FundingRate, MarketInterface, OpenInterest, OrderBook, Ticker, Trade } from 'ccxt';
+import type { Balances, FundingRate, MarketInterface, OpenInterest, Order, OrderBook, OrderSide, OrderType, Ticker, Trade } from 'ccxt';
 
 import { AppConfigService } from '../../config/service';
 import { ENABLE_RATE_LIMIT, ORDER_BOOK_DEPTH_LIMIT, PERPETUAL_SETTLE_CURRENCY } from '../const';
@@ -8,7 +8,9 @@ import { ExchangeCredentialsException, ExchangeRequestException } from '../excep
 import { sanitizeExchangeError } from '../utils';
 import {
     IBalanceSnapshot,
+    ICreateOrderRequest,
     IExchangeClient,
+    IExchangeOrderSnapshot,
     IFundingRateSnapshot,
     IMarketInfo,
     IOpenInterestSnapshot,
@@ -35,7 +37,7 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
             apiKey: this.appConfig.exchangeApiKey,
             secret: this.appConfig.exchangeApiSecret,
             enableRateLimit: ENABLE_RATE_LIMIT,
-            options: { defaultType: 'swap' },
+            options: { defaultType: 'swap', disableFuturesSandboxWarning: true },
         });
 
         if (this.appConfig.isExchangeTestnet) {
@@ -105,6 +107,66 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
         const trades = await this.callExchange(`watchTrades:${symbol}`, () => this.client.watchTrades(symbol));
 
         return trades.map((trade) => this.toTradeSnapshot(symbol, trade));
+    }
+
+    async createOrder(request: ICreateOrderRequest): Promise<IExchangeOrderSnapshot> {
+        const params: Record<string, unknown> = { ...(request.params ?? {}), clientOrderId: request.clientOrderId };
+
+        // Decimal → float conversion at the ccxt boundary. ccxt's createOrder signature
+        // accepts `number` and there is no decimal overload; this is the ONLY place in the
+        // engine where float touches money/qty (per docs/best-practices/code-conventions.md
+        // "Money is decimal" — `Number(decimalString)` is permissible AT the boundary, never
+        // upstream). Both amount and price strings come from ExecutionService already
+        // quantized against tickSize/stepSize at the upstream layer; the `Number()` cast is
+        // therefore lossless for the precisions Binance USDT-M Futures actually accepts
+        // (≤ 12 significant digits across tier-1/2/3 symbols). Anything more precise would
+        // be rejected by Binance's PRICE_FILTER / LOT_SIZE filters before lossy float
+        // arithmetic could matter — fail fast at the venue rather than silently round.
+        const price = request.price === null || request.price === undefined ? undefined : Number(request.price);
+        const amount = Number(request.amount);
+
+        const order = await this.callExchange(`createOrder:${request.symbol}:${request.clientOrderId}`, () =>
+            this.client.createOrder(request.symbol, request.type as OrderType, request.side as OrderSide, amount, price, params),
+        );
+
+        return this.toOrderSnapshot(order);
+    }
+
+    async fetchOrderByClientId(symbol: string, clientOrderId: string): Promise<IExchangeOrderSnapshot | null> {
+        try {
+            // Binance USDT-M Futures looks up by origClientOrderId; ccxt unifies both naming
+            // variants via `clientOrderId` in params. Id positional arg is required by ccxt's
+            // signature but ignored when origClientOrderId is supplied.
+            const order = await this.client.fetchOrder('', symbol, { clientOrderId, origClientOrderId: clientOrderId });
+
+            return this.toOrderSnapshot(order);
+        } catch (cause) {
+            if (this.isOrderNotFound(cause)) {
+                return null;
+            }
+
+            const sanitizedCause = sanitizeExchangeError(cause);
+            this.logger.error(`ccxt fetchOrderByClientId:${symbol}:${clientOrderId} failed: ${sanitizedCause}`);
+
+            throw new ExchangeRequestException(`fetchOrderByClientId:${symbol}:${clientOrderId}`, sanitizedCause);
+        }
+    }
+
+    async cancelOrderByClientId(symbol: string, clientOrderId: string): Promise<IExchangeOrderSnapshot> {
+        const order = await this.callExchange(`cancelOrderByClientId:${symbol}:${clientOrderId}`, () =>
+            this.client.cancelOrder('', symbol, { clientOrderId, origClientOrderId: clientOrderId }),
+        );
+
+        return this.toOrderSnapshot(order);
+    }
+
+    private isOrderNotFound(cause: unknown): boolean {
+        // ccxt translates Binance -2013 "Order does not exist" into OrderNotFound (subclass
+        // of ExchangeError). The class name check is safer than message matching because the
+        // localized message string can change between ccxt releases.
+        const name = cause instanceof Error ? cause.constructor.name : '';
+
+        return name === 'OrderNotFound';
     }
 
     async close(): Promise<void> {
@@ -241,6 +303,29 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
             price: this.numberToString(trade.price) ?? '0',
             amount: this.numberToString(trade.amount) ?? '0',
             isBuyerAggressor: trade.side === 'buy',
+        };
+    }
+
+    private toOrderSnapshot(order: Order): IExchangeOrderSnapshot {
+        const feeCost = order.fee?.cost;
+        const feeCurrency = order.fee?.currency ?? null;
+
+        return {
+            exchangeOrderId: order.id ?? null,
+            clientOrderId: order.clientOrderId ?? null,
+            symbol: order.symbol,
+            status: order.status ?? 'open',
+            type: order.type ?? '',
+            side: order.side ?? '',
+            price: this.numberToString(order.price),
+            average: this.numberToString(order.average),
+            amount: this.numberToString(order.amount),
+            filled: this.numberToString(order.filled),
+            remaining: this.numberToString(order.remaining),
+            cost: this.numberToString(order.cost),
+            fee: this.numberToString(feeCost),
+            feeCurrency,
+            timestampMs: order.timestamp ?? null,
         };
     }
 

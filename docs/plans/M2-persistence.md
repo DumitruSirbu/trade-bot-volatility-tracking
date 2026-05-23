@@ -119,3 +119,27 @@ by a Zod schema at write time. `positions` carries all entry-time analysis colum
 - **Architecture:** Reference `docs/architecture/adr/0002-persistence-and-data-model.md`. Three surfaced-and-approved decisions: (a) entity-ownership re-read as INFRA concern (PersistenceModule owns the cross-cutting transformer + migration timeline; domain modules own their entities per code-conventions—no file relocation later); (b) `coin_tier` stored as CoinTierEnum string varchar, NOT the brief's SMALLINT (single canonical representation) — **overrides the M2 brief**; (c) zod added as `packages/shared` dependency.
 - **Review rounds:** Round 1 (security/logic/clean-code/quant): security clean; logic found 2 blockers — `tick_aggregates` emitted per-raw-ms-tick with no 1s bucketing (UNIQUE collisions + couldn't reconstruct an intra-candle spike) and `funding_rates.funding_time` used the poll wall-clock instead of the 8h settlement time (fake idempotency + corrupted backtest funding); highs — non-atomic tier-change close+open, duplicate `symbolEntered` creating a 2nd open membership row, instruments never flipped `is_tradable=false` on leave, migration `down()` not dropping indexes explicitly, `MoneyValue` misused for non-money columns, empty `where:{}` on repository queries, listener deps not `private readonly`; clean-code blocker — duplicated magic constants across entity files. Round 1 fixes: real 1s OHLC bucketing emitted on both tick+sweep paths; `funding_rates.funding_time` keyed on ccxt settlement timestamp (added `IFundingRateSnapshot.fundingTimestampMs`); atomic `changeTier` transaction + partial unique index `UNIQUE(symbol) WHERE left_at IS NULL`; leaver flips `is_tradable=false`; explicit reverse-order index drops; `DecimalValue` alias + `MoneyValue` audit; real ccxt `tick_size`/`step_size`/`minNotional` surfaced on `IMarketInfo`. Round 2: all round-1 items verified resolved; clean-code found residual `DecimalValue`-typing must-fixes on `leverage`/`tickSize`/`stepSize`/`funding_rate` + `MS_PER_HOUR` constant placement — all fixed. Post-review smoke test caught wrong ccxt mapping (`tickSize` read from `limits.price.min` = `minPrice`, e.g. BTC 261.1 instead of 0.1); fixed to map from `precision.price` (TICK_SIZE mode) and verified BTC=0.1/ETH=0.01 against testnet. End state: zero blockers/highs.
 - **Carry-over notes:** OI/funding/book_snapshots accumulate via 5-min pollers + around-decision writes (not seen in a 90s smoke window — verify on >5min run); persistence insert-failure on missing tick partition is logged not alarmed (M9 to alarm); book_snapshots writer fully wired in M3+ around decisions; decisions/positions/transactions have schema+repositories+Zod hook but no live writer until M3–M6.
+
+## Adversarial backfill — 2026-05-23
+
+**Surfaces (5):**
+
+1. **NUMERIC ↔ Decimal transformer at column boundaries** — exceeded precision/scale, negative zero, exponent-form strings, `NaN`/`Infinity` from upstream, JS-number rejection.
+2. **`tick_aggregates` partition boundary** at second/microsecond seam, insert-before-partition-exists race, backdated rows older than 90-day retention.
+3. **Migration up → down → up round-trip** with simulated row volume; indexes reversed + recreated without collision.
+4. **Unique-constraint races** on concurrent inserts: `universe_membership` partial unique, `candles` UNIQUE, `funding_rates` settlement timestamp.
+5. **Zod-validated `market_snapshot` write under schema drift** — missing required field, unknown extra field (`.strict()`), decimal as JS number.
+
+**Findings:**
+
+- **Round 1 (2 real bugs):**
+  - **Bug 1 (Surface 1):** `decimalColumnTransformer` silently passed `NaN`/`Infinity`/`-Infinity` to NUMERIC columns. Fixed: added `isFinite()` guard on both `to()` and `from()` paths + extended `MoneyTransformerException` with `'non-finite'` discriminator. 3 bug-documenting tests flipped to assert correct behavior.
+  - **Bug 2 (Surface 4):** `UniverseMembershipRepository.openMembershipWith` propagated unique-violation errors on concurrent open instead of being idempotent. Real bug. Fixed: try/catch on SQLSTATE 23505 with constraint match, re-fetch existing row. ADR 0002 §point-in-time universe got new "open-row contract" sentence locking the idempotency invariant.
+  - **(Fidelity, Surface 3):** Migration round-trip adversarial spec hardcoded 3 `undoLastMigration` calls when chain has 6. Test-harness fidelity, fixed: loop-until-empty helper applied to both adversarial and pre-existing baseline specs.
+- **Round 2 (0 blockers, 0 highs):** Ran DB-integration suite against real Postgres; all pre-round-1 fixes verified. **Deferred to follow-up before M6:** `repository.integration.spec.ts` has 7 partition-not-found failures when run against freshly-initialized Postgres volume (need partition-rollover service or test-harness pre-create for current/upcoming date window). Tracked as narrow pre-M6 task.
+
+**Architect audit (cross-cutting):** 6 producer-side risk sites where non-finite Decimals can be born (vwap, deviation, atr, sizer, stops, PnL) — covered as Producer-side guards in M1's adversarial pass.
+
+**Tests added:** 60 adversarial tests in round 1 (42 unit + 18 DB-integration-ready). Engine unit-test count: 353 (pre) → 395 (post-backfill) — excluding 18 DB-integration tests that activate only when Postgres is live.
+
+**Round count: 2.** Zero blockers, zero highs. End state: clean.

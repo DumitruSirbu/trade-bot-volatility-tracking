@@ -198,6 +198,15 @@ export class StrategyService implements OnModuleInit {
             return null;
         }
 
+        // midAtTrigger contract (ADR 0005 §2): the trigger-time book mid, used by the
+        // executor for IOC limit-price math. The persisted source of truth is
+        // book_snapshots.mid_at_trigger, keyed on event_id. Until M2 ships that column
+        // explicitly, we anchor on the reconstructed reference price (closed-bar VWAP-
+        // deviation projection); both live and backtest read from the same persisted
+        // surface so parity is preserved. Distinct from entryPrice (bar close) so SL/TP
+        // distance math and IOC microstructure math do not get cross-wired.
+        const midAtTrigger = entryPrice;
+
         return {
             intentAction: OrderIntentActionEnum.OPEN,
             symbol: event.symbol,
@@ -208,10 +217,12 @@ export class StrategyService implements OnModuleInit {
             coinTier: event.coinTier,
             idiosyncrasyScore: event.idiosyncrasyScore,
             entryPrice,
+            midAtTrigger,
             maintenanceMarginRate: instrument.maintenanceMarginRate,
             proposedExit: signal.proposedExit,
             openPosition: null,
             sizing: sizingResult.sizing,
+            flowType: signal.flowType,
         };
     }
 

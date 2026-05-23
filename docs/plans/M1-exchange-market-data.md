@@ -89,3 +89,21 @@ connection. No DB writes or orders yet.
 - (d) Calibration percentile uses nearest-rank floor — align convention with M7 band-fitting.
 - (e) base62 `{40,}` token redaction may over-redact diagnostics (safe direction).
 - (f) `getClosedBars` returns array by reference.
+
+## Adversarial backfill — 2026-05-23
+
+**Surfaces (5):**
+
+1. **5-min bar close authority under late ticks and quiet symbols** — tick arrives after bar should close, symbol receives no ticks for entire bar, watermark sweep races tick path. M1 round 2 found half-applied bar-close fix — confirm exactly-once close at every seam.
+2. **Trigger formula determinism** — `evaluateTrigger` invoked N times on same closed bar → bit-identical output; same inputs live and canned backtest → bit-identical. Single source of truth.
+3. **Session-anchored VWAP reset at UTC 00:00 and event-anchor switch** — bar closes at 23:59:59 vs 00:00:00 UTC; VWAP context does not carry across reset. M1 round 1 high — regression-test.
+4. **WebSocket reconnect mid-bar and universe-refresh during forming bar** — drop WS during active 5-min bar, bar finalizes deterministically or correctly discarded, no phantom close. Universe refresh evicting symbol mid-bar — no stale bar emitted.
+5. **Empirical band calibration percentile floor** — calibration with N < window samples, crossing nearest-rank floor convention, newly-entered symbol with no history. M1 carry-over (d) — pin convention before M7 mirrors it.
+
+**Findings:**
+
+- **Round 1 (0 blockers, 0 highs):** 5 plan surfaces + 3 producer-side non-finite guards (carried from M2 audit: computeVwap, computeDeviationSigma, computeAtr, computeBollinger) tested. 36 adversarial tests added. **No findings — clean.** Bar-close authority (half-applied watermark fix from M1 round 2) holds under all boundary cases. Producer-side guards return finite values at edge inputs.
+
+**Tests added:** 36 adversarial tests in round 1 (all unit-level). Engine unit-test count: 251 (pre-M1-backfill) → 287 (post-M1-backfill, including producer guards from M2 audit).
+
+**Round count: 1.** Zero blockers, zero highs. End state: clean.

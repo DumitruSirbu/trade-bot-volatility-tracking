@@ -1,7 +1,7 @@
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
-import { LogLevelEnum, NodeEnvEnum } from './enum';
+import { ExecutionModeEnum, LogLevelEnum, NodeEnvEnum } from './enum';
 
 // Validated shape of the process environment. Every required var here aborts
 // startup if missing/invalid (see AppConfigModule's fail-fast validateEnv hook).
@@ -126,4 +126,12 @@ export class EnvironmentVariables {
     @IsInt()
     @Min(1)
     ACTIVE_STRATEGY_VERSION_ID!: number;
+
+    // M5 execution gate. Defaults to DRY_RUN so the slice never fires real orders without an
+    // explicit operator opt-in. Only the exact string 'live' (case-insensitive) selects LIVE
+    // — any typo or empty value collapses back to DRY_RUN (testnet-first invariant, matches
+    // EXCHANGE_TESTNET's defensive parser).
+    @Transform(({ value }) => (String(value).toLowerCase().trim() === ExecutionModeEnum.LIVE ? ExecutionModeEnum.LIVE : ExecutionModeEnum.DRY_RUN))
+    @IsEnum(ExecutionModeEnum)
+    EXECUTION_MODE: ExecutionModeEnum = ExecutionModeEnum.DRY_RUN;
 }

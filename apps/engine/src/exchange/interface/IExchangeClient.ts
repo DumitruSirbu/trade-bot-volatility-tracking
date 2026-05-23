@@ -1,5 +1,7 @@
 import {
     IBalanceSnapshot,
+    ICreateOrderRequest,
+    IExchangeOrderSnapshot,
     IFundingRateSnapshot,
     IMarketInfo,
     IOpenInterestSnapshot,
@@ -37,6 +39,20 @@ export interface IExchangeClient {
     watchOrderBook(symbol: string): Promise<IOrderBookSnapshot>;
 
     watchTrades(symbol: string): Promise<ITradeSnapshot[]>;
+
+    // --- M5 order surface ---
+    //
+    // The ONLY methods that touch the exchange order API. Every caller must be inside
+    // ExecutionModule (ADR 0005/0006 reviewer must-fix). Strategies, controllers, dashboards,
+    // and reconciliation (M6) never call these directly — they go through ExecutionService.
+    //
+    // The `clientOrderId` in createOrder is the deterministic bot-controlled key (ADR 0006 §1);
+    // fetchOrder looks an order up by it for the timeout-recovery protocol (ADR 0006 §3).
+    createOrder(request: ICreateOrderRequest): Promise<IExchangeOrderSnapshot>;
+
+    fetchOrderByClientId(symbol: string, clientOrderId: string): Promise<IExchangeOrderSnapshot | null>;
+
+    cancelOrderByClientId(symbol: string, clientOrderId: string): Promise<IExchangeOrderSnapshot>;
 
     // Releases the underlying socket(s); called on shutdown.
     close(): Promise<void>;
