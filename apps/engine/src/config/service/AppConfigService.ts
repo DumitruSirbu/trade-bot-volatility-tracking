@@ -67,6 +67,14 @@ export class AppConfigService {
         return this.configService.get('DAILY_LOSS_LIMIT_USDT', { infer: true });
     }
 
+    get weeklyLossLimitUsdt(): number {
+        return this.configService.get('WEEKLY_LOSS_LIMIT_USDT', { infer: true });
+    }
+
+    get maxSameDirectionExposureUsdt(): number {
+        return this.configService.get('MAX_SAME_DIRECTION_EXPOSURE_USDT', { infer: true });
+    }
+
     get cooldownAfterLossMs(): number {
         return this.configService.get('COOLDOWN_AFTER_LOSS_MS', { infer: true });
     }

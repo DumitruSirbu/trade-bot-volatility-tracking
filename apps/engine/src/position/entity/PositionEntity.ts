@@ -1,4 +1,4 @@
-import { CoinTierEnum, ExitReasonEnum, PositionSideEnum, PositionSlotEnum, VwapAnchorTypeEnum } from '@bot/shared';
+import { CoinTierEnum, CorrelationModeEnum, ExitReasonEnum, PositionSideEnum, PositionSlotEnum, VwapAnchorTypeEnum } from '@bot/shared';
 import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
 
 import { decimalColumnTransformer, DecimalValue, MoneyValue } from '../../common/utils';
@@ -81,6 +81,11 @@ export class PositionEntity {
 
     @Column({ name: 'position_slot', type: 'varchar', nullable: true })
     positionSlot?: PositionSlotEnum | null;
+
+    // Whether the entry was idiosyncratic or BTC-correlated at open (ADR 0004 §4). The risk
+    // gate's slot model reads this directly; nullable for legacy/pre-M5 rows (none exist yet).
+    @Column({ name: 'correlation_mode', type: 'varchar', nullable: true })
+    correlationMode?: CorrelationModeEnum | null;
 
     @Column({ name: 'time_stop_at', type: 'timestamptz', nullable: true })
     timeStopAt?: Date | null;

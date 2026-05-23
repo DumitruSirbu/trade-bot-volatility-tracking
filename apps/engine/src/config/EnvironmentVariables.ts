@@ -97,6 +97,19 @@ export class EnvironmentVariables {
     @Min(0)
     DAILY_LOSS_LIMIT_USDT!: number;
 
+    // Rolling-7d loss limit + same-direction exposure cap (ADR 0004 §5). Defaulted so an
+    // existing profile without these keys still boots; the @Transform only fires when the key
+    // is present (class-transformer skips absent keys), so the field initializer is the default.
+    @Transform(({ value }) => Number.parseFloat(String(value)))
+    @IsNumber()
+    @Min(0)
+    WEEKLY_LOSS_LIMIT_USDT: number = 150;
+
+    @Transform(({ value }) => Number.parseFloat(String(value)))
+    @IsNumber()
+    @Min(0)
+    MAX_SAME_DIRECTION_EXPOSURE_USDT: number = 600;
+
     @Transform(({ value }) => Number.parseInt(String(value), 10))
     @IsInt()
     @Min(0)

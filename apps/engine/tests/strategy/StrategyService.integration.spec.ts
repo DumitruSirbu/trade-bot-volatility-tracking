@@ -16,18 +16,28 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EventEmitterModule } from '@nestjs/event-emitter';
-import { DeviationSideEnum, FlowTypeEnum, SignalActionEnum, SkipReasonEnum, StrategyDirectionEnum, StrategyStatusEnum } from '@bot/shared';
+import { DeviationSideEnum, FlowTypeEnum, RiskOutcomeEnum, SignalActionEnum, SkipReasonEnum, StrategyDirectionEnum, StrategyStatusEnum } from '@bot/shared';
 
 import { VOLATILITY_DETECTED_EVENT } from '../../src/common/const';
 import { AppConfigService } from '../../src/config/service';
+import {
+    COOLDOWN_AFTER_LOSS_MS,
+    DAILY_LOSS_LIMIT_USDT,
+    MAX_EXPOSURE_PER_COIN_USDT,
+    MAX_SAME_DIRECTION_EXPOSURE_USDT,
+    WEEKLY_LOSS_LIMIT_USDT,
+} from '../../src/risk/const';
 import { StrategyConfigException } from '../../src/strategy/exception/StrategyConfigException';
 import { DecisionRepository } from '../../src/strategy/repository/DecisionRepository';
 import { StrategyVersionRepository } from '../../src/strategy/repository/StrategyVersionRepository';
 import { PositionRepository } from '../../src/position/repository/PositionRepository';
+import { UniverseMembershipRepository } from '../../src/market-data/repository/UniverseMembershipRepository';
 import { StrategyRegistry } from '../../src/strategy/registry';
 import { StrategyService } from '../../src/strategy/service';
+import { InstrumentPortAdapter, OpenPositionsPortAdapter, PositionSizer, RiskGateService, RiskStatePortAdapter } from '../../src/risk/service';
 import { V0BaselineStrategy, V1MeanReversionStrategy, V2MomentumStrategy, V3HybridRouterStrategy } from '../../src/strategy/strategies';
 import { buildEvent, buildParams } from './support/fixtures';
+import { Money } from '../../src/common/utils/money';
 
 // ─── seed data helpers ────────────────────────────────────────────────────────
 
@@ -58,6 +68,54 @@ interface IModuleDeps {
 async function buildModule(deps: IModuleDeps): Promise<{ module: TestingModule; record: jest.Mock }> {
     const record = jest.fn().mockResolvedValue({});
 
+    // M4 risk gate decision stub — always approves so strategy signals flow through.
+    const approvedDecision = {
+        outcome: RiskOutcomeEnum.APPROVED,
+        rejectReason: null,
+        approvedSlot: 'A',
+        approvedSizing: { qty: new Money('0.01'), notional: new Money('100'), leverage: new Money('1'), riskPerTradeUsdt: new Money('10') },
+        clampedExit: null,
+        reservationId: 'stub:A',
+    };
+    const riskGateStub = {
+        evaluate: jest.fn().mockResolvedValue(approvedDecision),
+        releaseReservation: jest.fn(),
+        confirmReservation: jest.fn(),
+        expireStaleReservations: jest.fn(),
+    };
+
+    // Sizer stub — returns a valid sizing for any input.
+    const sizerStub = {
+        size: jest.fn().mockReturnValue({
+            kind: 'sized',
+            sizing: { qty: new Money('0.01'), notional: new Money('100'), leverage: new Money('1'), riskPerTradeUsdt: new Money('10') },
+        }),
+    };
+
+    // Port stubs — no DB.
+    const riskStatePortStub = {
+        getDay: jest.fn().mockResolvedValue(null),
+        sumRealizedPnlBetween: jest.fn().mockResolvedValue(new Money('0')),
+        upsertDay: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const openPositionsPortStub = {
+        findOpen: jest.fn().mockResolvedValue([]),
+        findClosedOnUtcDay: jest.fn().mockResolvedValue([]),
+        findLastCloseForSymbol: jest.fn().mockResolvedValue(null),
+        countOpenedOnUtcDayForSymbol: jest.fn().mockResolvedValue(0),
+    };
+
+    const instrumentPortStub = {
+        findConstraints: jest.fn().mockResolvedValue({
+            symbol: 'BTCUSDT',
+            stepSize: new Money('0.001'),
+            tickSize: new Money('0.1'),
+            minNotional: new Money('5'),
+            maintenanceMarginRate: new Money('0.005'),
+        }),
+    };
+
     const module = await Test.createTestingModule({
         imports: [
             // Real event bus — makes @OnEvent decorators fire.
@@ -75,7 +133,15 @@ async function buildModule(deps: IModuleDeps): Promise<{ module: TestingModule; 
             // Config stub — controls which version is "active".
             {
                 provide: AppConfigService,
-                useValue: { activeStrategyVersionId: deps.activeVersionId },
+                useValue: {
+                    activeStrategyVersionId: deps.activeVersionId,
+                    accountCapitalUsdt: 1000,
+                    dailyLossLimitUsdt: DAILY_LOSS_LIMIT_USDT,
+                    weeklyLossLimitUsdt: WEEKLY_LOSS_LIMIT_USDT,
+                    maxExposurePerCoinUsdt: MAX_EXPOSURE_PER_COIN_USDT,
+                    maxSameDirectionExposureUsdt: MAX_SAME_DIRECTION_EXPOSURE_USDT,
+                    cooldownAfterLossMs: COOLDOWN_AFTER_LOSS_MS,
+                },
             },
 
             // Repository mocks — no DB.
@@ -90,6 +156,17 @@ async function buildModule(deps: IModuleDeps): Promise<{ module: TestingModule; 
             {
                 provide: DecisionRepository,
                 useValue: { record },
+            },
+
+            // M4 risk dependencies — stubbed so no DB or exchange needed.
+            { provide: RiskGateService, useValue: riskGateStub },
+            { provide: PositionSizer, useValue: sizerStub },
+            { provide: RiskStatePortAdapter, useValue: riskStatePortStub },
+            { provide: OpenPositionsPortAdapter, useValue: openPositionsPortStub },
+            { provide: InstrumentPortAdapter, useValue: instrumentPortStub },
+            {
+                provide: UniverseMembershipRepository,
+                useValue: { findOpenMembership: jest.fn().mockResolvedValue({ symbol: 'BTCUSDT' }) },
             },
         ],
     }).compile();
@@ -223,11 +300,14 @@ describe('StrategyService — integration (real event bus + real strategies)', (
         it('records action=open with side=short for a confirmed ABOVE exhaustion event', async () => {
             // Exhaustion confirmed via OI falling (openInterestChange5mPct <= 0).
             // Regime is RANGING — not suppressed. Idio low — not a trap.
+            // btc5mMovePct=0.1 → abs(0.1) < btc_correlated_move_threshold_pct=0.3 → idiosyncratic
+            // (correlated opens are buffered and not immediately decided, so we need idiosyncratic)
             const event = buildEvent({
                 side: DeviationSideEnum.ABOVE,
                 bollingerPctB: 0.7, // < 0.8 → band re-entry confirmed
                 openInterestChange5mPct: -1.0, // OI falling
                 idiosyncrasyScore: 0.2, // well below idiosyncrasy_min_score=0.7
+                btc5mMovePct: 0.1, // idiosyncratic → goes through gate immediately
             });
 
             await eventEmitter.emitAsync(VOLATILITY_DETECTED_EVENT, event);
@@ -244,6 +324,7 @@ describe('StrategyService — integration (real event bus + real strategies)', (
                 bollingerPctB: 0.7,
                 openInterestChange5mPct: -1.0,
                 idiosyncrasyScore: 0.2,
+                btc5mMovePct: 0.1, // idiosyncratic — goes through gate immediately
             });
 
             await eventEmitter.emitAsync(VOLATILITY_DETECTED_EVENT, event);
@@ -277,7 +358,8 @@ describe('StrategyService — integration (real event bus + real strategies)', (
         });
 
         it('records exactly one decision per emitted event', async () => {
-            const event = buildEvent({ bollingerPctB: 0.7, openInterestChange5mPct: -1.0 });
+            // btc5mMovePct=0.1 → idiosyncratic → goes through gate immediately, decision recorded
+            const event = buildEvent({ bollingerPctB: 0.7, openInterestChange5mPct: -1.0, btc5mMovePct: 0.1 });
 
             await eventEmitter.emitAsync(VOLATILITY_DETECTED_EVENT, event);
 

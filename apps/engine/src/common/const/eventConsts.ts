@@ -20,3 +20,8 @@ export const OPEN_INTEREST_SAMPLED_EVENT = 'marketData.openInterest.sampled';
 export const FUNDING_RATE_OBSERVED_EVENT = 'marketData.fundingRate.observed';
 export const INSTRUMENT_REFRESHED_EVENT = 'marketData.instrument.refreshed';
 export const UNIVERSE_SYMBOL_TIER_CHANGED_EVENT = 'marketData.universe.tierChanged';
+
+// Risk-gate approval seam (ADR 0004 §1). On APPROVAL the orchestrator emits this carrying the
+// approved order intent + sizing + slot + reservation handle. M5 subscribes and submits to the
+// exchange — M4 itself never calls the exchange API.
+export const ORDER_INTENT_APPROVED_EVENT = 'risk.orderIntent.approved';

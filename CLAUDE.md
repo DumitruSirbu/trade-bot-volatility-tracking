@@ -62,4 +62,5 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 **M1 — Exchange & market data:** DONE (ccxt/Binance testnet, MarketDataModule, shared trigger, 251 tests, 3 review rounds, zero blockers).
 **M2 — Persistence & data model:** DONE (13 domain-owned entities, 353 tests, reversible migrations + 90-day partitioned tick_aggregates, 2 review rounds + post-review smoke test, zero blockers, testnet persistence verified).
 **M3 — Strategy engine:** DONE (4 pure strategies v0–v3, registry + config-selected active version, orchestrator stamps flow_type/signal_score/event_id and writes dry-run decisions, 202 tests, 2 review rounds, zero blockers).
-**Next:** **M4 — Risk management** (`docs/plans/M4-risk-management.md`).
+**M4 — Risk management:** DONE (bypass-proof risk gate, 3-slot position model, BTC-correlated single-candidate, daily/weekly loss windows, in-flight reservation ledger, funding suppression + flow rules, spread/liquidity/SL/time-stop/cooldown/market-stress/consecutive-loss/overtrading/OI/tier-3 gates, isolated-margin default, model-divergence kill-switch, 700 tests, 2 review rounds, zero blockers).
+**Next:** **M5 — Execution (testnet)** (`docs/plans/M5-execution-testnet.md`).
