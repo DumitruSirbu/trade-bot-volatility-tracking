@@ -122,7 +122,13 @@ export class RiskGateService {
         this.logger.warn(`boot exposure rebuild: open_exposure=${openExposure.toFixed()} (authoritative — pre-crash deltas ignored)`);
     }
 
-    async evaluate(intent: IOrderIntent, context: IRiskGateContext): Promise<IRiskDecision> {
+    // M7 R1a fix-1 (security): `overrideLedger` lets the backtest pass its per-run
+    // `ctx.reservationLedger` instead of mutating the DI singleton. Live callers pass
+    // nothing → `this.ledger` is used as before. The override is threaded through every
+    // private helper invoked synchronously from `evaluate` so a backtest cannot poison
+    // live state via `listActive`/`reserve` reads.
+    async evaluate(intent: IOrderIntent, context: IRiskGateContext, overrideLedger?: ReservationLedger): Promise<IRiskDecision> {
+        const ledger = overrideLedger ?? this.ledger;
         // M6 R1.1.1 (ADR 0014 §1 revised). Mid-recovery RECOVERY_IN_PROGRESS reject
         // narrowed to OPENING intents only — `intentAction ∈ {OPEN, ADD}`. De-risking
         // intents (REDUCE / CLOSE / FLATTEN) MUST pass during recovery so:
@@ -140,7 +146,7 @@ export class RiskGateService {
             return this.approveDeRisking(intent);
         }
 
-        return this.evaluateEntry(intent, context);
+        return this.evaluateEntry(intent, context, ledger);
     }
 
     private isOpening(action: OrderIntentActionEnum): boolean {
@@ -338,16 +344,16 @@ export class RiskGateService {
 
     // The ordered check pipeline for open/add (ADR 0004 §2). The first failing check
     // short-circuits and returns its RejectReasonEnum. Order is fixed for replay determinism.
-    private async evaluateEntry(intent: IOrderIntent, context: IRiskGateContext): Promise<IRiskDecision> {
+    private async evaluateEntry(intent: IOrderIntent, context: IRiskGateContext, ledger: ReservationLedger): Promise<IRiskDecision> {
         const state = await this.loadState(context);
 
-        const reject = await this.firstFailingCheck(intent, context, state);
+        const reject = await this.firstFailingCheck(intent, context, state, ledger);
 
         if (reject !== null) {
             return this.rejected(intent, reject);
         }
 
-        const slot = this.assignSlot(intent, context, state);
+        const slot = this.assignSlot(intent, context, state, ledger);
 
         if (slot.kind === 'rejected') {
             return this.rejected(intent, slot.reason);
@@ -359,7 +365,7 @@ export class RiskGateService {
             return this.rejected(intent, RejectReasonEnum.SL_OUTSIDE_LIQUIDATION);
         }
 
-        return this.reserveAndApprove(intent, context, state, slot.slot, clampedExit);
+        return this.reserveAndApprove(intent, context, state, slot.slot, clampedExit, ledger);
     }
 
     // Load the durable state ONCE (MEDIUM: no repeated getDay/findOpen per evaluate).
@@ -369,7 +375,7 @@ export class RiskGateService {
         return { today, openPositions };
     }
 
-    private async firstFailingCheck(intent: IOrderIntent, context: IRiskGateContext, state: ILoadedState): Promise<RejectReasonEnum | null> {
+    private async firstFailingCheck(intent: IOrderIntent, context: IRiskGateContext, state: ILoadedState, ledger: ReservationLedger): Promise<RejectReasonEnum | null> {
         const haltReason = await this.firstFailingHaltCheck(context, state);
 
         if (haltReason !== null) {
@@ -382,7 +388,7 @@ export class RiskGateService {
             return tierReason;
         }
 
-        return this.checkStatefulLimits(intent, context, state);
+        return this.checkStatefulLimits(intent, context, state, ledger);
     }
 
     // Global-halt + stress filters. A fresh stress verdict is recorded DURABLY on risk_state
@@ -430,7 +436,7 @@ export class RiskGateService {
         return null;
     }
 
-    private async checkStatefulLimits(intent: IOrderIntent, context: IRiskGateContext, state: ILoadedState): Promise<RejectReasonEnum | null> {
+    private async checkStatefulLimits(intent: IOrderIntent, context: IRiskGateContext, state: ILoadedState, ledger: ReservationLedger): Promise<RejectReasonEnum | null> {
         if (await this.isCooldownActive(intent, context)) {
             return RejectReasonEnum.COOLDOWN_ACTIVE;
         }
@@ -441,7 +447,7 @@ export class RiskGateService {
             return lossWindowReason;
         }
 
-        const overtradingReason = await this.checkOvertradingCaps(intent, context);
+        const overtradingReason = await this.checkOvertradingCaps(intent, context, ledger);
 
         if (overtradingReason !== null) {
             return overtradingReason;
@@ -563,14 +569,14 @@ export class RiskGateService {
     // per-bar-universe counts entries already CLAIMED in the current 5m bar window via the
     // in-memory ledger (createdAtMs in [barOpen, barOpen+interval)), NOT the never-incremented
     // daily risk_state.tradesCount — that counter is a daily total and would never fire per bar.
-    private async checkOvertradingCaps(intent: IOrderIntent, context: IRiskGateContext): Promise<RejectReasonEnum | null> {
+    private async checkOvertradingCaps(intent: IOrderIntent, context: IRiskGateContext, ledger: ReservationLedger): Promise<RejectReasonEnum | null> {
         const perSymbolToday = await context.openPositions.countOpenedOnUtcDayForSymbol(intent.symbol, context.utcDateString);
 
         if (perSymbolToday >= context.params.max_trades_per_symbol_per_day) {
             return RejectReasonEnum.MAX_TRADES_PER_SYMBOL_PER_DAY;
         }
 
-        if (this.barWindowReservationCount(context.nowMs) >= context.params.max_trades_per_bar_universe) {
+        if (this.barWindowReservationCount(context.nowMs, ledger) >= context.params.max_trades_per_bar_universe) {
             return RejectReasonEnum.MAX_TRADES_PER_BAR_UNIVERSE;
         }
 
@@ -580,10 +586,10 @@ export class RiskGateService {
     // Bar-index match (NOT a `[barOpen, nowMs)` window). Every reservation in one bar shares
     // createdAtMs === context.nowMs (the deterministic bar-close clock), so a `< nowMs` upper
     // bound would exclude same-bar siblings and the per-bar cap would never fire in live.
-    private barWindowReservationCount(nowMs: number): number {
+    private barWindowReservationCount(nowMs: number, ledger: ReservationLedger): number {
         const currentBarIndex = Math.floor(nowMs / CANDLE_INTERVAL_MS);
 
-        return this.ledger.listActive().filter((reservation) => Math.floor(reservation.createdAtMs / CANDLE_INTERVAL_MS) === currentBarIndex).length;
+        return ledger.listActive().filter((reservation) => Math.floor(reservation.createdAtMs / CANDLE_INTERVAL_MS) === currentBarIndex).length;
     }
 
     // Funding-as-skip flow rules (ADR 0004 §6 / brief line 52). All three guarded:
@@ -627,18 +633,18 @@ export class RiskGateService {
         return intent.tradeSide === PositionSideEnum.SHORT && deeplyNegativeFunding && risingPrice;
     }
 
-    private assignSlot(intent: IOrderIntent, context: IRiskGateContext, state: ILoadedState): SlotAssignment {
-        const occupied = this.occupiedSlots(state);
+    private assignSlot(intent: IOrderIntent, context: IRiskGateContext, state: ILoadedState, ledger: ReservationLedger): SlotAssignment {
+        const occupied = this.occupiedSlots(state, ledger);
 
         return this.slotManager.assign(intent.correlationMode, intent.idiosyncrasyScore, context.params.idiosyncrasy_min_score, occupied);
     }
 
-    private occupiedSlots(state: ILoadedState): IOccupiedSlot[] {
+    private occupiedSlots(state: ILoadedState, ledger: ReservationLedger): IOccupiedSlot[] {
         const fromPositions: IOccupiedSlot[] = state.openPositions
             .filter((position) => position.slot !== null)
             .map((position) => ({ slot: position.slot as PositionSlotEnum, correlationMode: position.correlationMode }));
 
-        const fromReservations: IOccupiedSlot[] = this.ledger.listActive().map((reservation) => ({
+        const fromReservations: IOccupiedSlot[] = ledger.listActive().map((reservation) => ({
             slot: reservation.slot,
             correlationMode: reservation.correlationMode,
         }));
@@ -710,8 +716,9 @@ export class RiskGateService {
         state: ILoadedState,
         slot: PositionSlotEnum,
         clampedExit: IProposedExit,
+        ledger: ReservationLedger,
     ): Promise<IRiskDecision> {
-        const exposureReason = this.checkExposureCaps(intent, context, state);
+        const exposureReason = this.checkExposureCaps(intent, context, state, ledger);
 
         if (exposureReason !== null) {
             return this.rejected(intent, exposureReason);
@@ -724,7 +731,7 @@ export class RiskGateService {
         }
 
         const reservation = this.buildReservation(intent, context, slot);
-        this.ledger.reserve(reservation);
+        ledger.reserve(reservation);
 
         this.logger.debug(
             `APPROVED ${intent.intentAction} ${intent.symbol} slot=${slot} qty=${intent.sizing.qty.toFixed()} ` +
@@ -743,8 +750,8 @@ export class RiskGateService {
         };
     }
 
-    private checkExposureCaps(intent: IOrderIntent, context: IRiskGateContext, state: ILoadedState): RejectReasonEnum | null {
-        const active = this.ledger.listActive();
+    private checkExposureCaps(intent: IOrderIntent, context: IRiskGateContext, state: ILoadedState, ledger: ReservationLedger): RejectReasonEnum | null {
+        const active = ledger.listActive();
 
         const perCoin = this.sumNotionalForSymbol(state.openPositions, active, intent.symbol).plus(intent.sizing.notional);
 

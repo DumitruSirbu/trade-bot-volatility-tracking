@@ -1182,3 +1182,417 @@ describe('InstrumentRepository.findAllTradable interface contract', () => {
         expect(capturedCtx.book.instruments.size).toBe(0);
     });
 });
+
+// ─── R1b fix-2: ticks loaded once per bar (perf + determinism) ───────────────
+
+describe('BacktestRunnerService — single tick load per bar (R1b fix-2)', () => {
+    it('loads ticks only once per bar even when the bar both triggers and has an open position', async () => {
+        // Pre-condition: the previous implementation called loadTicksForBar up to 3 times
+        // per bar (handleOpenPositionsForBar/checkPositionExit, closePosition, dispatchTriggerEvent).
+        // After fix-2, the runner loads ticks once at the top of processBar and threads them through.
+
+        const loadTicksForBar = jest.fn().mockResolvedValue([]);
+
+        const barOpenTimeMs = new Date('2024-01-15T00:00:00.000Z').getTime();
+        const bar = buildCandle(barOpenTimeMs);
+
+        const runner = buildRunner({
+            pointInTimeUniverse: {
+                resolveForWindow: jest.fn().mockResolvedValue(['ETHUSDT']),
+                resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
+            },
+            candleLoader: {
+                loadFor5mWindow: jest.fn().mockImplementation(({ symbol, fromMs }: { symbol: string; fromMs: number }) => {
+                    if (symbol === 'BTCUSDT') return Promise.resolve([]);
+                    const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
+                    return Promise.resolve(isReplay ? [bar] : []);
+                }),
+                loadTicksForBar,
+            },
+            indicatorStateBuilder: {
+                buildInitialWindow: jest.fn().mockReturnValue([]),
+                appendBar: jest.fn().mockReturnValue([bar]),
+                computeSnapshot: jest.fn().mockReturnValue({
+                    symbol: 'ETHUSDT',
+                    closedBarOpenTimeMs: barOpenTimeMs,
+                    vwapSession: new Money('2000'),
+                    vwap20bar: new Money('2000'),
+                    vwap24h: new Money('2000'),
+                    vwapEventAnchored: new Money('2000'),
+                    activeVwapAnchorType: 'session',
+                    vwapDeviationPct: 3.5,
+                    vwapDeviationSigma: 2.5,
+                    volumeRatio: 2.5,
+                    volume20barAvg: new Money('500000'),
+                    atr14: new Money('50'),
+                    adx14: 20,
+                    adxDiPlus: 10,
+                    adxDiMinus: 5,
+                    rsi14: 55,
+                    bollingerUpper: new Money('2100'),
+                    bollingerLower: new Money('1900'),
+                    bollingerPctB: 0.7,
+                    close: new Money('2070'),
+                    fiveMinMovePct: 1.0,
+                }),
+            },
+        });
+
+        await runner.run(buildConfig());
+
+        // One bar, one call. Before fix-2 this would have been ≥2 (dispatch + close paths).
+        expect(loadTicksForBar).toHaveBeenCalledTimes(1);
+        expect(loadTicksForBar).toHaveBeenCalledWith('ETHUSDT', barOpenTimeMs);
+    });
+});
+
+// ─── R1b fix-3: OI deltas and funding rate are propagated to events ──────────
+
+describe('BacktestRunnerService — OI deltas and funding rate in event (R1b fix-3)', () => {
+    it('computes oiChange5mPct and oiChange15mPct from data.oiByTsMs around the bar', async () => {
+        let capturedEvent: any = null;
+        const processEvent = jest.fn().mockImplementation((event: any) => {
+            capturedEvent = event;
+            return Promise.resolve({ skipped: true, rejectedByGate: false, missedFill: false, filled: false });
+        });
+
+        const barOpenTimeMs = new Date('2024-01-15T00:00:00.000Z').getTime();
+        const bar = buildCandle(barOpenTimeMs);
+
+        // OI samples: now=1100, 5m ago=1000, 15m ago=1000 → 5m change = 10%, 15m change = 10%
+        const oiNow = buildOiEntity(barOpenTimeMs, '1100');
+        const oi5mAgo = buildOiEntity(barOpenTimeMs - CANDLE_5M_INTERVAL_MS, '1000');
+        const oi15mAgo = buildOiEntity(barOpenTimeMs - 3 * CANDLE_5M_INTERVAL_MS, '1000');
+
+        const runner = buildRunner({
+            pointInTimeUniverse: {
+                resolveForWindow: jest.fn().mockResolvedValue(['ETHUSDT']),
+                resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
+            },
+            openInterestRepository: {
+                findRange: jest.fn().mockResolvedValue([oi15mAgo, oi5mAgo, oiNow]),
+            },
+            candleLoader: {
+                loadFor5mWindow: jest.fn().mockImplementation(({ symbol, fromMs }: { symbol: string; fromMs: number }) => {
+                    if (symbol === 'BTCUSDT') return Promise.resolve([]);
+                    const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
+                    return Promise.resolve(isReplay ? [bar] : []);
+                }),
+                loadTicksForBar: jest.fn().mockResolvedValue([]),
+            },
+            indicatorStateBuilder: {
+                buildInitialWindow: jest.fn().mockReturnValue([]),
+                appendBar: jest.fn().mockReturnValue([bar]),
+                computeSnapshot: jest.fn().mockReturnValue({
+                    symbol: 'ETHUSDT',
+                    closedBarOpenTimeMs: barOpenTimeMs,
+                    vwapSession: new Money('2000'),
+                    vwap20bar: new Money('2000'),
+                    vwap24h: new Money('2000'),
+                    vwapEventAnchored: new Money('2000'),
+                    activeVwapAnchorType: 'session',
+                    vwapDeviationPct: 3.5,
+                    vwapDeviationSigma: 2.5,
+                    volumeRatio: 2.5,
+                    volume20barAvg: new Money('500000'),
+                    atr14: new Money('50'),
+                    adx14: 20,
+                    adxDiPlus: 10,
+                    adxDiMinus: 5,
+                    rsi14: 55,
+                    bollingerUpper: new Money('2100'),
+                    bollingerLower: new Money('1900'),
+                    bollingerPctB: 0.7,
+                    close: new Money('2070'),
+                    fiveMinMovePct: 1.0,
+                }),
+            },
+            orchestrator: { processEvent },
+        });
+
+        await runner.run(buildConfig());
+
+        expect(capturedEvent).not.toBeNull();
+        // Before fix-3 these were hard-coded to 0; after fix-3 they reflect the OI series.
+        expect(capturedEvent.openInterestChange5mPct).toBeCloseTo(10, 5);
+        expect(capturedEvent.openInterestChange15mPct).toBeCloseTo(10, 5);
+    });
+
+    it('resolves fundingRate from the most-recent funding event at-or-before bar open', async () => {
+        let capturedEvent: any = null;
+        const processEvent = jest.fn().mockImplementation((event: any) => {
+            capturedEvent = event;
+            return Promise.resolve({ skipped: true, rejectedByGate: false, missedFill: false, filled: false });
+        });
+
+        const barOpenTimeMs = new Date('2024-01-15T08:00:00.000Z').getTime();
+        const bar = buildCandle(barOpenTimeMs);
+
+        // Funding event 1 hour before the bar — must be selected.
+        const fundingEvent = {
+            symbol: 'ETHUSDT',
+            tsMs: barOpenTimeMs - 60 * 60 * 1000,
+            rate: new Money('0.0001'),
+        };
+
+        const runner = buildRunner({
+            pointInTimeUniverse: {
+                resolveForWindow: jest.fn().mockResolvedValue(['ETHUSDT']),
+                resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
+            },
+            candleLoader: {
+                loadFor5mWindow: jest.fn().mockImplementation(({ symbol, fromMs }: { symbol: string; fromMs: number }) => {
+                    if (symbol === 'BTCUSDT') return Promise.resolve([]);
+                    const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
+                    return Promise.resolve(isReplay ? [bar] : []);
+                }),
+                loadTicksForBar: jest.fn().mockResolvedValue([]),
+            },
+            indicatorStateBuilder: {
+                buildInitialWindow: jest.fn().mockReturnValue([]),
+                appendBar: jest.fn().mockReturnValue([bar]),
+                computeSnapshot: jest.fn().mockReturnValue({
+                    symbol: 'ETHUSDT',
+                    closedBarOpenTimeMs: barOpenTimeMs,
+                    vwapSession: new Money('2000'),
+                    vwap20bar: new Money('2000'),
+                    vwap24h: new Money('2000'),
+                    vwapEventAnchored: new Money('2000'),
+                    activeVwapAnchorType: 'session',
+                    vwapDeviationPct: 3.5,
+                    vwapDeviationSigma: 2.5,
+                    volumeRatio: 2.5,
+                    volume20barAvg: new Money('500000'),
+                    atr14: new Money('50'),
+                    adx14: 20,
+                    adxDiPlus: 10,
+                    adxDiMinus: 5,
+                    rsi14: 55,
+                    bollingerUpper: new Money('2100'),
+                    bollingerLower: new Money('1900'),
+                    bollingerPctB: 0.7,
+                    close: new Money('2070'),
+                    fiveMinMovePct: 1.0,
+                }),
+            },
+            fundingReplayLoader: {
+                loadForWindow: jest.fn().mockResolvedValue([fundingEvent]),
+                computeCashflow: jest.fn().mockReturnValue(new Money('0')),
+            },
+            orchestrator: { processEvent },
+        });
+
+        await runner.run(buildConfig());
+
+        expect(capturedEvent).not.toBeNull();
+        // Before fix-3 these were hard-coded to 0; after fix-3 they reflect the funding series.
+        expect(capturedEvent.fundingRate).toBeCloseTo(0.0001, 8);
+        // Annualization: rate * 3 ticks/day * 365 days = 0.0001 * 1095 = 0.1095
+        expect(capturedEvent.fundingRateAnnualized).toBeCloseTo(0.1095, 6);
+    });
+
+    it('returns 0 for OI changes when prior OI samples are missing (boundary)', async () => {
+        let capturedEvent: any = null;
+        const processEvent = jest.fn().mockImplementation((event: any) => {
+            capturedEvent = event;
+            return Promise.resolve({ skipped: true, rejectedByGate: false, missedFill: false, filled: false });
+        });
+
+        const barOpenTimeMs = new Date('2024-01-15T00:00:00.000Z').getTime();
+        const bar = buildCandle(barOpenTimeMs);
+
+        // Only current OI present — no 5m-ago, no 15m-ago.
+        const oiNow = buildOiEntity(barOpenTimeMs, '1000');
+
+        const runner = buildRunner({
+            pointInTimeUniverse: {
+                resolveForWindow: jest.fn().mockResolvedValue(['ETHUSDT']),
+                resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
+            },
+            openInterestRepository: {
+                findRange: jest.fn().mockResolvedValue([oiNow]),
+            },
+            candleLoader: {
+                loadFor5mWindow: jest.fn().mockImplementation(({ symbol, fromMs }: { symbol: string; fromMs: number }) => {
+                    if (symbol === 'BTCUSDT') return Promise.resolve([]);
+                    const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
+                    return Promise.resolve(isReplay ? [bar] : []);
+                }),
+                loadTicksForBar: jest.fn().mockResolvedValue([]),
+            },
+            indicatorStateBuilder: {
+                buildInitialWindow: jest.fn().mockReturnValue([]),
+                appendBar: jest.fn().mockReturnValue([bar]),
+                computeSnapshot: jest.fn().mockReturnValue({
+                    symbol: 'ETHUSDT',
+                    closedBarOpenTimeMs: barOpenTimeMs,
+                    vwapSession: new Money('2000'),
+                    vwap20bar: new Money('2000'),
+                    vwap24h: new Money('2000'),
+                    vwapEventAnchored: new Money('2000'),
+                    activeVwapAnchorType: 'session',
+                    vwapDeviationPct: 3.5,
+                    vwapDeviationSigma: 2.5,
+                    volumeRatio: 2.5,
+                    volume20barAvg: new Money('500000'),
+                    atr14: new Money('50'),
+                    adx14: 20,
+                    adxDiPlus: 10,
+                    adxDiMinus: 5,
+                    rsi14: 55,
+                    bollingerUpper: new Money('2100'),
+                    bollingerLower: new Money('1900'),
+                    bollingerPctB: 0.7,
+                    close: new Money('2070'),
+                    fiveMinMovePct: 1.0,
+                }),
+            },
+            orchestrator: { processEvent },
+        });
+
+        await runner.run(buildConfig());
+
+        expect(capturedEvent).not.toBeNull();
+        // No prior OI sample within the 1h lookback → change% defaults to 0 by spec.
+        expect(capturedEvent.openInterestChange5mPct).toBe(0);
+        expect(capturedEvent.openInterestChange15mPct).toBe(0);
+    });
+});
+
+// ─── R1b fix-1: force-close open positions at end-of-window (NAV pinning) ────
+
+describe('BacktestRunnerService — force-close survivors at end-of-window (R1b fix-1)', () => {
+    it('closes positions still open at end-of-window so the equity curve includes their PnL', async () => {
+        // Seed an open position into the book by intercepting buildOrchestratorContext through
+        // a custom orchestrator that opens a position on the first event.
+
+        const barOpenTimeMs = new Date('2024-01-30T00:00:00.000Z').getTime();
+        const bar = buildCandle(barOpenTimeMs, 2000, 2070, 2080, 1990);
+
+        // The orchestrator inserts a synthetic open position into the book so the runner's
+        // end-of-window force-close path has something to close.
+        const orchestrator = {
+            processEvent: jest.fn().mockImplementation((event: any, ctx: any) => {
+                ctx.book.openPositions.set(`${event.eventId}:${barOpenTimeMs}`, {
+                    positionId: `${event.eventId}:${barOpenTimeMs}`,
+                    symbol: 'ETHUSDT',
+                    side: 'long',
+                    slot: 'A',
+                    entryPriceUsdt: '2000',
+                    qty: '1',
+                    entryNotionalUsdt: '2000',
+                    leverage: '1',
+                    stopLossUsdt: '1900',
+                    takeProfitUsdt: '2100',
+                    openedAtMs: barOpenTimeMs,
+                    timeStopAtMs: null,
+                    maxAdverseExcursionPct: '0',
+                    maxFavorableExcursionPct: '0',
+                    accumulatedFundingUsdt: '0',
+                });
+                // Also seed the PnL ledger via the sink so closure works.
+                ctx.sink.applyOpenFill(
+                    {
+                        eventId: event.eventId,
+                        symbol: 'ETHUSDT',
+                        side: 'long',
+                        priceUsdt: '2000',
+                        qty: '1',
+                        feeUsdt: '0',
+                        slippagePct: '0',
+                        tsMs: barOpenTimeMs,
+                        missed: false,
+                        depthAware: true,
+                    },
+                    ctx.book.openPositions.get(`${event.eventId}:${barOpenTimeMs}`),
+                    '2024-01-30',
+                );
+                return Promise.resolve({ skipped: false, rejectedByGate: false, missedFill: false, filled: true });
+            }),
+        };
+
+        // Capture trades passed to the metrics computer.
+        let capturedTrades: any[] = [];
+        const metricsComputer = {
+            compute: jest.fn().mockImplementation((input: any) => {
+                capturedTrades = input.trades;
+                return {
+                    strategyVersionId: 1, strategyName: 'v1', strategyVersion: 1,
+                    fromUtcDate: '2024-01-01', toUtcDate: '2024-01-31', runLabel: 'test-run',
+                    trades: input.trades, equityCurve: [],
+                    maxDrawdownPct: '0', maxDrawdownDurationDays: 0,
+                    totalTrades: 0, winRate: '0', profitFactor: '0', sharpeRatio: '0',
+                    netPnlUsdt: '0', grossPnlUsdt: '0', feesUsdt: '0', fundingUsdt: '0', slippageCostUsdt: '0',
+                    avgReturnPct: '0', skippedTriggerCount: 0, rejectedByGateCount: 0,
+                    missedLimitFillCount: 0, lowFidelityTradeCount: 0,
+                };
+            }),
+        };
+
+        const lastWindowBar = buildCandle(new Date('2024-01-30T23:55:00.000Z').getTime(), 2050, 2080, 2090, 2040);
+        const tradableInstrument = {
+            symbol: 'ETHUSDT',
+            isTradable: true,
+            stepSize: new Money('0.001'),
+            tickSize: new Money('0.01'),
+            minNotional: new Money('5'),
+        };
+
+        const runner = buildRunner({
+            instrumentRepository: { findAllTradable: jest.fn().mockResolvedValue([tradableInstrument]) },
+            pointInTimeUniverse: {
+                resolveForWindow: jest.fn().mockResolvedValue(['ETHUSDT']),
+                resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
+            },
+            candleLoader: {
+                loadFor5mWindow: jest.fn().mockImplementation(({ symbol, fromMs, toMs }: { symbol: string; fromMs: number; toMs: number }) => {
+                    if (symbol === 'BTCUSDT') return Promise.resolve([]);
+                    const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime() && toMs === new Date('2024-01-31T00:00:00.000Z').getTime();
+                    if (isReplay) return Promise.resolve([bar]);
+                    // End-of-window last-bar lookup: window of CANDLE_5M_INTERVAL_MS ending at toMs
+                    const isLastBarLookup = toMs === new Date('2024-01-31T00:00:00.000Z').getTime() && fromMs === toMs - CANDLE_5M_INTERVAL_MS;
+                    if (isLastBarLookup) return Promise.resolve([lastWindowBar]);
+                    return Promise.resolve([]);
+                }),
+                loadTicksForBar: jest.fn().mockResolvedValue([]),
+            },
+            indicatorStateBuilder: {
+                buildInitialWindow: jest.fn().mockReturnValue([]),
+                appendBar: jest.fn().mockReturnValue([bar]),
+                computeSnapshot: jest.fn().mockReturnValue({
+                    symbol: 'ETHUSDT',
+                    closedBarOpenTimeMs: barOpenTimeMs,
+                    vwapSession: new Money('2000'),
+                    vwap20bar: new Money('2000'),
+                    vwap24h: new Money('2000'),
+                    vwapEventAnchored: new Money('2000'),
+                    activeVwapAnchorType: 'session',
+                    vwapDeviationPct: 3.5,
+                    vwapDeviationSigma: 2.5,
+                    volumeRatio: 2.5,
+                    volume20barAvg: new Money('500000'),
+                    atr14: new Money('50'),
+                    adx14: 20,
+                    adxDiPlus: 10,
+                    adxDiMinus: 5,
+                    rsi14: 55,
+                    bollingerUpper: new Money('2100'),
+                    bollingerLower: new Money('1900'),
+                    bollingerPctB: 0.7,
+                    close: new Money('2070'),
+                    fiveMinMovePct: 1.0,
+                }),
+            },
+            orchestrator,
+            metricsComputer,
+        });
+
+        await runner.run(buildConfig());
+
+        // Before fix-1 the survivor stayed in book.openPositions and was never added to trades.
+        // After fix-1 the runner force-closes it at last-bar close, so it appears as a closed trade.
+        expect(capturedTrades.length).toBe(1);
+        expect(capturedTrades[0].symbol).toBe('ETHUSDT');
+        expect(capturedTrades[0].exitReason).toBe('time_stop');
+    });
+});

@@ -14,7 +14,7 @@ import {
 } from '@bot/shared';
 import { Injectable, Logger } from '@nestjs/common';
 
-import { Money } from '../../common/utils/money';
+import { Money, MoneyValue } from '../../common/utils/money';
 import { TickAggregateEntity, BookSnapshotEntity } from '../../market-data/entity';
 import { CANDLE_5M_INTERVAL_MS } from '../../market-data/const/candleConsts';
 import {
@@ -76,6 +76,11 @@ export interface IBacktestOrchestratorContext {
     readonly isInUniverse: boolean;
     readonly utcDateString: string;
     readonly allocatedCapitalUsdt: string;
+    // M7 R1a fix-3 (quant, ADR-0015 §6): entries fill at `nextBarOpen + latencyMs`.
+    // The orchestrator uses this open as the reference entry price (replaces the prior
+    // signal-bar VWAP-derived figure). `null` when the signal bar is the last replay bar
+    // for the symbol — in that case no fill can occur and `buildOrderIntent` returns null.
+    readonly nextBarOpen: MoneyValue | null;
 }
 
 // The orchestrator's verdict for one event. Exactly one of the four booleans is true (the
@@ -131,7 +136,9 @@ export class BacktestOrchestrator {
         }
 
         const gateContext = this.buildGateContext(stampedEvent, snapshot, nowMs, ctx);
-        const decision = await this.riskGate.evaluate(intent, gateContext);
+        // M7 R1a fix-1 (security): thread the per-run reservation ledger so the gate never
+        // mutates the DI singleton during a backtest replay.
+        const decision = await this.riskGate.evaluate(intent, gateContext, ctx.reservationLedger);
 
         if (!isApprovedOpening(decision)) {
             return REJECTED;
@@ -183,7 +190,15 @@ export class BacktestOrchestrator {
             return null;
         }
 
-        const entryPrice = new Money(event.vwapSession).times(new Money(1).plus(new Money(event.vwapDeviationPct).dividedBy(100)));
+        // M7 R1a fix-3 (quant, ADR-0015 §6): the entry fills at the next bar's open. The
+        // signal-bar VWAP×(1+dev%) figure was a reference price at signal close — using it
+        // as the fill price is forward-look. When the signal bar is the last replay bar
+        // for the symbol, no next bar exists and the orchestrator cannot construct a fill.
+        if (ctx.nextBarOpen === null) {
+            return null;
+        }
+
+        const entryPrice = ctx.nextBarOpen;
 
         const sizingResult = this.sizer.size({
             allocatedCapital: new Money(ctx.allocatedCapitalUsdt),

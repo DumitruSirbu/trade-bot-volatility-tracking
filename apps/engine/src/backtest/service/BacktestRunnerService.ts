@@ -15,7 +15,7 @@ import {
 } from '@bot/shared';
 import { Injectable, Logger } from '@nestjs/common';
 
-import { Money, MoneyValue } from '../../common/utils/money';
+import { DecimalValue, Money, MoneyValue } from '../../common/utils/money';
 import { CANDLE_5M_INTERVAL_MS } from '../../market-data/const/candleConsts';
 import { BookSnapshotEntity, OpenInterestEntity, TickAggregateEntity } from '../../market-data/entity';
 import { ICandle, IIndicatorSnapshot } from '../../market-data/interface';
@@ -149,7 +149,105 @@ export class BacktestRunnerService {
             await this.replaySymbol(ctx);
         }
 
+        await this.forceCloseOpenPositions(config, runState, counters, tradeMetadata, toMs);
+
         return this.buildReport(config, strategyVersion, runState, counters);
+    }
+
+    // Any positions still open at end-of-window are force-closed at the last available bar's
+    // close price using REDUCE_MARKET semantics (taker fees + slippage). This pins a
+    // deterministic end-of-window NAV so the equity curve / drawdown / Sharpe account for
+    // unrealised exposure instead of silently dropping it. Mirrors the live behavior of
+    // squaring positions on session boundary.
+    private async forceCloseOpenPositions(
+        config: IBacktestConfig,
+        runState: IRunState,
+        counters: IRunCounters,
+        tradeMetadata: Map<string, ITradeMetadata>,
+        toMs: number,
+    ): Promise<void> {
+        const survivors = Array.from(runState.book.openPositions.values());
+
+        for (const position of survivors) {
+            await this.forceClosePosition(config, runState, counters, tradeMetadata, position, toMs);
+        }
+    }
+
+    private async forceClosePosition(
+        config: IBacktestConfig,
+        runState: IRunState,
+        counters: IRunCounters,
+        tradeMetadata: Map<string, ITradeMetadata>,
+        position: IBacktestPosition,
+        toMs: number,
+    ): Promise<void> {
+        const lastBar = await this.loadLastBarBefore(position.symbol, toMs);
+        const exitPrice = lastBar !== null ? new Money(lastBar.close) : new Money(position.entryPriceUsdt);
+        const hitTsMs = lastBar !== null ? lastBar.openTimeMs : position.openedAtMs;
+        const metadata = lookupTradeMetadata(tradeMetadata, position.positionId);
+        const positionTier = resolveForceCloseTier(runState, position, metadata);
+
+        const fillRequest: IFillRequest = {
+            eventId: `${position.positionId}:force-close`,
+            symbol: position.symbol,
+            side: position.side,
+            intent: 'close',
+            policy: OrderPolicyEnum.REDUCE_MARKET,
+            limitPrice: exitPrice,
+            qty: new Money(position.qty),
+            coinTier: positionTier,
+            signalBarOpenMs: hitTsMs,
+            barHigh: lastBar !== null ? new Money(lastBar.high) : exitPrice,
+            barLow: lastBar !== null ? new Money(lastBar.low) : exitPrice,
+            ticks: [],
+            bookSnapshot: null,
+            tierSlippageParams: runState.tierSlippageParams,
+            config,
+        };
+
+        const fill = runState.fillSim.simulateFill(fillRequest);
+
+        if (fill.missed) {
+            return;
+        }
+
+        const grossPnl = this.computeGrossPnl(position, fill);
+        const tradesBefore = runState.book.completedTrades.length;
+
+        runState.sink.applyCloseFill(fill, grossPnl, 'time_stop');
+
+        if (runState.book.completedTrades.length > tradesBefore) {
+            const lastIndex = runState.book.completedTrades.length - 1;
+            const trade = runState.book.completedTrades[lastIndex];
+
+            const patched: IBacktestTradeResult = {
+                ...trade,
+                strategyVersionId: metadata !== null ? metadata.strategyVersionId : config.strategyVersionId,
+                flowType: metadata !== null ? metadata.flowType : FlowTypeEnum.LOW_QUALITY_NOISE,
+                regimeAtEntry: metadata !== null ? metadata.regimeAtEntry : RegimeLabelEnum.RANGING,
+                coinTier: metadata !== null ? serializeCoinTier(metadata.coinTier) : trade.coinTier,
+            };
+
+            runState.book.completedTrades[lastIndex] = patched;
+
+            if (trade.lowFidelity) {
+                counters.lowFidelity += 1;
+            }
+        }
+    }
+
+    private async loadLastBarBefore(symbol: string, toMs: number): Promise<ICandle | null> {
+        const bars = await this.candleLoader.loadFor5mWindow({
+            symbol,
+            fromMs: toMs - CANDLE_5M_INTERVAL_MS,
+            toMs,
+        });
+
+        if (bars.length === 0) {
+            return null;
+        }
+
+        return bars[bars.length - 1];
     }
 
     private buildRunState(params: IStrategyParams): IRunState {
@@ -256,8 +354,12 @@ export class BacktestRunnerService {
         fundingCursor: IFundingCursor,
     ): Promise<void> {
         const utcDateString = msToUtcDate(bar.openTimeMs);
+        // Load ticks once per bar and thread through the exit + dispatch paths. Loading
+        // multiple times within the same bar is both a perf cost and a determinism risk
+        // (a single ORDER BY ts ASC traversal is the reference order).
+        const ticks = await this.candleLoader.loadTicksForBar(ctx.symbol, bar.openTimeMs);
 
-        await this.handleOpenPositionsForBar(ctx, bar, utcDateString, data);
+        await this.handleOpenPositionsForBar(ctx, bar, utcDateString, data, ticks);
         this.applyFundingForBar(ctx, bar.openTimeMs, fundingCursor, data.fundingEvents);
 
         const tier = await this.resolveTierAt(ctx, utcDateString);
@@ -277,7 +379,7 @@ export class BacktestRunnerService {
             return;
         }
 
-        await this.dispatchTriggerEvent(ctx, bar, snapshot, data, tier, utcDateString);
+        await this.dispatchTriggerEvent(ctx, bar, snapshot, data, tier, utcDateString, ticks);
     }
 
     private passesTrigger(snapshot: IIndicatorSnapshot, tier: CoinTierEnum): boolean {
@@ -298,11 +400,17 @@ export class BacktestRunnerService {
         data: ISymbolReplayData,
         tier: CoinTierEnum,
         utcDateString: string,
+        ticks: TickAggregateEntity[],
     ): Promise<void> {
         const event = this.buildEvent(ctx, bar, snapshot, data, tier);
-        const ticks = await this.candleLoader.loadTicksForBar(ctx.symbol, bar.openTimeMs);
         const bookSnapshot = data.bookByBarOpenMs.get(bar.openTimeMs) ?? null;
-        const orchestratorContext = this.buildOrchestratorContext(ctx, ticks, bookSnapshot, utcDateString);
+        // M7 R1a fix-3 (quant, ADR-0015 §6): entries fill at the next bar's open. If the
+        // signal bar is the final replay bar for this symbol, nextBarOpen is null and the
+        // orchestrator declines the intent (no future bar to fill against).
+        const barIndex = data.replayBars.indexOf(bar);
+        const nextBar = barIndex >= 0 && barIndex + 1 < data.replayBars.length ? data.replayBars[barIndex + 1] : null;
+        const nextBarOpen = nextBar !== null ? new Money(nextBar.open) : null;
+        const orchestratorContext = this.buildOrchestratorContext(ctx, ticks, bookSnapshot, utcDateString, nextBarOpen);
 
         const result = await this.orchestrator.processEvent(event, orchestratorContext);
 
@@ -317,19 +425,25 @@ export class BacktestRunnerService {
         data: ISymbolReplayData,
         tier: CoinTierEnum,
     ): IVolatilityDetectedEvent {
-        const oi = this.resolveOpenInterestAt(data.oiByTsMs, bar.openTimeMs);
+        const oiNow = this.resolveOpenInterestAt(data.oiByTsMs, bar.openTimeMs);
+        const oi5mAgo = this.resolveOpenInterestAt(data.oiByTsMs, bar.openTimeMs - CANDLE_5M_INTERVAL_MS);
+        const oi15mAgo = this.resolveOpenInterestAt(data.oiByTsMs, bar.openTimeMs - 3 * CANDLE_5M_INTERVAL_MS);
+        const oiChange5mPct = computeOiChangePct(oiNow, oi5mAgo);
+        const oiChange15mPct = computeOiChangePct(oiNow, oi15mAgo);
+
         const bookSnapshot = data.bookByBarOpenMs.get(bar.openTimeMs) ?? null;
         const btcMovePct = this.resolveBtcMovePct(ctx.btcReferenceBars, bar.openTimeMs);
+        const funding = resolveFundingRateAt(data.fundingEvents, bar.openTimeMs);
 
         return buildBacktestEvent(snapshot, bar.openTimeMs, {
             coinTier: tier,
             universeAgeHours: 0,
             coinVolumeRank: 0,
-            oiValue: oi !== null ? oi.value : null,
-            oiChange5mPct: 0,
-            oiChange15mPct: 0,
-            fundingRate: 0,
-            fundingRateAnnualized: 0,
+            oiValue: oiNow !== null ? oiNow.value : null,
+            oiChange5mPct,
+            oiChange15mPct,
+            fundingRate: funding.rate,
+            fundingRateAnnualized: funding.rateAnnualized,
             btc5mMovePct: btcMovePct,
             eth5mMovePct: 0,
             btc1mMovePct: 0,
@@ -347,6 +461,7 @@ export class BacktestRunnerService {
         ticks: TickAggregateEntity[],
         bookSnapshot: BookSnapshotEntity | null,
         utcDateString: string,
+        nextBarOpen: MoneyValue | null,
     ): IBacktestOrchestratorContext {
         return {
             book: ctx.runState.book,
@@ -367,6 +482,7 @@ export class BacktestRunnerService {
             isInUniverse: true,
             utcDateString,
             allocatedCapitalUsdt: ctx.config.allocatedCapitalUsdt,
+            nextBarOpen,
         };
     }
 
@@ -402,11 +518,17 @@ export class BacktestRunnerService {
         });
     }
 
-    private async handleOpenPositionsForBar(ctx: ISymbolReplayContext, bar: ICandle, utcDateString: string, data: ISymbolReplayData): Promise<void> {
+    private async handleOpenPositionsForBar(
+        ctx: ISymbolReplayContext,
+        bar: ICandle,
+        utcDateString: string,
+        data: ISymbolReplayData,
+        ticks: TickAggregateEntity[],
+    ): Promise<void> {
         const openPositions = ctx.runState.book.openPositionList().filter((position) => position.symbol === ctx.symbol);
 
         for (const position of openPositions) {
-            await this.checkPositionExit(ctx, position, bar, utcDateString, data);
+            await this.checkPositionExit(ctx, position, bar, utcDateString, data, ticks);
         }
     }
 
@@ -416,14 +538,14 @@ export class BacktestRunnerService {
         bar: ICandle,
         utcDateString: string,
         data: ISymbolReplayData,
+        ticks: TickAggregateEntity[],
     ): Promise<void> {
         if (this.shouldHitTimeStop(position, bar)) {
-            await this.closePosition(ctx, position, bar, 'time_stop', new Money(bar.open), bar.openTimeMs, utcDateString, data);
+            await this.closePosition(ctx, position, bar, 'time_stop', new Money(bar.open), bar.openTimeMs, data, ticks);
 
             return;
         }
 
-        const ticks = await this.candleLoader.loadTicksForBar(ctx.symbol, bar.openTimeMs);
         const stopLoss = new Money(position.stopLossUsdt);
         const takeProfit = new Money(position.takeProfitUsdt);
         const stopResult = simulateIntrabarStop(position.side, stopLoss, takeProfit, ticks, bar.high, bar.low, bar.openTimeMs);
@@ -435,7 +557,7 @@ export class BacktestRunnerService {
         const hitPrice = stopResult.hitPrice ?? (stopResult.hit === 'stop_loss' ? stopLoss : takeProfit);
         const hitTsMs = stopResult.hitTsMs ?? bar.openTimeMs;
 
-        await this.closePosition(ctx, position, bar, stopResult.hit, hitPrice, hitTsMs, utcDateString, data);
+        await this.closePosition(ctx, position, bar, stopResult.hit, hitPrice, hitTsMs, data, ticks);
     }
 
     private shouldHitTimeStop(position: IBacktestPosition, bar: ICandle): boolean {
@@ -453,10 +575,9 @@ export class BacktestRunnerService {
         exitReason: IBacktestTradeResult['exitReason'],
         exitPrice: MoneyValue,
         hitTsMs: number,
-        utcDateString: string,
         data: ISymbolReplayData,
+        ticks: TickAggregateEntity[],
     ): Promise<void> {
-        const ticksForFill = await this.candleLoader.loadTicksForBar(ctx.symbol, bar.openTimeMs);
         const positionTier = this.resolvePositionTier(ctx, position);
 
         const fillRequest: IFillRequest = {
@@ -471,7 +592,7 @@ export class BacktestRunnerService {
             signalBarOpenMs: hitTsMs,
             barHigh: new Money(bar.high),
             barLow: new Money(bar.low),
-            ticks: ticksForFill,
+            ticks,
             bookSnapshot: data.bookByBarOpenMs.get(bar.openTimeMs) ?? null,
             tierSlippageParams: ctx.runState.tierSlippageParams,
             config: ctx.config,
@@ -492,11 +613,35 @@ export class BacktestRunnerService {
 
         if (ctx.runState.book.completedTrades.length > tradesBefore) {
             this.patchTradeRow(ctx, position);
+            // M7 R1a fix-4 (logic): mirror the live cycle by writing realized PnL into the
+            // per-day risk_state row the gate reads. Without this update the daily and
+            // weekly loss-limit checks see zero PnL forever and can never reject an entry.
+            await this.updateRiskStateAfterClose(ctx, fill);
         }
+    }
 
-        // Documented capture: utcDateString is the close-day key; per-day risk-state
-        // ledger updates flow through the gate-side adapter and don't need it here today.
-        void utcDateString;
+    // M7 R1a fix-4 (logic, ADR 0004 §6). After a close fill is recorded into the book, fold
+    // its net PnL into the day's risk_state entry so RiskGateService.checkLossWindows reads
+    // it on the next gate evaluation. The date key comes from fill.tsMs (the canonical close
+    // timestamp). Uses the same upsert path the live gate's mutation primitives use.
+    private async updateRiskStateAfterClose(ctx: ISymbolReplayContext, closeFill: IBacktestFill): Promise<void> {
+        const closeDateString = msToUtcDate(closeFill.tsMs);
+        const existing = await ctx.runState.riskStateAdapter.getDay(closeDateString);
+        const tradeCount = ctx.runState.book.completedTrades.length;
+        const lastTrade = tradeCount > 0 ? ctx.runState.book.completedTrades[tradeCount - 1] : null;
+        const netPnl = lastTrade !== null ? new Money(lastTrade.netPnlUsdt) : new Money(0);
+
+        const currentPnl: MoneyValue = existing !== null ? existing.realizedPnlDay : new Money(0);
+        const currentCount = existing !== null ? existing.tradesCount : 0;
+
+        await ctx.runState.riskStateAdapter.upsertDay({
+            date: closeDateString,
+            realizedPnlDay: currentPnl.plus(netPnl),
+            openExposure: new Money(0),
+            tradesCount: currentCount + 1,
+            isHalted: false,
+            haltReason: null,
+        });
     }
 
     private resolvePositionTier(ctx: ISymbolReplayContext, position: IBacktestPosition): CoinTierEnum {
@@ -751,4 +896,65 @@ function serializeCoinTier(tier: CoinTierEnum): IBacktestTradeResult['coinTier']
     }
 
     return 'tier3';
+}
+
+// Pure helper for force-close metadata recovery: position ids carry the originating
+// eventId as the prefix (`${eventId}:${fill.tsMs}`). The map is keyed by eventId so we
+// strip the trailing `:tsMs` suffix to find it.
+function lookupTradeMetadata(map: Map<string, ITradeMetadata>, positionId: string): ITradeMetadata | null {
+    const lastColon = positionId.lastIndexOf(':');
+
+    if (lastColon === -1) {
+        return null;
+    }
+
+    return map.get(positionId.slice(0, lastColon)) ?? null;
+}
+
+// Forced-close tier resolution: prefer the open-time stamped tier; fall back to TIER_3
+// (conservative slippage) when the book has no instrument row OR the metadata is missing.
+function resolveForceCloseTier(runState: IRunState, position: IBacktestPosition, metadata: ITradeMetadata | null): CoinTierEnum {
+    if (runState.book.instruments.get(position.symbol) === undefined) {
+        return CoinTierEnum.TIER_3;
+    }
+
+    return metadata !== null ? metadata.coinTier : CoinTierEnum.TIER_3;
+}
+
+// Open-interest delta as a percent: (current - prior) / prior * 100. Returns 0 when either
+// side is missing or the prior is zero (the metric is undefined without a non-zero baseline).
+function computeOiChangePct(current: OpenInterestEntity | null, prior: OpenInterestEntity | null): number {
+    if (current === null || prior === null) {
+        return 0;
+    }
+
+    const priorVal = new Money(prior.value);
+
+    if (priorVal.isZero()) {
+        return 0;
+    }
+
+    return new Money(current.value).minus(priorVal).dividedBy(priorVal).times(100).toNumber();
+}
+
+// Most-recent funding event at-or-before barOpenMs. Annualized = 8h rate × 3 ticks/day ×
+// 365 days. Events are loaded ASC; scanning from the end finds the latest qualifying event
+// in O(k) on average for a tight per-symbol replay window.
+function resolveFundingRateAt(events: readonly IFundingEvent[], barOpenMs: number): { rate: number; rateAnnualized: number } {
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+        if (events[i].tsMs <= barOpenMs) {
+            const rate = decimalToNumber(events[i].rate);
+
+            return { rate, rateAnnualized: rate * 3 * 365 };
+        }
+    }
+
+    return { rate: 0, rateAnnualized: 0 };
+}
+
+// IFundingEvent.rate is typed as DecimalValue but DB reads and test fixtures may surface
+// it as a string. Funnel everything through Money so the conversion is uniform before
+// exporting a JS number for the event payload (live source surfaces a JS number too).
+function decimalToNumber(value: DecimalValue): number {
+    return new Money(value).toNumber();
 }

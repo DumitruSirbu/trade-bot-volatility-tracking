@@ -77,16 +77,19 @@ export class BacktestExecutionSink {
         accumulator.addFunding(cashflowUsdt);
     }
 
-    // Pinned identity (ADR 0012 / 0015 §9): netPnl = gross - fees - |funding paid| - slippage cost.
-    // |funding paid| means: if the signed cashflow is negative (we paid), subtract its
-    // absolute value; if positive (we received), it does NOT enter this identity (funding
-    // received is preserved separately in the report).
+    // M7 R1a fix-2 (quant): netPnl = gross - fees + signed_funding.
+    // grossPnlUsdt is computed from post-slippage fill prices (entry & exit are fills,
+    // not reference prices), so slippage is already embedded in the spread; subtracting
+    // `slippageCostUsdt` here double-counted it. `slippageCostUsdt` remains in the trade
+    // result for attribution/analytics, but it is NOT part of the net identity.
+    // `fundingUsdt` is signed: positive = received (adds to PnL), negative = paid
+    // (subtracts). FundingReplayLoader.computeCashflow already returns correctly signed
+    // values per ADR 0012.
     private computeNetPnl(
         grossPnlUsdt: MoneyValue,
-        snapshot: { feesUsdt: MoneyValue; fundingUsdt: MoneyValue; slippageCostUsdt: MoneyValue },
+        snapshot: { feesUsdt: MoneyValue; fundingUsdt: MoneyValue },
     ): MoneyValue {
-        const fundingPaidAbs = snapshot.fundingUsdt.lessThan(0) ? snapshot.fundingUsdt.abs() : new Money(0);
-        return grossPnlUsdt.minus(snapshot.feesUsdt).minus(fundingPaidAbs).minus(snapshot.slippageCostUsdt);
+        return grossPnlUsdt.minus(snapshot.feesUsdt).plus(snapshot.fundingUsdt);
     }
 
     private buildTradeResult(
