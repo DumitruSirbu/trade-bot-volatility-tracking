@@ -23,4 +23,11 @@ export class InstrumentRepository extends BaseRepository<InstrumentEntity> {
     async findBySymbol(symbol: string): Promise<InstrumentEntity | null> {
         return this.repository.findOne({ where: { symbol } });
     }
+
+    // Returns every currently-tradable instrument. The backtest runner pre-seeds the
+    // in-memory BacktestBook with these so the gate's instrument port has a complete
+    // snapshot for the whole replay window without per-symbol DB lookups.
+    async findAllTradable(): Promise<InstrumentEntity[]> {
+        return this.repository.find({ where: { isTradable: true } });
+    }
 }
