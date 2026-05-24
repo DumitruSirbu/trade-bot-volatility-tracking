@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DeepPartial, Repository } from 'typeorm';
 
 import { BaseRepository } from '../../common/repository/BaseRepository';
 import { AccountSnapshotEntity } from '../entity';
@@ -18,5 +18,13 @@ export class AccountSnapshotRepository extends BaseRepository<AccountSnapshotEnt
         const [latest] = await this.repository.find({ order: { ts: 'DESC' }, take: 1 });
 
         return latest ?? null;
+    }
+
+    // R1.3c — named builder so AccountSnapshotWriter constructs entities through the
+    // BaseRepository pattern (no `as AccountSnapshotEntity` cast in the service).
+    // BaseRepository.create is `protected` by design; this exposes it under an
+    // intention-revealing name.
+    buildSnapshot(entityLike: DeepPartial<AccountSnapshotEntity>): AccountSnapshotEntity {
+        return this.create(entityLike);
     }
 }

@@ -21,4 +21,7 @@ export enum RejectReasonEnum {
     TIER3_NOT_VALIDATED = 'tier3_not_validated',
     MODEL_DIVERGENCE_HALT = 'model_divergence_halt',
     GLOBAL_HALT = 'global_halt',
+    RECONCILING_HOLD = 'reconciling_hold',
+    FOREIGN_POSITION_HOLD = 'foreign_position_hold',
+    RECOVERY_IN_PROGRESS = 'recovery_in_progress',
 }

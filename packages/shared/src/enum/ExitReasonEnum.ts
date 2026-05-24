@@ -5,4 +5,6 @@ export enum ExitReasonEnum {
 	SIGNAL = 'signal',
 	MANUAL = 'manual',
 	KILL_SWITCH = 'kill_switch',
+	RECONCILED_MISSING = 'reconciled_missing',
+	LIQUIDATED = 'liquidated',
 }

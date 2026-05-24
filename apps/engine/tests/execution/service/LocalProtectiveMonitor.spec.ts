@@ -13,7 +13,7 @@
  *   9. Via ExecutionService: attach failure leaves monitor ARMED (local fallback stays watching)
  */
 
-import { ProtectiveOrderTypeEnum, StrategyDirectionEnum } from '@bot/shared';
+import { PositionSideEnum, StrategyDirectionEnum } from '@bot/shared';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Money } from '../../../src/common/utils/money';
@@ -42,42 +42,58 @@ import {
 describe('LocalProtectiveMonitor — arm', () => {
     it('arm inserts a position; isArmed returns true', () => {
         // BUILD
-        const monitor = new LocalProtectiveMonitor();
+        const monitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
 
         // OPERATE
-        monitor.arm({ positionId: 1, symbol: 'BTCUSDT', stopLossPrice: new Money('29500'), takeProfitPrice: new Money('31000') });
+        monitor.arm({ positionId: 1, symbol: 'BTCUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('29500'), takeProfitPrice: new Money('31000') });
 
         // CHECK
         expect(monitor.isArmed(1)).toBe(true);
     });
 
     it('isArmed returns false for a positionId that was never armed', () => {
-        const monitor = new LocalProtectiveMonitor();
+        const monitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
 
         expect(monitor.isArmed(999)).toBe(false);
     });
 
     it('arming the same positionId twice overwrites the entry (latest wins)', () => {
         // BUILD
-        const monitor = new LocalProtectiveMonitor();
+        const monitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
 
         // OPERATE
-        monitor.arm({ positionId: 5, symbol: 'ETHUSDT', stopLossPrice: new Money('1900'), takeProfitPrice: new Money('2100') });
-        monitor.arm({ positionId: 5, symbol: 'ETHUSDT', stopLossPrice: new Money('1850'), takeProfitPrice: new Money('2200') });
+        monitor.arm({ positionId: 5, symbol: 'ETHUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('1900'), takeProfitPrice: new Money('2100') });
+        monitor.arm({ positionId: 5, symbol: 'ETHUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('1850'), takeProfitPrice: new Money('2200') });
 
         // CHECK: still armed, one entry (overwrite, not duplicate)
         expect(monitor.isArmed(5)).toBe(true);
         const armed = monitor.listArmed();
         expect(armed.filter((p) => p.positionId === 5).length).toBe(1);
-        expect(armed.find((p) => p.positionId === 5)?.stopLossPrice.toFixed()).toBe('1850');
+        expect(armed.find((p) => p.positionId === 5)?.stopLossPrice?.toFixed()).toBe('1850');
     });
 });
 
 describe('LocalProtectiveMonitor — disarm', () => {
     it('disarm removes the position; isArmed returns false', () => {
         // BUILD
-        const monitor = new LocalProtectiveMonitor();
-        monitor.arm({ positionId: 2, symbol: 'BTCUSDT', stopLossPrice: new Money('29500'), takeProfitPrice: new Money('31000') });
+        const monitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
+        monitor.arm({ positionId: 2, symbol: 'BTCUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('29500'), takeProfitPrice: new Money('31000') });
 
         // OPERATE
         monitor.disarm(2);
@@ -87,7 +103,11 @@ describe('LocalProtectiveMonitor — disarm', () => {
     });
 
     it('disarm on unknown positionId is a no-op and does not throw', () => {
-        const monitor = new LocalProtectiveMonitor();
+        const monitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
 
         // CHECK: must not throw
         expect(() => monitor.disarm(9999)).not.toThrow();
@@ -97,9 +117,13 @@ describe('LocalProtectiveMonitor — disarm', () => {
 describe('LocalProtectiveMonitor — listArmed', () => {
     it('listArmed returns all armed positions', () => {
         // BUILD
-        const monitor = new LocalProtectiveMonitor();
-        monitor.arm({ positionId: 10, symbol: 'BTCUSDT', stopLossPrice: new Money('29000'), takeProfitPrice: new Money('31000') });
-        monitor.arm({ positionId: 11, symbol: 'ETHUSDT', stopLossPrice: new Money('1900'), takeProfitPrice: new Money('2100') });
+        const monitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
+        monitor.arm({ positionId: 10, symbol: 'BTCUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('29000'), takeProfitPrice: new Money('31000') });
+        monitor.arm({ positionId: 11, symbol: 'ETHUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('1900'), takeProfitPrice: new Money('2100') });
 
         // CHECK
         const list = monitor.listArmed();
@@ -107,17 +131,25 @@ describe('LocalProtectiveMonitor — listArmed', () => {
     });
 
     it('listArmed is empty after all positions are disarmed', () => {
-        const monitor = new LocalProtectiveMonitor();
-        monitor.arm({ positionId: 20, symbol: 'BTCUSDT', stopLossPrice: new Money('29000'), takeProfitPrice: new Money('31000') });
+        const monitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
+        monitor.arm({ positionId: 20, symbol: 'BTCUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('29000'), takeProfitPrice: new Money('31000') });
         monitor.disarm(20);
 
         expect(monitor.listArmed().length).toBe(0);
     });
 
     it('two positions tracked independently — disarming one does not affect the other', () => {
-        const monitor = new LocalProtectiveMonitor();
-        monitor.arm({ positionId: 30, symbol: 'BTCUSDT', stopLossPrice: new Money('29000'), takeProfitPrice: new Money('31000') });
-        monitor.arm({ positionId: 31, symbol: 'ETHUSDT', stopLossPrice: new Money('1900'), takeProfitPrice: new Money('2100') });
+        const monitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
+        monitor.arm({ positionId: 30, symbol: 'BTCUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('29000'), takeProfitPrice: new Money('31000') });
+        monitor.arm({ positionId: 31, symbol: 'ETHUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('1900'), takeProfitPrice: new Money('2100') });
 
         monitor.disarm(30);
 
@@ -134,7 +166,11 @@ function makeExecutionService(
     } = {},
 ) {
     const appConfig = { isExecutionLive: true } as AppConfigService;
-    const localProtectiveMonitor = new LocalProtectiveMonitor();
+    const localProtectiveMonitor = new LocalProtectiveMonitor(
+        { findById: jest.fn().mockResolvedValue(null) } as never,
+        { evaluate: jest.fn() } as never,
+        new EventEmitter2(),
+    );
 
     const policyRouter = {
         plan: jest.fn().mockReturnValue({
@@ -199,6 +235,9 @@ function makeExecutionService(
         }),
     } as unknown as ProtectiveOrderAttacher;
 
+    const positionService = {
+        transition: jest.fn().mockResolvedValue(undefined),
+    } as unknown as import('../../../src/position/service').PositionService;
     const service = new ExecutionService(
         appConfig,
         policyRouter,
@@ -208,6 +247,7 @@ function makeExecutionService(
         protectiveAttacher,
         localProtectiveMonitor,
         positions,
+        positionService,
         transactions,
         strategyVersions,
         riskGate,

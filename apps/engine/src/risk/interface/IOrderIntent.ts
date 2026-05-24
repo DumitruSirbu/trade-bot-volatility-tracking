@@ -1,4 +1,4 @@
-import { CoinTierEnum, CorrelationModeEnum, FlowTypeEnum, OrderIntentActionEnum, PositionSideEnum } from '@bot/shared';
+import { CoinTierEnum, CorrelationModeEnum, ExitReasonEnum, FlowTypeEnum, OrderIntentActionEnum, PositionSideEnum } from '@bot/shared';
 
 import { IProposedExit, IOpenPositionState } from '../../strategy/interface';
 import { DecimalValue, MoneyValue } from '../../common/utils/money';
@@ -33,4 +33,11 @@ export interface IOrderIntent {
     // through the gate (pass-through) → executor. The executor reads this directly as a
     // row key into the order-policy matrix (ADR 0005 §1) — no `resolveFlowType` heuristic.
     readonly flowType: FlowTypeEnum;
+    // Optional explicit exit reason for reduce-family intents (M6 W3, ADR 0011 §4). When the
+    // LocalProtectiveMonitor synthesises a CLOSE intent on SL/TP breach, it stamps
+    // `stop_loss` or `take_profit` here so the executor's `exitReasonForIntent` can record
+    // the precise reason on the position row. Strategy-originated closes (signal exit) leave
+    // this undefined; the executor falls back to the action-driven mapping. Engine-internal
+    // field — no shared-contract change.
+    readonly exitReason?: ExitReasonEnum;
 }

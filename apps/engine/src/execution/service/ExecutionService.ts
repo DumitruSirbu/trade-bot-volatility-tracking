@@ -1,11 +1,14 @@
 import {
     ExitReasonEnum,
+    IExchangeOverfillDriftEvent,
     OrderIntentActionEnum,
     OrderPolicyEnum,
     PositionSideEnum,
     PositionSlotEnum,
+    PositionStateEnum,
     PositionStatusEnum,
     ProtectiveOrderTypeEnum,
+    QtyAdjustmentReasonEnum,
     StrategyDirectionEnum,
     TransactionTypeEnum,
 } from '@bot/shared';
@@ -14,6 +17,7 @@ import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 
 import {
     AuditFailureReasonEnum,
+    EXCHANGE_OVERFILL_DRIFT_EVENT,
     ORDER_AUDIT_PERSIST_FAILED_EVENT,
     ORDER_INTENT_APPROVED_EVENT,
     ORDER_INTENT_EXPIRED_EVENT,
@@ -31,6 +35,8 @@ import { EXCHANGE_CLIENT, IExchangeClient } from '../../exchange/interface';
 import { PositionEntity } from '../../position/entity';
 import { PositionRepository } from '../../position/repository/PositionRepository';
 import { TransactionRepository } from '../../position/repository/TransactionRepository';
+import { PositionService } from '../../position/service';
+import { computeFillCashflow } from '../../position/util/pnlMath';
 import { IOrderIntent, IOrderIntentApprovedEvent } from '../../risk/interface';
 import { RiskGateService } from '../../risk/service';
 import { StrategyVersionRepository } from '../../strategy/repository/StrategyVersionRepository';
@@ -85,6 +91,7 @@ export class ExecutionService {
         private readonly protectiveAttacher: ProtectiveOrderAttacher,
         private readonly localProtectiveMonitor: LocalProtectiveMonitor,
         private readonly positions: PositionRepository,
+        private readonly positionService: PositionService,
         private readonly transactions: TransactionRepository,
         private readonly strategyVersions: StrategyVersionRepository,
         private readonly riskGate: RiskGateService,
@@ -104,6 +111,12 @@ export class ExecutionService {
     }
 
     private async handleApproved(event: IOrderIntentApprovedEvent): Promise<void> {
+        // M6 R1.3.1c — single boundary capture for the `openedAt` stamp of any new
+        // position row inserted by this intent (createPositionFromFill below). The
+        // event itself does not carry a timestamp today; capturing once here keeps
+        // the value stable across the submit-state-machine lifetime of one intent
+        // (deterministic from the test harness's frozen-clock perspective).
+        const nowMs = Date.now();
         const direction = await this.resolveDirection(event.strategyVersionId);
         const plan = this.policyRouter.plan({
             intent: event.intent,
@@ -131,7 +144,7 @@ export class ExecutionService {
             return;
         }
 
-        await this.executeLive(event, plan);
+        await this.executeLive(event, plan, nowMs);
     }
 
     // Dry-run path: records a zero-qty audit row in `transactions` (now possible per ADR 0007
@@ -153,7 +166,7 @@ export class ExecutionService {
         this.events.emit(ORDER_INTENT_EXPIRED_EVENT, { eventId: event.intent.eventId, reservationId: event.reservationId, reason: 'dry_run' });
     }
 
-    private async executeLive(event: IOrderIntentApprovedEvent, plan: IOrderPlanInternal): Promise<void> {
+    private async executeLive(event: IOrderIntentApprovedEvent, plan: IOrderPlanInternal, nowMs: number): Promise<void> {
         const submitResult = await this.runSubmitStateMachine(event, plan);
 
         // Branch on intent action class BEFORE routing into the open/add path. A reduce-family
@@ -180,7 +193,7 @@ export class ExecutionService {
             return;
         }
 
-        await this.openOrAddPositionAndAttachProtection(event, plan, submitResult);
+        await this.openOrAddPositionAndAttachProtection(event, plan, submitResult, nowMs);
         this.fillAccumulator.forget(submitResult.clientOrderId);
     }
 
@@ -221,10 +234,14 @@ export class ExecutionService {
 
         // Reduce-family no-fills + partial-then-cancelled always escalate to M6 reconciliation
         // regardless of submit state (round-3 must-fix #4). Not exiting is worse than slippage.
+        // M6 R2.1.3: stamp positionId so the reconciler can move the row to RECONCILING
+        // (ADR-0010 §1f step 1). Best-effort lookup by (symbol, slot); null when the row is gone.
+        const positionForRecon = await this.positions.findOpenBySymbolAndSlot(event.intent.symbol, event.approvedSlot);
         const reduceEscalation: IOrderIntentUnknownEvent = {
             eventId: event.intent.eventId,
             reservationId: event.reservationId,
             state: submitResult.state,
+            positionId: positionForRecon?.id ?? null,
         };
         this.events.emit(ORDER_INTENT_UNKNOWN_EVENT, reduceEscalation);
 
@@ -257,6 +274,7 @@ export class ExecutionService {
                 reservationId: event.reservationId,
                 state: submitResult.state,
                 reason: 'missing_position',
+                positionId: null,
             };
             this.events.emit(ORDER_INTENT_UNKNOWN_EVENT, missingPositionEvent);
 
@@ -280,8 +298,25 @@ export class ExecutionService {
                 reservationId: event.reservationId,
                 state: submitResult.state,
                 reason: 'drift',
+                positionId: position.id,
             };
             this.events.emit(ORDER_INTENT_UNKNOWN_EVENT, driftEvent);
+
+            // M6 R1.2.3 (ADR 0012 §5c). The exchange filled MORE than we asked for —
+            // the clamp keeps the position-row arithmetic consistent (qty → 0) but
+            // an analytic / alerting consumer needs the precise gap. Emit a dedicated
+            // overfill-drift event with the expected vs. actual qty so M9 alerting
+            // can fire and M8 can attribute the residual.
+            const overfillEvent: IExchangeOverfillDriftEvent = {
+                positionId: position.id,
+                symbol: event.intent.symbol,
+                clientOrderId: submitResult.clientOrderId,
+                expectedQty: position.qty.toFixed(),
+                actualFilledQty: fillSummary.filledQty.toFixed(),
+                clampGapQty: fillSummary.filledQty.minus(position.qty).toFixed(),
+                detectedAtMs: Date.now(),
+            };
+            this.events.emit(EXCHANGE_OVERFILL_DRIFT_EVENT, overfillEvent);
         }
 
         const filledQtyForPnl = isDrift ? position.qty : fillSummary.filledQty;
@@ -292,34 +327,40 @@ export class ExecutionService {
         const isClosingFill = position.qty.lessThanOrEqualTo(fillSummary.filledQty);
         const clampedQty = isClosingFill ? new Money(0) : newQty;
 
-        position.qty = clampedQty;
-
-        // Round-4 #1: when the position is fully closed by this fill, transition the row
-        // to CLOSED with closed_at / exit_reason / realized_pnl stamped, and disarm the
-        // local protective monitor. Emit POSITION_CLOSED_EVENT so M6/M9 can subscribe.
+        // M6 W4b (ADR 0009 §6.1b). The qty mutation routes through PositionService.adjustQty
+        // on the non-closing partial-reduce path so the qty axis has a single writer and
+        // emits position.qty.adjusted for observability. The CLOSING-fill path keeps the
+        // inline qty=0 save because the subsequent finalize bundles close-side fields
+        // (closedAt / exitPrice / exitReason / realizedPnl) into the SAME UPDATE as the
+        // CLOSED state transition (ADR 0012 §5 + ADR 0009 §6.1 dual-write atomicity).
         if (isClosingFill) {
-            const exitReason = this.exitReasonForIntent(event.intent.intentAction);
-            const realizedPnl = this.computeRealizedPnl(position.side, position.entryPrice, fillSummary.avgFillPrice, filledQtyForPnl, fillSummary.feeTotal);
-
-            position.status = PositionStatusEnum.CLOSED;
-            position.closedAt = new Date();
-            position.exitPrice = fillSummary.avgFillPrice;
-            position.exitReason = exitReason;
-            position.realizedPnl = realizedPnl;
+            position.qty = clampedQty;
 
             // Round-5 #2 (ADR 0008 §2, symmetric disarm). disarm is an in-memory map write
-            // that cannot fail — fire it immediately after the in-memory CLOSED mutation
-            // and BEFORE any awaited I/O (save / recordTerminal / emit). Closes the window
+            // that cannot fail — fire it immediately after the in-memory qty=0 stamp and
+            // BEFORE any awaited I/O (save / recordTerminal / finalize). Closes the window
             // where the monitor could observe a stale OPEN snapshot and fire a breach on a
             // position that is logically already closed.
             this.localProtectiveMonitor.disarm(position.id);
+
+            await this.positions.save(position);
+        } else {
+            // Partial-reduce qty mutation: single-axis update routed through PositionService.
+            await this.positionService.adjustQty(position.id, clampedQty, QtyAdjustmentReasonEnum.LATE_FILL_RESOLVED, { nowMs: Date.now() });
         }
 
-        await this.positions.save(position);
+        // Write the reduce/close transaction row FIRST so finalizeRealizedPnl can
+        // aggregate the per-fill cashflow into realizedPnl (ADR 0012 §5). On non-closing
+        // partial reduces the row's cashflow is recorded too — M8 reads SUM(cashflow)
+        // across the position's lifetime, partial reduces included.
+        const txType = this.intentActionToTransactionType(event.intent.intentAction);
+        const cashflow = this.isReduceOrCloseType(txType)
+            ? computeFillCashflow(position.side, position.entryPrice, fillSummary.avgFillPrice, filledQtyForPnl)
+            : new Money(0);
 
         await this.transactions.recordTerminal({
             positionId: position.id,
-            type: this.intentActionToTransactionType(event.intent.intentAction),
+            type: txType,
             side: event.intent.tradeSide,
             price: fillSummary.avgFillPrice,
             // Round-5 #1: on drift the audit ledger row must reflect the qty actually
@@ -328,24 +369,42 @@ export class ExecutionService {
             // exchange qty stays in the ORDER_INTENT_UNKNOWN_EVENT payload above for M6.
             qty: filledQtyForPnl,
             fee: fillSummary.feeTotal,
+            cashflow,
             clientOrderId: submitResult.clientOrderId,
             exchangeOrderId: submitResult.exchangeOrderId,
         });
 
         if (isClosingFill) {
+            const nowMs = Date.now();
+            const exitReason = this.exitReasonForIntent(event.intent.intentAction, event.intent.exitReason);
+
+            await this.positionService.transition(position.id, PositionStateEnum.CLOSING, {
+                nowMs,
+                eventClass: 'execution.reduce.fill.terminal',
+            });
+
+            // finalize does CLOSING -> CLOSED with realizedPnl + exitPrice + closedAt
+            // bundled into a single atomic UPDATE per ADR 0012 §5. realizedPnl is the
+            // aggregate of (SUM cashflow over reduce/close) - (SUM fee over non-funding)
+            // + (SUM cashflow over funding) — fee-net AND funding-net by construction.
+            const finalized = await this.positionService.finalizeRealizedPnl(position.id, exitReason, {
+                nowMs,
+                eventClass: 'execution.reduce.fill.terminal',
+            });
+
             const closedEvent: IPositionClosedEvent = {
-                positionId: position.id,
-                symbol: position.symbol,
-                side: position.side,
-                exitReason: position.exitReason,
-                realizedPnl: position.realizedPnl,
-                closedAt: position.closedAt,
+                positionId: finalized.id,
+                symbol: finalized.symbol,
+                side: finalized.side,
+                exitReason: finalized.exitReason,
+                realizedPnl: finalized.realizedPnl ?? null,
+                closedAt: finalized.closedAt ?? new Date(nowMs),
             };
             this.events.emit(POSITION_CLOSED_EVENT, closedEvent);
 
             this.logger.log(
-                `position ${position.id} ${position.symbol} CLOSED exitReason=${position.exitReason ?? 'n/a'} ` +
-                    `realizedPnl=${position.realizedPnl === null || position.realizedPnl === undefined ? 'n/a' : formatMoney(position.realizedPnl)} ` +
+                `position ${position.id} ${position.symbol} CLOSED exitReason=${finalized.exitReason ?? 'n/a'} ` +
+                    `realizedPnl=${finalized.realizedPnl === null || finalized.realizedPnl === undefined ? 'n/a' : formatMoney(finalized.realizedPnl)} ` +
                     `exit=${formatMoney(fillSummary.avgFillPrice)}`,
             );
 
@@ -358,21 +417,34 @@ export class ExecutionService {
         );
     }
 
-    // Round-4 #1: REDUCE that zeros → SIGNAL; CLOSE → SIGNAL; FLATTEN → KILL_SWITCH.
-    private exitReasonForIntent(action: OrderIntentActionEnum): ExitReasonEnum {
+    // ADR 0012 §1: cashflow is only populated for reduce/close fills (open/add are
+    // exposure increases, not cash movements). The funding case has its own write
+    // site in PositionService.recordFunding.
+    private isReduceOrCloseType(txType: TransactionTypeEnum): boolean {
+        return txType === TransactionTypeEnum.REDUCE || txType === TransactionTypeEnum.CLOSE;
+    }
+
+    // Exit reason mapping. Precedence (top wins):
+    //   1. Explicit intent.exitReason (ADR 0011 §4) — W3 LocalProtectiveMonitor stamps
+    //      STOP_LOSS / TAKE_PROFIT on breach-synthesized CLOSE intents. Strategy-
+    //      originated closes leave it undefined and fall through to (2)/(3).
+    //   2. M6 R1.2.1 (ADR 0012 §5b table) — FLATTEN action's reason is
+    //      halt-conditional. Operator-issued flatten (no kill-switch) records as
+    //      MANUAL; flatten triggered while HaltFlagService.isHalted() is true
+    //      (e.g., model-divergence kill switch from ADR 0004 §6) records as
+    //      KILL_SWITCH. The halt primitive is the canonical "this close happened
+    //      because the operator/system stopped us" signal.
+    //   3. CLOSE / REDUCE default → SIGNAL (strategy-driven exit).
+    private exitReasonForIntent(action: OrderIntentActionEnum, intentExitReason: ExitReasonEnum | undefined): ExitReasonEnum {
+        if (intentExitReason !== undefined) {
+            return intentExitReason;
+        }
+
         if (action === OrderIntentActionEnum.FLATTEN) {
-            return ExitReasonEnum.KILL_SWITCH;
+            return this.haltFlag.isHalted() ? ExitReasonEnum.KILL_SWITCH : ExitReasonEnum.MANUAL;
         }
 
         return ExitReasonEnum.SIGNAL;
-    }
-
-    // Round-4 #1: realized PnL on close. Long: (exit - entry) * qty - fees.
-    // Short: (entry - exit) * qty - fees. Fees subtracted from gross PnL.
-    private computeRealizedPnl(side: PositionSideEnum, entryPrice: MoneyValue, exitPrice: MoneyValue, qty: MoneyValue, fees: MoneyValue): MoneyValue {
-        const priceDelta = side === PositionSideEnum.LONG ? exitPrice.minus(entryPrice) : entryPrice.minus(exitPrice);
-
-        return priceDelta.times(qty).minus(fees);
     }
 
     // Submit + recover + cancel-on-timeout loop. attemptN advances ONLY on RETRIABLE-class
@@ -723,6 +795,7 @@ export class ExecutionService {
         event: IOrderIntentApprovedEvent,
         plan: IOrderPlanInternal,
         submitResult: ILiveSubmitResult,
+        nowMs: number,
     ): Promise<void> {
         const fillSummary = submitResult.fillSummary;
 
@@ -732,7 +805,7 @@ export class ExecutionService {
 
         const isOpenIntent = event.intent.intentAction === OrderIntentActionEnum.OPEN;
         const positionRow = isOpenIntent
-            ? await this.createPositionFromFill(event, plan, fillSummary)
+            ? await this.createPositionFromFill(event, plan, fillSummary, nowMs)
             : await this.applyAddToExistingPosition(event, fillSummary);
 
         // Step ordering per ADR 0008 §2 (round-3 must-fix #2 + round-4 #2): arm the LOCAL
@@ -750,6 +823,7 @@ export class ExecutionService {
             this.localProtectiveMonitor.arm({
                 positionId: positionRow.id,
                 symbol: positionRow.symbol,
+                side: event.intent.tradeSide,
                 stopLossPrice: event.clampedExit.stopLossPrice,
                 takeProfitPrice: event.clampedExit.takeProfitPrice,
             });
@@ -780,6 +854,22 @@ export class ExecutionService {
 
         await this.applyProtectiveAttachResult(positionRow, attachResult, event);
 
+        // M6 W1.5 (ADR 0009 §3 / §4 / §6.1a): entry rows are inserted at PENDING_OPEN
+        // (createPositionFromFill below). The transition to OPEN fires ONLY after the
+        // protective layer has settled — either exchange-side attach acked (monitor
+        // disarmed inside applyProtectiveAttachResult) or local fallback engaged (monitor
+        // remains armed). The §1 state-meanings table is the contract: a position must
+        // never be observable in OPEN without protection. The eventClass is set per
+        // ADR 0009 §4 row 2: protective.attached on exchange-side, protective.local_fallback_engaged
+        // on fallback. The single transition() write is atomic on both columns (state +
+        // status) per ADR 0009 §1 / §6.1 dual-write contract.
+        const transitionEventClass =
+            attachResult.protectiveOrderType === ProtectiveOrderTypeEnum.EXCHANGE_SIDE ? 'protective.attached' : 'protective.local_fallback_engaged';
+        await this.positionService.transition(positionRow.id, PositionStateEnum.OPEN, {
+            nowMs: Date.now(),
+            eventClass: transitionEventClass,
+        });
+
         this.confirmReservationSafely(event.reservationId);
         this.events.emit(POSITION_OPENED_EVENT, { positionId: positionRow.id, symbol: positionRow.symbol });
     }
@@ -794,6 +884,9 @@ export class ExecutionService {
         if (positionRow === null) {
             this.logger.error(`ADD on ${event.intent.symbol} but no open position - falling back to creating one`);
 
+            // Fallback path — no nowMs is plumbed here (this is a recovery branch from
+            // a corrupted ADD that couldn't find its parent OPEN; the row gets created
+            // fresh). Capture once at the boundary, same pattern as handleApproved.
             return this.createPositionFromFill(
                 event,
                 {
@@ -804,6 +897,7 @@ export class ExecutionService {
                     reduceOnly: false,
                 },
                 fillSummary,
+                Date.now(),
             );
         }
 
@@ -843,20 +937,40 @@ export class ExecutionService {
         );
     }
 
-    private async createPositionFromFill(event: IOrderIntentApprovedEvent, plan: IOrderPlanInternal, fillSummary: IFillSummary): Promise<PositionEntity> {
+    // M6 R1.3.1c — `nowMs` is injected (was `new Date()`). The plumbed value is
+    // captured once at the `handleApproved` boundary so the `openedAt` stamp is
+    // deterministic across the submit lifetime of one intent.
+    private async createPositionFromFill(
+        event: IOrderIntentApprovedEvent,
+        plan: IOrderPlanInternal,
+        fillSummary: IFillSummary,
+        nowMs: number,
+    ): Promise<PositionEntity> {
         const stopDistance = event.clampedExit.stopLossPrice.minus(fillSummary.avgFillPrice).abs();
         const stopDistancePct = stopDistance.dividedBy(fillSummary.avgFillPrice).times(100);
 
+        // M6 W1.5 (ADR 0009 §6.1a + §1 dual-write): new rows enter at PENDING_OPEN.
+        // `state` and `status` (the deprecated alias projected per §1's table:
+        // pending_open → status='open') travel together in a single INSERT here — the
+        // repository's `createOpen` builder issues one TypeORM `save`, satisfying the
+        // §6.1 atomic single-write contract. The position remains in PENDING_OPEN until
+        // the protective layer is confirmed, at which point openOrAddPositionAndAttachProtection
+        // calls PositionService.transition(OPEN, ...) above. The local monitor is armed
+        // in the caller BEFORE this returns to the protective-attach step, so a crash in
+        // the PENDING_OPEN window still leaves the row protected via the local monitor
+        // arm (ADR 0008 §2 synchronous-arm sequence; W8 boot recovery picks up any
+        // PENDING_OPEN rows left after restart).
         return this.positions.createOpen({
             symbol: event.intent.symbol,
             strategyVersionId: event.strategyVersionId,
             side: event.intent.tradeSide,
+            state: PositionStateEnum.PENDING_OPEN,
             status: PositionStatusEnum.OPEN,
             leverage: event.approvedSizing.leverage,
             entryPrice: fillSummary.avgFillPrice,
             qty: fillSummary.filledQty,
             entryNotional: fillSummary.filledNotional,
-            openedAt: new Date(),
+            openedAt: new Date(nowMs),
             coinTier: event.intent.coinTier,
             positionSlot: event.approvedSlot,
             correlationMode: event.intent.correlationMode,
@@ -907,7 +1021,23 @@ export class ExecutionService {
         if (submitResult.state === SubmitStateEnum.ABORTED || submitResult.state === SubmitStateEnum.REJECTED) {
             this.events.emit(ORDER_INTENT_FAILED_EVENT, { eventId: event.intent.eventId, reservationId: event.reservationId, state: submitResult.state });
         } else if (submitResult.state === SubmitStateEnum.RECONCILE_REQUIRED) {
-            this.events.emit(ORDER_INTENT_UNKNOWN_EVENT, { eventId: event.intent.eventId, reservationId: event.reservationId, state: submitResult.state });
+            // OPEN/ADD escalation — no position row exists yet (the entry never filled).
+            // positionId is null so the reconciler skips the transition step; the
+            // exposure-reservation TTL sweep is the authoritative cleanup path here.
+            //
+            // M6 R3.1.2 (doc-only). If the OPEN actually filled silently on the
+            // exchange (network glitch, ack lost), the next reconciliation tick
+            // observes the foreign exchange position via case-(a)
+            // `EXCHANGE_NOT_IN_DB` and either adopts it (dev/test default) or
+            // flattens it (live policy). The null-positionId path here is
+            // intentionally a no-op for the row-state axis; the case-(a) sweep
+            // is the recovery contract for silently-filled OPEN/ADD entries.
+            this.events.emit(ORDER_INTENT_UNKNOWN_EVENT, {
+                eventId: event.intent.eventId,
+                reservationId: event.reservationId,
+                state: submitResult.state,
+                positionId: null,
+            });
         } else {
             this.events.emit(ORDER_INTENT_EXPIRED_EVENT, { eventId: event.intent.eventId, reservationId: event.reservationId, state: submitResult.state });
         }

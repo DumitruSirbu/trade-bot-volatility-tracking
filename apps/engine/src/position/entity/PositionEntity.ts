@@ -4,6 +4,7 @@ import {
     ExitReasonEnum,
     PositionSideEnum,
     PositionSlotEnum,
+    PositionStateEnum,
     ProtectiveOrderTypeEnum,
     VwapAnchorTypeEnum,
 } from '@bot/shared';
@@ -37,8 +38,24 @@ export class PositionEntity {
     @Column({ name: 'side', type: 'varchar' })
     side!: PositionSideEnum;
 
+    // Deprecated alias for M6 (ADR 0009 §1). The legacy two-value status column is
+    // preserved one milestone so M2-era reads still resolve; writers go through
+    // PositionService.transition() and stamp BOTH columns until M7 removes status.
     @Column({ name: 'status', type: 'varchar' })
     status!: string;
+
+    // Authoritative state column (ADR 0009 §1). PositionStateEnum domain; backfilled to
+    // 'open' for pre-M6 rows by migration 20260525010000. The DB default keeps inserts
+    // from older code paths legal during the M6 grace window; new rows are stamped to
+    // PENDING_OPEN by PositionService.createFromFill (ADR 0009 §4).
+    @Column({ name: 'state', type: 'varchar', default: PositionStateEnum.OPEN })
+    state!: PositionStateEnum;
+
+    @Column({ name: 'stop_loss_price', type: 'numeric', precision: 38, scale: 18, nullable: true, transformer: decimalColumnTransformer })
+    stopLossPrice?: MoneyValue | null;
+
+    @Column({ name: 'take_profit_price', type: 'numeric', precision: 38, scale: 18, nullable: true, transformer: decimalColumnTransformer })
+    takeProfitPrice?: MoneyValue | null;
 
     @Column({ name: 'leverage', type: 'numeric', precision: 10, scale: 4, transformer: decimalColumnTransformer })
     leverage!: DecimalValue;

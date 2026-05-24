@@ -40,7 +40,12 @@ function makeGate(): { gate: RiskGateService; ledger: ReservationLedger } {
     const ledger = new ReservationLedger();
     const slotManager = new SlotManager();
     const stress = new StressHaltEvaluator();
-    const gate = new RiskGateService(ledger, slotManager, stress);
+    const positions = { findById: jest.fn().mockResolvedValue(null) };
+    const riskState = { findByDate: jest.fn().mockResolvedValue(null), upsertDay: jest.fn() };
+    const events = { emit: jest.fn() };
+    const gate = new RiskGateService(ledger, slotManager, stress, positions as never, riskState as never, events as never);
+    // M6 W8: bypass the boot recovery guard for steady-state gate tests.
+    gate.markRecoveryComplete();
     return { gate, ledger };
 }
 

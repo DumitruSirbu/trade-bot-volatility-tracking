@@ -1,7 +1,7 @@
-import { PositionSlotEnum, PositionStatusEnum } from '@bot/shared';
+import { PositionSlotEnum, PositionStateEnum, PositionStatusEnum, ProtectiveOrderTypeEnum } from '@bot/shared';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { And, DeepPartial, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
+import { And, DeepPartial, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
 
 import { BaseRepository } from '../../common/repository/BaseRepository';
 import { PositionEntity } from '../entity';
@@ -68,5 +68,29 @@ export class PositionRepository extends BaseRepository<PositionEntity> {
         const entity = this.create({ ...entityLike, status: PositionStatusEnum.OPEN });
 
         return this.repository.save(entity);
+    }
+
+    // M6 R1.2.5 (ADR 0010 §1e + ADR 0009 §6.1). Conditional column-scoped UPDATE
+    // for case-(e) PROTECTIVE_ORDER_DRIFT. The state guard in the WHERE clause
+    // prevents the dual-write race ReconciliationService had with a concurrent
+    // state transition: the prior `position.protectiveOrderType = ...; save(...)`
+    // sequence read the row at top-of-runPass, mutated, then `save` issued a
+    // full-row UPDATE that could clobber a concurrent state change. This UPDATE
+    // touches only `protective_order_type` (one column) AND requires the row's
+    // current state to still be in `acceptableStates` — Postgres atomically
+    // matches the WHERE-row and updates the single column.
+    //
+    // Returns the affected-row count: 1 → mutation applied, 0 → row state moved
+    // (caller logs + skips re-arm). Acceptable states for case-(e): the set the
+    // reconciler considers "still alive and protected" — PENDING_OPEN / OPEN /
+    // CLOSING. RECONCILING / MANUAL_ADOPTED_UNMANAGED / CLOSED block the update.
+    async updateProtectiveOrderTypeIfState(
+        positionId: number,
+        nextType: ProtectiveOrderTypeEnum,
+        acceptableStates: readonly PositionStateEnum[],
+    ): Promise<number> {
+        const result = await this.repository.update({ id: positionId, state: In(acceptableStates as PositionStateEnum[]) }, { protectiveOrderType: nextType });
+
+        return result.affected ?? 0;
     }
 }

@@ -14,6 +14,7 @@ import { Money, MoneyValue, parseMoney } from '../../common/utils/money';
 import { COIN_TIER_BY_MAX_RANK, STABLECOIN_BASE_SYMBOLS, UNIVERSE_MAX_SYMBOLS, UNIVERSE_MIN_QUOTE_VOLUME_USDT, UNIVERSE_REFRESH_CRON } from '../const';
 import { EXCHANGE_CLIENT, IExchangeClient, IMarketInfo, ITickerSnapshot } from '../../exchange/interface';
 import { IInstrumentRefreshedEvent, IUniverseEntry, IUniverseTransition } from '../interface';
+import { SubscriptionRetainer } from './SubscriptionRetainer';
 
 // Owns the tradable universe: filters tradable USDT-M perps, ranks by 24h quote
 // volume above a liquidity floor, keeps the top N, assigns coin tiers, and emits
@@ -34,6 +35,7 @@ export class UniverseService {
     constructor(
         @Inject(EXCHANGE_CLIENT) private readonly exchangeClient: IExchangeClient,
         private readonly eventEmitter: EventEmitter2,
+        private readonly subscriptionRetainer: SubscriptionRetainer,
     ) {}
 
     getEntries(): IUniverseEntry[] {
@@ -187,11 +189,28 @@ export class UniverseService {
 
     private emitLeavers(nextSymbols: Set<string>): void {
         for (const [symbol, entry] of this.entries) {
-            if (!nextSymbols.has(symbol)) {
-                this.entries.delete(symbol);
-                this.emitInstrumentNonTradable(entry);
-                this.emitLeft(entry);
+            if (nextSymbols.has(symbol)) {
+                continue;
             }
+
+            // M6 W2 (ADR 0011 §5): held-symbol invariant. If the retainer is
+            // holding this symbol (open position, pending reconcile, foreign
+            // adoption, or post-loss cooldown) it must keep its subscription
+            // even though it dropped out of the top-300. We skip the leave
+            // emission entirely — the membership entry stays in `this.entries`
+            // so downstream consumers (price tape, monitor, PnL) keep treating
+            // it as live. When the retainer releases (e.g. position closes),
+            // the next refresh will naturally evict the symbol if it is still
+            // out of the top-300.
+            if (this.subscriptionRetainer.isRetained(symbol)) {
+                this.logger.debug(`Universe LEAVE skipped (retainer holds) ${symbol}`);
+
+                continue;
+            }
+
+            this.entries.delete(symbol);
+            this.emitInstrumentNonTradable(entry);
+            this.emitLeft(entry);
         }
     }
 

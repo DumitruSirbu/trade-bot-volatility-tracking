@@ -1,5 +1,6 @@
 import {
     CoinTierEnum,
+    CorrelationModeEnum,
     DeviationSideEnum,
     FlowTypeEnum,
     IMarketSnapshot,
@@ -107,7 +108,7 @@ export function buildSnapshot(overrides: Partial<IMarketSnapshot> = {}): IMarket
         estimated_slippage_pct: 0.1,
         coin_tier: CoinTierEnum.TIER_1,
         coin_volume_rank: 1,
-        correlation_mode: 'correlated',
+        correlation_mode: CorrelationModeEnum.CORRELATED,
         signal_score: 65,
         position_slot: PositionSlotEnum.A,
         active_positions_count: 0,

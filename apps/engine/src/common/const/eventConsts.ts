@@ -33,6 +33,15 @@ export const ORDER_INTENT_EXPIRED_EVENT = 'risk.orderIntent.expired';
 export const ORDER_INTENT_FAILED_EVENT = 'risk.orderIntent.failed';
 export const ORDER_INTENT_UNKNOWN_EVENT = 'risk.orderIntent.unknown';
 
+// M6 R1.2.3 (ADR 0012 §5c). Emitted by ExecutionService.applyReduceFillToPosition
+// when exchange-reported `fillSummary.filledQty` exceeds the local position qty.
+// Architect decision: keep the clamp (position arithmetic stays consistent) AND
+// emit a dedicated drift event so M9 alerting + M8 analytics can isolate
+// "exchange filled more than we asked for" — a distinct signal from the generic
+// ORDER_INTENT_UNKNOWN_EVENT drift. Payload: IExchangeOverfillDriftEvent from
+// `@bot/shared`.
+export const EXCHANGE_OVERFILL_DRIFT_EVENT = 'execution.exchange.overfillDrift';
+
 // Execution lifecycle (ADR 0008 §3). On a protective-attach failure, ExecutionService falls
 // back to local-only protection and emits this; M6's local protective monitor (next milestone)
 // subscribes. M5 only emits + logs — the monitor itself ships in M6.

@@ -7,3 +7,4 @@ export * from './DeviationCalibrationService';
 export * from './MarketDataService';
 export * from './MarketDataPersistenceListener';
 export * from './TickAggregatePartitionService';
+export * from './SubscriptionRetainer';

@@ -5,6 +5,11 @@
 
 **Depends on:** M2 (sub-minute + 5m candle data + universe history), M3 (strategy interface), M4 (risk rules).
 
+## Pre-W1 carry-over tasks (W0)
+
+- **Drop `positions.status` after grace window.** M6 W1 shipped the position state machine as a two-column form: `positions.state` (`PositionStateEnum`, six values) became authoritative; `positions.status` (`PositionStatusEnum ∈ {open, closed}`) was kept as a deprecated dual-written alias for the M6 → M7 grace window. Per ADR-0009 §1 (revised post-W1): (1) verify zero readers remain on `positions.status` via codebase grep + a read-site lint that fails on `status` access; (2) drop migration `<timestamp>-DropPositionsStatusLegacyColumn.ts`; (3) `bot-shared-maintainer` removes the `PositionStatusEnum` export. If readers remain, slip this task forward and document.
+  - *Output:* the legacy column is gone, no reader compiles against it, only `state` is canonical.
+
 ## Tasks
 
 - **Replay at live granularity.** Feed the strategy the **same 5-min closed-bar data it consumes live**, reconstructing the full indicator state (VWAP/σ bands, ATR, ADX, RSI, volume ratio, idiosyncrasy score, regime label) from stored candles so triggers reproduce identically. Reuse the live `Strategy` code (no duplication). State the accepted fidelity limit.

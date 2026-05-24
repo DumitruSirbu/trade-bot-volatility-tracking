@@ -21,4 +21,14 @@ export class AccountSnapshotEntity {
 
     @Column({ name: 'unrealized_pnl', type: 'numeric', precision: 38, scale: 8, transformer: decimalColumnTransformer })
     unrealizedPnl!: MoneyValue;
+
+    // ADR 0012 §6: unrealized PnL split into the funding-accrual and price-driven
+    // components so the dashboard / backtest harness can attribute equity drift to
+    // each source independently. Pre-M6 rows backfilled to 0 by migration 20260525010000;
+    // the live writer ships in W5/W7.
+    @Column({ name: 'unrealized_pnl_funding', type: 'numeric', precision: 38, scale: 8, default: '0', transformer: decimalColumnTransformer })
+    unrealizedPnlFunding!: MoneyValue;
+
+    @Column({ name: 'unrealized_pnl_price', type: 'numeric', precision: 38, scale: 8, default: '0', transformer: decimalColumnTransformer })
+    unrealizedPnlPrice!: MoneyValue;
 }

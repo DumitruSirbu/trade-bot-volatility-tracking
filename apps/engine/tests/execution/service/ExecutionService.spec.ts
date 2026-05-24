@@ -68,7 +68,7 @@ function makeService(
         }),
     } as unknown as OrderPolicyRouter;
 
-    const localProtectiveMonitor = new LocalProtectiveMonitor();
+    const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
     const haltFlag = new HaltFlagService();
     const exchangeClient = {
         watchOrderBook: jest.fn().mockResolvedValue({ bids: [{ price: '30000' }], asks: [{ price: '30001' }] }),
@@ -125,6 +125,10 @@ function makeService(
         attach: jest.fn().mockResolvedValue(attachResult),
     } as unknown as ProtectiveOrderAttacher;
 
+    const positionService = {
+        transition: jest.fn().mockImplementation(async () => positionRow),
+    } as unknown as import('../../../src/position/service').PositionService;
+
     const service = new ExecutionService(
         appConfig,
         policyRouter,
@@ -134,6 +138,7 @@ function makeService(
         protectiveAttacher,
         localProtectiveMonitor,
         positions,
+        positionService,
         transactions,
         strategyVersions,
         riskGate,

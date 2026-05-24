@@ -207,3 +207,11 @@ plan that owns the resolution.
   caps live as operator-level config in `executionConsts`/`riskConsts`, not in
   `strategy_versions.params`. Decision pending main session if any need
   per-version-comparability.
+- **`positions.status` legacy column carry-over** (ADR 0009 §1 revised post-W1).
+  M6 W1 shipped the position state machine as two columns:
+  `positions.state` (`PositionStateEnum`, six values, authoritative) +
+  `positions.status` (`PositionStatusEnum ∈ {open, closed}`, dual-written
+  deprecated alias). Drop is named as the **M7 W0 task** "drop
+  `positions.status` after grace window." If M7 lands before every reader
+  migrates from `status` → `state`, the drop slips forward; tracked on the
+  M7 plan.

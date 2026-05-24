@@ -1,7 +1,9 @@
+import { TransactionTypeEnum } from '@bot/shared';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DeepPartial, QueryFailedError, Repository } from 'typeorm';
 
+import { POSTGRES_UNIQUE_VIOLATION_SQLSTATE } from '../../common/const';
 import { BaseRepository } from '../../common/repository/BaseRepository';
 import { TransactionEntity } from '../entity';
 
@@ -25,6 +27,31 @@ export class TransactionRepository extends BaseRepository<TransactionEntity> {
 
     async findByClientOrderId(clientOrderId: string): Promise<TransactionEntity | null> {
         return this.repository.findOne({ where: { clientOrderId } });
+    }
+
+    // M6 R1.2.4 (ADR 0010 §1f). The most recent transactions row for a position,
+    // ordered by `createdAt DESC` — case-(f) UNKNOWN_INTENT_OUTCOME re-queries the
+    // exchange by this row's `clientOrderId`. Returns null when no transactions
+    // exist for the position (defensive — a non-closed row with zero transactions
+    // is pathological but possible at the pending_open boundary; case-(f) skips
+    // with a warn log).
+    async findLatestByPositionId(positionId: number): Promise<TransactionEntity | null> {
+        return this.repository.findOne({
+            where: { positionId },
+            order: { createdAt: 'DESC' },
+        });
+    }
+
+    // M6 W5 (ADR 0012 §2). Returns the most recent funding row for a position so
+    // ReconciliationService can floor its `fetchFundingHistory(sinceMs)` call at
+    // the last-known settlement time + 1ms — every poll therefore only pulls rows
+    // the bot has not seen yet. Returns null when the position has no funding rows
+    // yet (first poll after open: caller uses the position's `openedAt` as the floor).
+    async findLatestFundingByPosition(positionId: number): Promise<TransactionEntity | null> {
+        return this.repository.findOne({
+            where: { positionId, type: TransactionTypeEnum.FUNDING },
+            order: { createdAt: 'DESC' },
+        });
     }
 
     // M5 idempotent insert: a duplicate (clientOrderId or exchangeOrderId) raises the unique-
@@ -61,6 +88,6 @@ export class TransactionRepository extends BaseRepository<TransactionEntity> {
 
         const driverError = (cause as QueryFailedError & { driverError?: { code?: string } }).driverError;
 
-        return driverError?.code === '23505';
+        return driverError?.code === POSTGRES_UNIQUE_VIOLATION_SQLSTATE;
     }
 }

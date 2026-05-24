@@ -2,10 +2,13 @@ import {
     IBalanceSnapshot,
     ICreateOrderRequest,
     IExchangeOrderSnapshot,
+    IFundingPaymentSnapshot,
     IFundingRateSnapshot,
     IMarketInfo,
     IOpenInterestSnapshot,
+    IOpenOrderSnapshot,
     IOrderBookSnapshot,
+    IPositionSnapshot,
     ITickerSnapshot,
     ITradeSnapshot,
 } from './IExchangeSnapshots';
@@ -53,6 +56,33 @@ export interface IExchangeClient {
     fetchOrderByClientId(symbol: string, clientOrderId: string): Promise<IExchangeOrderSnapshot | null>;
 
     cancelOrderByClientId(symbol: string, clientOrderId: string): Promise<IExchangeOrderSnapshot>;
+
+    // --- M6 W4a reconciliation surface (ADR 0010 §2, §7) ---
+    //
+    // Exchange-side truth read by `ReconciliationService` ONLY. Per ADR 0010 §6 reviewer
+    // rule: "No code path calls `exchange.fetchPositions()` or `fetchOpenOrders()` outside
+    // the reconciliation service (other readers consume the in-memory cache). One source of
+    // truth pull per tick."
+    //
+    // `fetchPositions` returns one entry per NON-ZERO `(symbol, side)` pair; zero-qty
+    // positions are filtered at the client boundary so the reconciliation tick never has
+    // to re-filter. `fetchOpenOrders` returns all resting orders across symbols — used
+    // for case (e) protective-drift detection (matching the `-sl` / `-tp` suffix on
+    // `clientOrderId`).
+    fetchPositions(): Promise<readonly IPositionSnapshot[]>;
+
+    fetchOpenOrders(): Promise<readonly IOpenOrderSnapshot[]>;
+
+    // --- M6 W5 funding-history surface (ADR 0012 §2) ---
+    //
+    // Returns FUNDING_FEE income rows for the given `symbol` since the `sinceMs`
+    // boundary (inclusive lower bound; the venue may return rows >= sinceMs). The
+    // reconciliation tick is the ONLY caller; per-symbol filtering keeps the payload
+    // bounded so the 30s cadence does not pull the full account history each tick.
+    // Failures bubble up as ExchangeRequestException (callers swallow per-tick errors
+    // and retry on the next sweep — funding ingestion must NOT cascade into the main
+    // strategy loop).
+    fetchFundingHistory(symbol: string, sinceMs: number): Promise<readonly IFundingPaymentSnapshot[]>;
 
     // Releases the underlying socket(s); called on shutdown.
     close(): Promise<void>;

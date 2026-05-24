@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, IsNull, QueryFailedError, Repository } from 'typeorm';
 
+import { POSTGRES_UNIQUE_VIOLATION_SQLSTATE } from '../../common/const';
 import { BaseRepository } from '../../common/repository/BaseRepository';
 import { UniverseMembershipEntity } from '../entity';
 
@@ -80,6 +81,6 @@ export class UniverseMembershipRepository extends BaseRepository<UniverseMembers
 
         const driverError = (cause as QueryFailedError & { driverError?: { code?: string; constraint?: string } }).driverError;
 
-        return driverError?.code === '23505' && driverError?.constraint === OPEN_MEMBERSHIP_UNIQUE_INDEX;
+        return driverError?.code === POSTGRES_UNIQUE_VIOLATION_SQLSTATE && driverError?.constraint === OPEN_MEMBERSHIP_UNIQUE_INDEX;
     }
 }

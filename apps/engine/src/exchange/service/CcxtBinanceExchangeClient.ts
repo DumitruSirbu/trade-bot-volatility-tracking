@@ -1,6 +1,19 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { pro as ccxtPro } from 'ccxt';
-import type { Balances, FundingRate, MarketInterface, OpenInterest, Order, OrderBook, OrderSide, OrderType, Ticker, Trade } from 'ccxt';
+import type {
+    Balances,
+    FundingHistory,
+    FundingRate,
+    MarketInterface,
+    OpenInterest,
+    Order,
+    OrderBook,
+    OrderSide,
+    OrderType,
+    Position,
+    Ticker,
+    Trade,
+} from 'ccxt';
 
 import { AppConfigService } from '../../config/service';
 import { ENABLE_RATE_LIMIT, ORDER_BOOK_DEPTH_LIMIT, PERPETUAL_SETTLE_CURRENCY } from '../const';
@@ -11,11 +24,14 @@ import {
     ICreateOrderRequest,
     IExchangeClient,
     IExchangeOrderSnapshot,
+    IFundingPaymentSnapshot,
     IFundingRateSnapshot,
     IMarketInfo,
     IOpenInterestSnapshot,
+    IOpenOrderSnapshot,
     IOrderBookLevel,
     IOrderBookSnapshot,
+    IPositionSnapshot,
     ITickerSnapshot,
     ITradeSnapshot,
 } from '../interface';
@@ -169,6 +185,37 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
         return name === 'OrderNotFound';
     }
 
+    // M6 W4a (ADR 0010 §2 step 1, §7): exchange-side truth read by ReconciliationService.
+    // ccxt's `fetchPositions` returns one entry per `(symbol, positionSide)` with `contracts`
+    // possibly zero (some venues report all hedged-mode slots even when flat). We filter
+    // zero-qty entries at the boundary so the reconciliation tick never has to.
+    async fetchPositions(): Promise<readonly IPositionSnapshot[]> {
+        const positions = await this.callExchange('fetchPositions', () => this.client.fetchPositions());
+
+        return positions.map((position) => this.toPositionSnapshot(position)).filter((snapshot) => this.isNonZeroPositionQty(snapshot));
+    }
+
+    // M6 W4a (ADR 0010 §2 step 2, §7): all resting orders across symbols. Used by case (e)
+    // PROTECTIVE_ORDER_DRIFT to verify the protective `-sl` / `-tp` orders are still present
+    // for every `protective_order_type=exchange_side` row.
+    // M6 W5 (ADR 0012 §2). Wraps ccxt's `fetchFundingHistory` which over Binance USDT-M
+    // hits `GET /fapi/v1/income?incomeType=FUNDING_FEE`. `sinceMs` is the inclusive
+    // lower bound (the venue may return rows >= sinceMs; the caller dedupes by tranId
+    // upstream). Limit is left to ccxt's default — Binance returns up to 1000 rows per
+    // call, easily covering the 30s reconciliation cadence (1 funding event per 8h
+    // per symbol).
+    async fetchFundingHistory(symbol: string, sinceMs: number): Promise<readonly IFundingPaymentSnapshot[]> {
+        const rows = await this.callExchange(`fetchFundingHistory:${symbol}`, () => this.client.fetchFundingHistory(symbol, sinceMs));
+
+        return rows.map((row) => this.toFundingPaymentSnapshot(row));
+    }
+
+    async fetchOpenOrders(): Promise<readonly IOpenOrderSnapshot[]> {
+        const orders = await this.callExchange('fetchOpenOrders', () => this.client.fetchOpenOrders());
+
+        return orders.map((order) => this.toOpenOrderSnapshot(order));
+    }
+
     async close(): Promise<void> {
         await this.callExchange('close', () => this.client.close());
     }
@@ -303,6 +350,82 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
             price: this.numberToString(trade.price) ?? '0',
             amount: this.numberToString(trade.amount) ?? '0',
             isBuyerAggressor: trade.side === 'buy',
+        };
+    }
+
+    // ccxt `Position` -> engine boundary type. `side` is the ccxt lower-case string
+    // ('long' | 'short'); ReconciliationService normalises to PositionSideEnum. `contracts`
+    // is magnitude (ccxt convention for unified position); we coerce to string at the
+    // boundary so no float math precedes Decimal upstream (consistent with the rest of the
+    // boundary mappers).
+    private toPositionSnapshot(position: Position): IPositionSnapshot {
+        return {
+            symbol: position.symbol,
+            side: position.side ?? '',
+            qty: this.numberToString(position.contracts) ?? '0',
+            entryPrice: this.numberToString(position.entryPrice),
+            markPrice: this.numberToString(position.markPrice),
+            liquidationPrice: this.numberToString(position.liquidationPrice),
+            marginType: position.marginMode ?? null,
+            leverage: this.numberToString(position.leverage),
+            timestampMs: position.timestamp ?? null,
+        };
+    }
+
+    // True iff the snapshot represents real exchange-side exposure. Some venues report
+    // every hedged-mode slot even when flat; the reconciliation tick should only see
+    // positions with non-zero magnitude.
+    private isNonZeroPositionQty(snapshot: IPositionSnapshot): boolean {
+        if (snapshot.qty === '0' || snapshot.qty === '') {
+            return false;
+        }
+
+        return Number(snapshot.qty) !== 0;
+    }
+
+    // ccxt `Order` -> engine boundary type for the W4a OpenOrder snapshot. We only project
+    // the fields the reconciliation service actually reads for case (e) protective drift;
+    // richer Order fields stay accessible via `toOrderSnapshot` for the M5 path.
+    private toOpenOrderSnapshot(order: Order): IOpenOrderSnapshot {
+        // ccxt exposes reduceOnly under `order.reduceOnly` for unified perp orders; some
+        // venues stash it under `info.reduceOnly`. Default `false` is safe: a missing flag
+        // on a protective order is unusual (the bot's own attacher sets it), and the
+        // reconciliation classifier prefers the `clientOrderId` suffix for matching anyway.
+        const reduceOnly = this.resolveReduceOnly(order);
+
+        return {
+            exchangeOrderId: order.id ?? null,
+            clientOrderId: order.clientOrderId ?? null,
+            symbol: order.symbol,
+            status: order.status ?? 'open',
+            type: order.type ?? '',
+            side: order.side ?? '',
+            reduceOnly,
+            timestampMs: order.timestamp ?? null,
+        };
+    }
+
+    private resolveReduceOnly(order: Order): boolean {
+        if (order.reduceOnly === true) {
+            return true;
+        }
+
+        const rawInfo = order.info as { reduceOnly?: boolean } | undefined;
+
+        return rawInfo?.reduceOnly === true;
+    }
+
+    // ccxt `FundingHistory` -> engine boundary type. ccxt's `amount` is a JS number
+    // (signed at the exchange); stringify at the boundary so no float math precedes
+    // Decimal upstream. `id` is the venue's tranId (ccxt unifies the Binance USDT-M
+    // futures `tranId` field). `code` is the settlement asset code ('USDT' for USDT-M).
+    private toFundingPaymentSnapshot(row: FundingHistory): IFundingPaymentSnapshot {
+        return {
+            id: row.id ?? null,
+            symbol: row.symbol,
+            fundingTimeMs: row.timestamp ?? 0,
+            amount: this.numberToString(row.amount) ?? '0',
+            asset: row.code ?? '',
         };
     }
 

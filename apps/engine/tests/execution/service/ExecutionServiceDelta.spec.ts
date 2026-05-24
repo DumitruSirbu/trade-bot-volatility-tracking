@@ -79,7 +79,7 @@ function makeService(
         plan: jest.fn().mockReturnValue(defaultPlan),
     } as unknown as OrderPolicyRouter;
 
-    const localProtectiveMonitor = new LocalProtectiveMonitor();
+    const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
     const haltFlag = new HaltFlagService();
 
     const exchangeClient = {
@@ -144,6 +144,9 @@ function makeService(
         attach: jest.fn().mockResolvedValue(attachResult),
     } as unknown as ProtectiveOrderAttacher;
 
+    const positionService = {
+        transition: jest.fn().mockResolvedValue(undefined),
+    } as unknown as import('../../../src/position/service').PositionService;
     const service = new ExecutionService(
         appConfig,
         policyRouter,
@@ -153,6 +156,7 @@ function makeService(
         protectiveAttacher,
         localProtectiveMonitor,
         positions,
+        positionService,
         transactions,
         strategyVersions,
         riskGate,
@@ -165,6 +169,7 @@ function makeService(
         service,
         submitter,
         positions,
+        positionService,
         transactions,
         riskGate,
         protectiveAttacher,
@@ -421,7 +426,7 @@ describe('ExecutionService — POST_ONLY_MAKER awaitPolicyTimeout: cancel + clas
         // Build service manually so we can control the book (no would-cross for SHORT)
         const appConfig = { isExecutionLive: true } as AppConfigService;
         const policyRouter = { plan: jest.fn().mockReturnValue(makerPlan) } as unknown as OrderPolicyRouter;
-        const localProtectiveMonitor = new LocalProtectiveMonitor();
+        const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
         const haltFlag = new HaltFlagService();
         // bestBid=29999, bestAsk=30001: SHORT wouldCross = limitPrice(30000) <= bestBid(29999) → false
         const exchangeClient = {
@@ -461,6 +466,9 @@ describe('ExecutionService — POST_ONLY_MAKER awaitPolicyTimeout: cancel + clas
         const events = new EventEmitter2();
         const protectiveAttacher = { attach: jest.fn().mockResolvedValue(buildExchangeSideAttachResult()) } as unknown as ProtectiveOrderAttacher;
 
+        const positionService = {
+            transition: jest.fn().mockResolvedValue(undefined),
+        } as unknown as import('../../../src/position/service').PositionService;
         const service = new ExecutionService(
             appConfig,
             policyRouter,
@@ -470,6 +478,7 @@ describe('ExecutionService — POST_ONLY_MAKER awaitPolicyTimeout: cancel + clas
             protectiveAttacher,
             localProtectiveMonitor,
             positions,
+            positionService,
             transactions,
             strategyVersions,
             riskGate,
@@ -507,7 +516,7 @@ describe('ExecutionService — POST_ONLY_MAKER would-cross → CANCELLED, no res
 
         const appConfig = { isExecutionLive: true } as AppConfigService;
         const policyRouter = { plan: jest.fn().mockReturnValue(makerPlan) } as unknown as OrderPolicyRouter;
-        const localProtectiveMonitor = new LocalProtectiveMonitor();
+        const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
         const haltFlag = new HaltFlagService();
 
         // For LONG would-cross: limitPrice (30000) >= bestAsk → return null from resolveLimitPrice
@@ -542,6 +551,9 @@ describe('ExecutionService — POST_ONLY_MAKER would-cross → CANCELLED, no res
         const events = new EventEmitter2();
         const protectiveAttacher = { attach: jest.fn().mockResolvedValue(buildExchangeSideAttachResult()) } as unknown as ProtectiveOrderAttacher;
 
+        const positionService = {
+            transition: jest.fn().mockResolvedValue(undefined),
+        } as unknown as import('../../../src/position/service').PositionService;
         const service = new ExecutionService(
             appConfig,
             policyRouter,
@@ -551,6 +563,7 @@ describe('ExecutionService — POST_ONLY_MAKER would-cross → CANCELLED, no res
             protectiveAttacher,
             localProtectiveMonitor,
             positions,
+            positionService,
             transactions,
             strategyVersions,
             riskGate,
@@ -610,7 +623,7 @@ describe('ExecutionService — ADD path with weighted-average entry', () => {
                 reduceOnly: false,
             }),
         } as unknown as OrderPolicyRouter;
-        const localProtectiveMonitor = new LocalProtectiveMonitor();
+        const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
         const haltFlag = new HaltFlagService();
         const exchangeClient = {
             watchOrderBook: jest.fn().mockResolvedValue({ bids: [{ price: '31000' }], asks: [{ price: '31001' }] }),
@@ -650,6 +663,9 @@ describe('ExecutionService — ADD path with weighted-average entry', () => {
         const events = new EventEmitter2();
         const protectiveAttacher = { attach: jest.fn().mockResolvedValue(buildExchangeSideAttachResult()) } as unknown as ProtectiveOrderAttacher;
 
+        const positionService = {
+            transition: jest.fn().mockResolvedValue(undefined),
+        } as unknown as import('../../../src/position/service').PositionService;
         const service = new ExecutionService(
             appConfig,
             policyRouter,
@@ -659,6 +675,7 @@ describe('ExecutionService — ADD path with weighted-average entry', () => {
             protectiveAttacher,
             localProtectiveMonitor,
             positions,
+            positionService,
             transactions,
             strategyVersions,
             riskGate,
@@ -723,7 +740,7 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
 
         const appConfig = { isExecutionLive: true } as AppConfigService;
         const policyRouter = { plan: jest.fn().mockReturnValue(reducePlan) } as unknown as OrderPolicyRouter;
-        const localProtectiveMonitor = new LocalProtectiveMonitor();
+        const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
         const haltFlag = new HaltFlagService();
         const exchangeClient = { watchOrderBook: jest.fn() } as unknown as import('../../../src/exchange/interface').IExchangeClient;
         const clientOrderIdFactory = new ClientOrderIdFactory();
@@ -769,6 +786,9 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
         const events = new EventEmitter2();
         const protectiveAttacher = { attach: jest.fn().mockResolvedValue(buildExchangeSideAttachResult()) } as unknown as ProtectiveOrderAttacher;
 
+        const positionService = {
+            transition: jest.fn().mockResolvedValue(undefined),
+        } as unknown as import('../../../src/position/service').PositionService;
         const service = new ExecutionService(
             appConfig,
             policyRouter,
@@ -778,6 +798,7 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
             protectiveAttacher,
             localProtectiveMonitor,
             positions,
+            positionService,
             transactions,
             strategyVersions,
             riskGate,
@@ -831,7 +852,7 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
 
         const appConfig = { isExecutionLive: true } as AppConfigService;
         const policyRouter = { plan: jest.fn().mockReturnValue(reducePlan) } as unknown as OrderPolicyRouter;
-        const localProtectiveMonitor = new LocalProtectiveMonitor();
+        const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
         const haltFlag = new HaltFlagService();
         const exchangeClient = { watchOrderBook: jest.fn() } as unknown as import('../../../src/exchange/interface').IExchangeClient;
         const clientOrderIdFactory = new ClientOrderIdFactory();
@@ -871,6 +892,9 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
         const events = new EventEmitter2();
         const protectiveAttacher = { attach: jest.fn().mockResolvedValue(buildExchangeSideAttachResult()) } as unknown as ProtectiveOrderAttacher;
 
+        const positionService = {
+            transition: jest.fn().mockResolvedValue(undefined),
+        } as unknown as import('../../../src/position/service').PositionService;
         const service = new ExecutionService(
             appConfig,
             policyRouter,
@@ -880,6 +904,7 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
             protectiveAttacher,
             localProtectiveMonitor,
             positions,
+            positionService,
             transactions,
             strategyVersions,
             riskGate,

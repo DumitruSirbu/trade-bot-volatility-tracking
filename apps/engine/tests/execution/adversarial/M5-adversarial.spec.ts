@@ -37,15 +37,19 @@
  * Failure routing: any test failure → ARCHITECT ROUTING NEEDED per dev-qa-cycle.md §2.2.
  */
 
-import { OrderIntentActionEnum, OrderPolicyEnum, PositionSideEnum, PositionSlotEnum, PositionStatusEnum, ProtectiveOrderTypeEnum, StrategyDirectionEnum } from '@bot/shared';
+import {
+    OrderIntentActionEnum,
+    OrderPolicyEnum,
+    PositionSideEnum,
+    PositionSlotEnum,
+    PositionStatusEnum,
+    ProtectiveOrderTypeEnum,
+    StrategyDirectionEnum,
+} from '@bot/shared';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
-import {
-    ORDER_INTENT_FAILED_EVENT,
-    ORDER_INTENT_UNKNOWN_EVENT,
-    POSITION_OPENED_EVENT,
-} from '../../../src/common/const';
+import { ORDER_INTENT_FAILED_EVENT, ORDER_INTENT_UNKNOWN_EVENT, POSITION_OPENED_EVENT } from '../../../src/common/const';
 import { HaltFlagService } from '../../../src/common/service/HaltFlagService';
 import { Money, MoneyValue } from '../../../src/common/utils/money';
 import { AppConfigService } from '../../../src/config/service';
@@ -95,7 +99,12 @@ function makeBundle(
     overrides: {
         isExecutionLive?: boolean;
         plan?: { policy: OrderPolicyEnum; limitPrice: MoneyValue; timeoutMs: number; slippageCapPct: MoneyValue; reduceOnly: boolean };
-        positionRow?: ReturnType<typeof buildPositionEntityMock> & { qty?: MoneyValue; entryPrice?: MoneyValue; entryNotional?: MoneyValue; status?: PositionStatusEnum };
+        positionRow?: ReturnType<typeof buildPositionEntityMock> & {
+            qty?: MoneyValue;
+            entryPrice?: MoneyValue;
+            entryNotional?: MoneyValue;
+            status?: PositionStatusEnum;
+        };
         findOpenResult?: unknown;
     } = {},
 ): IServiceBundle {
@@ -110,7 +119,7 @@ function makeBundle(
     };
 
     const policyRouter = { plan: jest.fn().mockReturnValue(defaultPlan) } as unknown as OrderPolicyRouter;
-    const localProtectiveMonitor = new LocalProtectiveMonitor();
+    const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
     const haltFlag = new HaltFlagService();
     const exchangeClient = {
         watchOrderBook: jest.fn().mockResolvedValue({ bids: [{ price: '30000' }], asks: [{ price: '30001' }] }),
@@ -164,6 +173,10 @@ function makeBundle(
         recover: jest.fn().mockResolvedValue(null),
     } as unknown as IServiceBundle['submitter'];
 
+    const positionService = {
+        transition: jest.fn().mockResolvedValue(undefined),
+        adjustQty: jest.fn().mockResolvedValue(undefined),
+    } as unknown as import('../../../src/position/service').PositionService;
     const service = new ExecutionService(
         appConfig,
         policyRouter,
@@ -173,6 +186,7 @@ function makeBundle(
         protectiveAttacher as never,
         localProtectiveMonitor,
         positions as never,
+        positionService as never,
         transactions as never,
         strategyVersions,
         riskGate as never,

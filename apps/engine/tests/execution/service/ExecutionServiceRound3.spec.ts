@@ -29,12 +29,7 @@ import { OrderIntentActionEnum, OrderPolicyEnum, PositionSideEnum, PositionSlotE
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { QueryFailedError } from 'typeorm';
 
-import {
-    ORDER_AUDIT_PERSIST_FAILED_EVENT,
-    ORDER_INTENT_EXPIRED_EVENT,
-    ORDER_INTENT_FAILED_EVENT,
-    ORDER_INTENT_UNKNOWN_EVENT,
-} from '../../../src/common/const';
+import { ORDER_AUDIT_PERSIST_FAILED_EVENT, ORDER_INTENT_EXPIRED_EVENT, ORDER_INTENT_FAILED_EVENT, ORDER_INTENT_UNKNOWN_EVENT } from '../../../src/common/const';
 import { HaltFlagService } from '../../../src/common/service/HaltFlagService';
 import { Money, MoneyValue } from '../../../src/common/utils/money';
 import { AppConfigService } from '../../../src/config/service';
@@ -51,13 +46,7 @@ import { TransactionRepository } from '../../../src/position/repository/Transact
 import { RiskGateService } from '../../../src/risk/service/RiskGateService';
 import { StrategyVersionRepository } from '../../../src/strategy/repository/StrategyVersionRepository';
 import { buildOrderIntent, buildSizing } from '../../risk/support/fixtures';
-import {
-    buildApprovedEvent,
-    buildExchangeClientMock,
-    buildExchangeSideAttachResult,
-    buildOrderSnapshot,
-    buildPositionEntityMock,
-} from '../support/fixtures';
+import { buildApprovedEvent, buildExchangeClientMock, buildExchangeSideAttachResult, buildOrderSnapshot, buildPositionEntityMock } from '../support/fixtures';
 
 jest.useFakeTimers();
 
@@ -77,6 +66,7 @@ interface IServiceDeps {
         findOpenBySymbol: jest.Mock;
         findOpenBySymbolAndSlot: jest.Mock;
     }>;
+    positionService: { transition: jest.Mock; adjustQty: jest.Mock };
     transactions: jest.Mocked<{ recordTerminal: jest.Mock }>;
     strategyVersions: StrategyVersionRepository;
     riskGate: jest.Mocked<{ releaseReservation: jest.Mock; confirmReservation: jest.Mock }>;
@@ -110,7 +100,7 @@ function makeService(
     const plan = overrides.plan ?? buildReducePlan();
     const policyRouter = { plan: jest.fn().mockReturnValue(plan) } as unknown as OrderPolicyRouter;
 
-    const localProtectiveMonitor = new LocalProtectiveMonitor();
+    const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
     const haltFlag = new HaltFlagService();
 
     const exchangeClient = {
@@ -120,7 +110,9 @@ function makeService(
     const clientOrderIdFactory = new ClientOrderIdFactory();
 
     const submitter = {
-        submit: jest.fn().mockResolvedValue({ state: SubmitStateEnum.FILLED, snapshot: buildOrderSnapshot(), rejectClass: null, venueCode: null, venueMessage: null }),
+        submit: jest
+            .fn()
+            .mockResolvedValue({ state: SubmitStateEnum.FILLED, snapshot: buildOrderSnapshot(), rejectClass: null, venueCode: null, venueMessage: null }),
         cancelByClientId: jest.fn().mockResolvedValue(null),
         fetchByClientId: jest.fn().mockResolvedValue(null),
         recover: jest.fn().mockResolvedValue(null),
@@ -136,9 +128,7 @@ function makeService(
     };
     const positionRow = overrides.positionRow ?? defaultPositionRow;
 
-    const findSlotResult = overrides.findOpenBySymbolAndSlotResult !== undefined
-        ? overrides.findOpenBySymbolAndSlotResult
-        : { ...positionRow };
+    const findSlotResult = overrides.findOpenBySymbolAndSlotResult !== undefined ? overrides.findOpenBySymbolAndSlotResult : { ...positionRow };
 
     const positions = {
         createOpen: jest.fn().mockResolvedValue(positionRow),
@@ -166,6 +156,18 @@ function makeService(
         attach: jest.fn().mockResolvedValue(buildExchangeSideAttachResult()),
     } as unknown as ProtectiveOrderAttacher;
 
+    // W4b: applyReduceFillToPosition's partial-reduce path now routes through
+    // PositionService.adjustQty instead of mutating the row inline + saving.
+    const positionService = {
+        transition: jest.fn().mockResolvedValue(undefined),
+        adjustQty: jest.fn().mockImplementation(async (_positionId: number, newQty: import('../../../src/common/utils/money').MoneyValue) => {
+            if (findSlotResult !== null) {
+                (findSlotResult as { qty?: import('../../../src/common/utils/money').MoneyValue }).qty = newQty;
+            }
+
+            return findSlotResult;
+        }),
+    } as unknown as import('../../../src/position/service').PositionService;
     const service = new ExecutionService(
         appConfig,
         policyRouter,
@@ -175,6 +177,7 @@ function makeService(
         protectiveAttacher,
         localProtectiveMonitor,
         positions as never,
+        positionService as never,
         transactions as never,
         strategyVersions,
         riskGate as never,
@@ -183,7 +186,24 @@ function makeService(
         events,
     );
 
-    return { appConfig, policyRouter, clientOrderIdFactory, submitter, fillAccumulator, protectiveAttacher, localProtectiveMonitor, positions, transactions, strategyVersions, riskGate, events, emitSpy, haltFlag, service };
+    return {
+        appConfig,
+        policyRouter,
+        clientOrderIdFactory,
+        submitter,
+        fillAccumulator,
+        protectiveAttacher,
+        localProtectiveMonitor,
+        positions,
+        positionService: positionService as never,
+        transactions,
+        strategyVersions,
+        riskGate,
+        events,
+        emitSpy,
+        haltFlag,
+        service,
+    };
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -231,10 +251,12 @@ describe('ExecutionService — REDUCE budget-exhaust escalates to ORDER_INTENT_U
         await jest.runAllTimersAsync();
         await promise;
 
-        // CHECK: position qty decremented (save called with decreased qty)
-        expect(deps.positions.save).toHaveBeenCalled();
-        const savedArg = (deps.positions.save as jest.Mock).mock.calls[0][0] as { qty: MoneyValue };
-        expect(savedArg.qty.toFixed(3)).toBe('0.007'); // 0.01 - 0.003
+        // CHECK: position qty decremented via PositionService.adjustQty (W4b — partial-reduce
+        // now routes through the service, not a direct positions.save).
+        const adjustQtyMock = deps.positionService.adjustQty as jest.Mock;
+        expect(adjustQtyMock).toHaveBeenCalled();
+        const adjustedQty = adjustQtyMock.mock.calls[0][1] as MoneyValue;
+        expect(adjustedQty.toFixed(3)).toBe('0.007'); // 0.01 - 0.003
 
         // One REDUCE transaction row written
         expect(deps.transactions.recordTerminal).toHaveBeenCalledTimes(1);

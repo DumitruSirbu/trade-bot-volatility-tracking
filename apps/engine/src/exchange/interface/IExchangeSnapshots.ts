@@ -113,3 +113,66 @@ export interface ITradeSnapshot {
     // Aggressor side: 'buy' = taker bought (lifted ask), 'sell' = taker sold.
     isBuyerAggressor: boolean;
 }
+
+// M6 W4a (ADR 0010 §7 — exchange port block): exchange-side position snapshot,
+// returned by `IExchangeClient.fetchPositions()`. One entry per non-zero
+// `(symbol, side)` pair. `side` is the lower-case ccxt string ('long' | 'short');
+// the ReconciliationService normalises to PositionSideEnum at the boundary.
+// Money fields are decimal-as-string at the exchange boundary so no float math
+// precedes Decimal upstream (consistent with the rest of IExchangeSnapshots).
+//
+// `qty` is `|contracts|`: ccxt reports contracts as a signed number for some
+// venues; the ExchangeClient flattens to magnitude and exposes `side` separately,
+// matching how the DB `positions` row stores them (qty is non-negative, side
+// is a separate column).
+export interface IPositionSnapshot {
+    symbol: string;
+    side: string;
+    qty: string;
+    entryPrice: string | null;
+    markPrice: string | null;
+    liquidationPrice: string | null;
+    marginType: string | null;
+    leverage: string | null;
+    timestampMs: number | null;
+}
+
+// M6 W5 (ADR 0012 §2): exchange-side funding-payment snapshot. One entry per
+// `incomeType=FUNDING_FEE` row returned by the venue's income endpoint (ccxt's
+// `fetchFundingHistory`). `amount` is signed at the exchange boundary
+// (positive = received, negative = paid), preserved as decimal-as-string so no
+// float math precedes Decimal upstream. `id` is the exchange's tranId — used as
+// the deterministic dedupe key for the `transactions` `client_order_id` per
+// `funding-${positionId}-${fundingTimeMs}` rule (ADR 0012 §1).
+export interface IFundingPaymentSnapshot {
+    // Exchange tranId (Binance USDT-M futures returns it as a string in `info.tranId`,
+    // ccxt unifies to `id`). Nullable if the venue does not surface one — the engine
+    // falls back to `(positionId, fundingTimeMs)` for dedupe.
+    id: string | null;
+    symbol: string;
+    // 8h settlement boundary (Binance income time). Always present for FUNDING_FEE rows.
+    fundingTimeMs: number;
+    // Signed amount in the venue's settlement asset (USDT for USDT-M). Decimal-as-string.
+    amount: string;
+    // The settlement asset code reported by the venue (e.g. 'USDT'). Informational.
+    asset: string;
+}
+
+// M6 W4a (ADR 0010 §7): exchange-side open-order snapshot for case (e)
+// PROTECTIVE_ORDER_DRIFT detection. Reconciliation reads `clientOrderId` to
+// match against the `-sl` / `-tp` suffix-bearing orders the protective attacher
+// minted (ADR 0008 §1 step 3); `reduceOnly` distinguishes a protective close
+// order from a strategy entry; `type` and `status` are the ccxt lower-case
+// strings ('stop_market' | 'take_profit_market' | 'limit' | ...; 'open' | 'closed'
+// | 'canceled' | ...). Only fields the engine cares about for protective drift
+// detection are required; richer fields stay opt-in for future cases.
+export interface IOpenOrderSnapshot {
+    exchangeOrderId: string | null;
+    clientOrderId: string | null;
+    symbol: string;
+    status: string;
+    type: string;
+    side: string;
+    reduceOnly: boolean;
+    timestampMs: number | null;
+}

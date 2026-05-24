@@ -1,5 +1,6 @@
 import { CoinTierEnum, OrderIntentActionEnum, PositionSideEnum, PositionSlotEnum, RejectReasonEnum, RiskOutcomeEnum } from '@bot/shared';
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import { MS_PER_MINUTE } from '../../common/const';
 import { Money, MoneyValue } from '../../common/utils/money';
@@ -17,11 +18,17 @@ import {
 } from '../const';
 import { ReservationStateEnum } from '../enum';
 import { IClosedPositionView, IExposureReservation, IOpenPositionView, IOrderIntent, IRiskDecision, IRiskGateContext, IRiskStateDay } from '../interface';
+import { PositionRepository } from '../../position/repository/PositionRepository';
+import { RiskStateRepository } from '../repository/RiskStateRepository';
 import { ReservationLedger } from './ReservationLedger';
 import { IOccupiedSlot, SlotAssignment, SlotManager } from './SlotManager';
 import { StressHaltEvaluator } from './StressHaltEvaluator';
 
 const MAX_LEVERAGE_DEC = new Money(MAX_LEVERAGE);
+
+// M6 W4b (ADR 0010 §1c, §7). Telemetry event for case (c) qty drift. Engine-internal;
+// M9 will hook this for alerting and the model-divergence counter (ADR 0004 §6).
+export const EXPOSURE_DRIFT_RECORDED_EVENT = 'risk.exposure.driftRecorded';
 
 // The state the gate loads ONCE per evaluate and threads down, so getDay/findOpen are not
 // re-queried per check (the decision logic stays pure — it reads this snapshot, not the DB).
@@ -40,18 +47,100 @@ interface ILoadedState {
 export class RiskGateService {
     private readonly logger = new Logger(RiskGateService.name);
 
+    // M6 W8 (ADR 0014 §1, §9). The orchestrator is closed until phase 9 of the
+    // boot pipeline flips this flag. Mid-recovery triggers reject with
+    // RECOVERY_IN_PROGRESS — log-only (ADR §9: "do not write decisions rows
+    // would pollute the trigger evidence base for M8"). The gate's `rejected`
+    // helper logs at log-level rather than writing — matches the §9 rule.
+    //
+    // Starts FALSE: NestJS DI constructs the gate during module-init (phase 0),
+    // well before the EngineBootstrapService runs phases 1–9 in its
+    // OnApplicationBootstrap hook. `markRecoveryComplete()` is called by the
+    // bootstrap service at phase 9.
+    private recoveryReady = false;
+
     constructor(
         private readonly ledger: ReservationLedger,
         private readonly slotManager: SlotManager,
         private readonly stress: StressHaltEvaluator,
+        // M6 W4b seams (ADR 0010 §1b/§1c, §7). RiskStateRepository is in the same module
+        // so direct injection is canonical (no port indirection needed for an internal
+        // M6 mutation path). PositionRepository is imported via PositionModule which is
+        // already in RiskModule.imports; the forwardRef is a no-op today but keeps the
+        // construction safe against future tightening of the position-side cycle.
+        @Inject(forwardRef(() => PositionRepository))
+        private readonly positions: PositionRepository,
+        private readonly riskState: RiskStateRepository,
+        private readonly events: EventEmitter2,
     ) {}
 
+    // M6 W8 (ADR 0014 §1, §9). Phase 9 of the boot pipeline opens the
+    // orchestrator. Idempotent: safe to call from a re-run path (the flag is
+    // monotonic — `recoveryReady` once true stays true for the process
+    // lifetime; a kill-switch halt uses HaltFlagService, not this flag).
+    markRecoveryComplete(): void {
+        if (this.recoveryReady) {
+            return;
+        }
+
+        this.recoveryReady = true;
+        this.logger.warn('recovery complete — orchestrator open for triggers');
+    }
+
+    // M6 W8 read-API for tests + the bootstrap service.
+    isRecoveryReady(): boolean {
+        return this.recoveryReady;
+    }
+
+    // M6 W8 (ADR 0014 §4a). Phase 4a rebuild of `risk_state.open_exposure` from
+    // `SUM(positions.entry_notional WHERE state in non-closed)` is the
+    // authoritative release path for leaked reservations across a crash. The
+    // bootstrap service computes the sum from a fresh DB read; this setter
+    // persists it via the same upsert path the gate's mutation primitives use.
+    //
+    // Single atomic UPDATE on the day's risk_state row (ADR 0009 §6.1 invariant
+    // applies to all DB-canonical state writes). The other columns
+    // (realizedPnlDay, tradesCount, isHalted, haltReason) are preserved from
+    // the loaded row — only openExposure is rebuilt.
+    async setOpenExposureFromBoot(openExposure: MoneyValue, nowMs: number): Promise<void> {
+        const utcDateString = new Date(nowMs).toISOString().slice(0, 10);
+        const today = await this.riskState.findByDate(utcDateString);
+
+        await this.riskState.upsertDay({
+            date: utcDateString,
+            realizedPnlDay: today?.realizedPnlDay ?? new Money(0),
+            openExposure,
+            tradesCount: today?.tradesCount ?? 0,
+            isHalted: today?.isHalted ?? false,
+            haltReason: today?.haltReason ?? null,
+        });
+
+        this.logger.warn(`boot exposure rebuild: open_exposure=${openExposure.toFixed()} (authoritative — pre-crash deltas ignored)`);
+    }
+
     async evaluate(intent: IOrderIntent, context: IRiskGateContext): Promise<IRiskDecision> {
+        // M6 R1.1.1 (ADR 0014 §1 revised). Mid-recovery RECOVERY_IN_PROGRESS reject
+        // narrowed to OPENING intents only — `intentAction ∈ {OPEN, ADD}`. De-risking
+        // intents (REDUCE / CLOSE / FLATTEN) MUST pass during recovery so:
+        //   - case-(a) foreign-flatten policy can liquidate adopted positions at boot;
+        //   - local-monitor SL/TP breach between phase 4c (re-arm) and phase 9 can
+        //     still close the position via the gate-routed close path (ADR 0011 §4);
+        //   - operator kill-switch FLATTEN reaches the executor even before phase 9.
+        // Strategy-originated OPEN/ADD remain rejected — that's the original §1 intent
+        // (no new trades during recovery).
+        if (!this.recoveryReady && this.isOpening(intent.intentAction)) {
+            return this.rejected(intent, RejectReasonEnum.RECOVERY_IN_PROGRESS);
+        }
+
         if (this.isDeRisking(intent.intentAction)) {
             return this.approveDeRisking(intent);
         }
 
         return this.evaluateEntry(intent, context);
+    }
+
+    private isOpening(action: OrderIntentActionEnum): boolean {
+        return action === OrderIntentActionEnum.OPEN || action === OrderIntentActionEnum.ADD;
     }
 
     // M6 seams (ADR 0004 §3): the reconciliation loop drives these.
@@ -65,6 +154,163 @@ export class RiskGateService {
 
     expireStaleReservations(nowMs: number): void {
         this.ledger.expireStaleReservations(nowMs);
+    }
+
+    // M6 W4b (ADR 0010 §1b, §7). Case (b) primitive: the position was closed outside the
+    // bot (liquidation, manual close, exchange-side SL/TP, or a crash-window-lost fill).
+    // No order is placed — the close already happened. We:
+    //
+    //   1. Best-effort release any in-flight reservation that matches the position's
+    //      (symbol, slot). Per the dispatch + ADR 0010 §1f revised: no precise reservationId
+    //      lookup exists today; the ledger's `(symbol, slot)` is the closest available key.
+    //      No-op if nothing matches (idempotent on repeat calls).
+    //   2. Decrement today's `risk_state.open_exposure` by the position's `entry_notional`.
+    //      Single atomic upsert (matches the dual-write invariant for risk_state).
+    //   3. Emit nothing here — ReconciliationService emits the resolved event around this
+    //      call so the gate stays a pure mutation primitive.
+    //
+    // Idempotent: calling twice with the same positionId double-decrements only if the
+    // second call also finds an active reservation (won't, the first call released it);
+    // exposure decrement is also bounded — clamped to zero so a duplicate call cannot
+    // drive open_exposure negative.
+    async reconcileClose(positionId: number, nowMs: number): Promise<void> {
+        const position = await this.positions.findById(positionId);
+
+        if (position === null) {
+            this.logger.warn(`reconcileClose positionId=${positionId} - position not found (no-op)`);
+
+            return;
+        }
+
+        const released = this.releaseInFlightReservationFor(position.symbol, position.positionSlot);
+
+        if (released !== null) {
+            this.logger.log(`reconcileClose positionId=${positionId} released in-flight reservation ${released}`);
+        }
+
+        // M6 R1.1.4 (ADR 0010 §1b revised). Release the LIVE RESIDUAL notional, not
+        // the historical `entry_notional`. After ADDs and partial REDUCEs, the
+        // notional currently exposed is `position.qty * position.entryPrice` —
+        // entry_notional captures the gross-at-open amount and would double-count
+        // an add that already updated exposure at fill time. Decimal math; the
+        // post-residual exposure is clamped at zero inside `adjustOpenExposure`.
+        const residualNotional = position.qty.times(position.entryPrice);
+        await this.adjustOpenExposure(residualNotional.negated(), nowMs, `reconcileClose:${positionId}`);
+
+        this.logger.log(
+            `reconcileClose positionId=${positionId} symbol=${position.symbol} - exposure -${residualNotional.toFixed()} ` +
+                `(residual qty=${position.qty.toFixed()} * entryPrice=${position.entryPrice.toFixed()})`,
+        );
+    }
+
+    // M6 W4b (ADR 0010 §1c, §7). Case (c) primitive: DB and exchange qty disagreed.
+    // Adjusts `risk_state.open_exposure` by the notional delta `(exchangeQty - dbQty) * entryPrice`,
+    // logs a structured WARN, and emits a divergence telemetry event so M9 alerts can fire
+    // and the model-divergence counter (ADR 0004 §6) can advance. Pure mutation primitive;
+    // ReconciliationService composes this with `PositionService.adjustQty` for the row-side
+    // mutation.
+    async recordExposureDrift(positionId: number, dbQty: MoneyValue, exchangeQty: MoneyValue, nowMs: number): Promise<void> {
+        const position = await this.positions.findById(positionId);
+
+        if (position === null) {
+            this.logger.warn(`recordExposureDrift positionId=${positionId} - position not found (no-op)`);
+
+            return;
+        }
+
+        const qtyDelta = exchangeQty.minus(dbQty);
+        const notionalDelta = qtyDelta.times(position.entryPrice);
+
+        this.logger.warn(
+            `recordExposureDrift positionId=${positionId} symbol=${position.symbol} ` +
+                `dbQty=${dbQty.toFixed()} exchangeQty=${exchangeQty.toFixed()} qtyDelta=${qtyDelta.toFixed()} ` +
+                `notionalDelta=${notionalDelta.toFixed()}`,
+        );
+
+        await this.adjustOpenExposure(notionalDelta, nowMs, `recordExposureDrift:${positionId}`);
+
+        // Telemetry event — engine-internal so a future M9 alerting consumer + a model-
+        // divergence counter (ADR 0004 §6) can subscribe. The payload is intentionally
+        // minimal; W5+ may upgrade to a shared contract event.
+        this.events.emit(EXPOSURE_DRIFT_RECORDED_EVENT, {
+            positionId,
+            symbol: position.symbol,
+            dbQty: dbQty.toFixed(),
+            exchangeQty: exchangeQty.toFixed(),
+            notionalDelta: notionalDelta.toFixed(),
+            recordedAtMs: nowMs,
+        });
+    }
+
+    // M6 R1.1.5 (ADR 0010 §7 revised, ADR 0004 §3/§7). Matcher key tightened to
+    // `(eventId, slot)` when an eventId is supplied. The reservationId encodes
+    // `${eventId}:${slot}` (gate-minted deterministic seed, see `buildReservation`)
+    // so we extract eventId from the reservationId without needing a separate
+    // ledger field. When eventId is null/undefined (caller doesn't know it —
+    // e.g., case-(b) reconcileClose where the position row has no persisted
+    // eventId), fall back to the historical `(symbol, slot)` match. The fallback
+    // is a best-effort no-op-or-release; the precise eventId path is the one M8
+    // analytics + future case-(f) precise-release callers use to disambiguate
+    // two coexisting reservations on the same `(symbol, slot)`.
+    //
+    // M6 R2.1.2 (documentation-only). The precise-match branch
+    // (`eventId !== null/undefined` → reservationId equality check) is reachable
+    // from tests today but dormant from production callers: no live caller
+    // currently passes `eventId` because `positions` does not persist
+    // `triggering_event_id`. ADR-0010 §7 names M7 W0 as the wave that adds the
+    // `eventId` column + the case-(f) precise-release call site; until then
+    // every production invocation walks the `(symbol, slot)` fallback path.
+    private releaseInFlightReservationFor(symbol: string, slot: PositionSlotEnum | null | undefined, eventId?: string | null): string | null {
+        if (slot === null || slot === undefined) {
+            return null;
+        }
+
+        const match = this.ledger.listActive().find((reservation) => {
+            if (reservation.symbol !== symbol || reservation.slot !== slot) {
+                return false;
+            }
+
+            if (eventId === null || eventId === undefined) {
+                return true; // fallback path — first (symbol, slot) hit wins
+            }
+
+            // Precise match: reservationId is `${eventId}:${slot}`; compare the prefix.
+            return reservation.reservationId === `${eventId}:${slot}`;
+        });
+
+        if (match === undefined) {
+            return null;
+        }
+
+        this.ledger.releaseReservation(match.reservationId);
+
+        return match.reservationId;
+    }
+
+    // Read-modify-write the day's `risk_state` row. The upsert is idempotent on the date
+    // key (ADR 0004 §5/§7). `delta` is signed: positive on add, negative on close.
+    // Clamps openExposure at zero so a duplicate reconcileClose can't drive it negative.
+    private async adjustOpenExposure(delta: MoneyValue, nowMs: number, reason: string): Promise<void> {
+        const utcDateString = new Date(nowMs).toISOString().slice(0, 10);
+        const today = await this.riskState.findByDate(utcDateString);
+        const current = today?.openExposure ?? new Money(0);
+        const nextRaw = current.plus(delta);
+        const next = nextRaw.lessThan(0) ? new Money(0) : nextRaw;
+
+        if (nextRaw.lessThan(0)) {
+            this.logger.warn(
+                `open_exposure adjustment ${reason} would have driven exposure negative (current=${current.toFixed()}, delta=${delta.toFixed()}); clamped to 0`,
+            );
+        }
+
+        await this.riskState.upsertDay({
+            date: utcDateString,
+            realizedPnlDay: today?.realizedPnlDay ?? new Money(0),
+            openExposure: next,
+            tradesCount: today?.tradesCount ?? 0,
+            isHalted: today?.isHalted ?? false,
+            haltReason: today?.haltReason ?? null,
+        });
     }
 
     private isDeRisking(action: OrderIntentActionEnum): boolean {

@@ -1,6 +1,7 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import { IMarketInfo, ITickerSnapshot } from '../../../src/exchange/interface/IExchangeSnapshots';
+import { SubscriptionRetainer } from '../../../src/market-data/service/SubscriptionRetainer';
 import { UniverseService } from '../../../src/market-data/service/UniverseService';
 
 // A high-volume quote so every market clears the liquidity floor.
@@ -42,7 +43,7 @@ function buildService(markets: IMarketInfo[]): UniverseService {
 
     // Plain construction — no NestJS DI needed; token is only required when the
     // container wires it; here we pass the mock directly.
-    return new UniverseService(exchangeClient as never, new EventEmitter2());
+    return new UniverseService(exchangeClient as never, new EventEmitter2(), new SubscriptionRetainer());
 }
 
 // Loads markets then refreshes with a ticker for every market so the full filter

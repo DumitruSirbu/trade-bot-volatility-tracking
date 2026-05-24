@@ -40,6 +40,12 @@ export class TransactionEntity {
     @Column({ name: 'fee', type: 'numeric', precision: 38, scale: 8, transformer: decimalColumnTransformer })
     fee!: MoneyValue;
 
+    // Funding/realized cashflow aggregate (ADR 0012 §1). Signed quantity; positive on
+    // receive (funding income / realized gain), negative on pay (funding charge / loss).
+    // Pre-M6 rows backfilled to 0 by migration 20260525010000; live writers ship in W5.
+    @Column({ name: 'cashflow', type: 'numeric', precision: 38, scale: 8, default: '0', transformer: decimalColumnTransformer })
+    cashflow!: MoneyValue;
+
     @Column({ name: 'client_order_id', type: 'varchar' })
     clientOrderId!: string;
 
