@@ -37,6 +37,7 @@ import { BACKTEST_WARMUP_BAR_COUNT } from '../const/backtestConsts';
 import { FillSimulator, IFillRequest } from '../fill/FillSimulator';
 import { simulateIntrabarStop } from '../fill/IntrabarStopSimulator';
 import { ITierSlippageParams } from '../fill/TierSlippageModel';
+import { assertNoLookAhead } from '../guard/CausalityGuard';
 import { BacktestBook } from '../state/BacktestBook';
 import { BacktestEquityCurve } from '../state/BacktestEquityCurve';
 import { BacktestPnLLedger } from '../state/BacktestPnLLedger';
@@ -67,6 +68,10 @@ interface ITradeMetadata {
     readonly regimeAtEntry: RegimeLabelEnum;
     readonly coinTier: CoinTierEnum;
     readonly strategyVersionId: number;
+    // True when the BTC reference bar was missing at signal time. Trades stamped with this
+    // flag get lowFidelity=true downstream because their correlation classification is
+    // unreliable (btc5mMovePct defaulted to 0, indistinguishable from BTC being flat).
+    readonly btcDataMissing: boolean;
 }
 
 // Per-symbol pre-loaded data the replay loop walks bar-by-bar. Eagerly loaded once per
@@ -359,8 +364,11 @@ export class BacktestRunnerService {
         // (a single ORDER BY ts ASC traversal is the reference order).
         const ticks = await this.candleLoader.loadTicksForBar(ctx.symbol, bar.openTimeMs);
 
-        await this.handleOpenPositionsForBar(ctx, bar, utcDateString, data, ticks);
+        // Apply funding first: a funding event at the bar boundary settles before any
+        // intra-bar stop, matching Binance's settlement order. Without this, a stop in the
+        // current bar would skip a same-boundary funding charge for that position.
         this.applyFundingForBar(ctx, bar.openTimeMs, fundingCursor, data.fundingEvents);
+        await this.handleOpenPositionsForBar(ctx, bar, utcDateString, data, ticks);
 
         const tier = await this.resolveTierAt(ctx, utcDateString);
 
@@ -369,6 +377,11 @@ export class BacktestRunnerService {
         }
 
         const nextWindow = this.indicatorStateBuilder.appendBar(window, bar);
+
+        // ADR-0015 §C2: cheap O(window) invariant that no future-relative bar leaked into
+        // the window. Throws CausalityViolationException — a programming bug, fatal.
+        assertNoLookAhead(nextWindow, bar.openTimeMs, CANDLE_5M_INTERVAL_MS);
+
         const snapshot = this.indicatorStateBuilder.computeSnapshot(ctx.symbol, nextWindow);
 
         if (snapshot === null) {
@@ -403,6 +416,10 @@ export class BacktestRunnerService {
         ticks: TickAggregateEntity[],
     ): Promise<void> {
         const event = this.buildEvent(ctx, bar, snapshot, data, tier);
+        // Track BTC data availability separately from btc5mMovePct (which defaults to 0
+        // when missing) so the trade row can be marked lowFidelity for unreliable
+        // correlation classification — see stampTradeMetadataIfFilled / patchTradeRow.
+        const btcDataMissing = !ctx.btcReferenceBars.has(bar.openTimeMs);
         const bookSnapshot = data.bookByBarOpenMs.get(bar.openTimeMs) ?? null;
         // M7 R1a fix-3 (quant, ADR-0015 §6): entries fill at the next bar's open. If the
         // signal bar is the final replay bar for this symbol, nextBarOpen is null and the
@@ -415,7 +432,7 @@ export class BacktestRunnerService {
         const result = await this.orchestrator.processEvent(event, orchestratorContext);
 
         this.recordResultCounters(ctx.counters, result);
-        this.stampTradeMetadataIfFilled(ctx, event, tier, result.filled);
+        this.stampTradeMetadataIfFilled(ctx, event, tier, result.filled, btcDataMissing);
     }
 
     private buildEvent(
@@ -500,7 +517,13 @@ export class BacktestRunnerService {
         }
     }
 
-    private stampTradeMetadataIfFilled(ctx: ISymbolReplayContext, event: IVolatilityDetectedEvent, tier: CoinTierEnum, filled: boolean): void {
+    private stampTradeMetadataIfFilled(
+        ctx: ISymbolReplayContext,
+        event: IVolatilityDetectedEvent,
+        tier: CoinTierEnum,
+        filled: boolean,
+        btcDataMissing: boolean,
+    ): void {
         if (!filled) {
             return;
         }
@@ -515,6 +538,7 @@ export class BacktestRunnerService {
             regimeAtEntry: event.regimeLabel,
             coinTier: tier,
             strategyVersionId: ctx.config.strategyVersionId,
+            btcDataMissing,
         });
     }
 
@@ -541,7 +565,11 @@ export class BacktestRunnerService {
         ticks: TickAggregateEntity[],
     ): Promise<void> {
         if (this.shouldHitTimeStop(position, bar)) {
-            await this.closePosition(ctx, position, bar, 'time_stop', new Money(bar.open), bar.openTimeMs, data, ticks);
+            // computeFillTimestamp adds (CANDLE_5M_INTERVAL_MS + latencyMs) to signalBarOpenMs.
+            // For a time-stop, the fill price is THIS bar's open and the fill ts must equal
+            // bar.openTimeMs + latencyMs (same boundary, not next-bar). Pre-subtract one
+            // interval so the latency model lands on this bar instead of the next.
+            await this.closePosition(ctx, position, bar, 'time_stop', new Money(bar.open), bar.openTimeMs - CANDLE_5M_INTERVAL_MS, data, ticks);
 
             return;
         }
@@ -637,10 +665,13 @@ export class BacktestRunnerService {
         await ctx.runState.riskStateAdapter.upsertDay({
             date: closeDateString,
             realizedPnlDay: currentPnl.plus(netPnl),
-            openExposure: new Money(0),
+            // Preserve halt and exposure state — only PnL + trade count change on close.
+            // Full-row overwrite of isHalted/haltReason/openExposure would silently clear
+            // a market-stress halt previously written by the gate for the same day.
+            openExposure: existing !== null ? existing.openExposure : new Money(0),
             tradesCount: currentCount + 1,
-            isHalted: false,
-            haltReason: null,
+            isHalted: existing !== null ? existing.isHalted : false,
+            haltReason: existing !== null ? existing.haltReason : null,
         });
     }
 
@@ -682,11 +713,14 @@ export class BacktestRunnerService {
             flowType: metadata !== null ? metadata.flowType : FlowTypeEnum.LOW_QUALITY_NOISE,
             regimeAtEntry: metadata !== null ? metadata.regimeAtEntry : RegimeLabelEnum.RANGING,
             coinTier: metadata !== null ? serializeCoinTier(metadata.coinTier) : trade.coinTier,
+            // Missing BTC reference at entry makes correlation classification unreliable
+            // (btc5mMovePct=0 is indistinguishable from BTC being flat). Mark as low-fidelity.
+            lowFidelity: trade.lowFidelity || (metadata !== null && metadata.btcDataMissing),
         };
 
         ctx.runState.book.completedTrades[lastIndex] = patched;
 
-        if (trade.lowFidelity) {
+        if (patched.lowFidelity) {
             ctx.counters.lowFidelity += 1;
         }
     }
@@ -751,7 +785,10 @@ export class BacktestRunnerService {
     private applyFundingForBar(ctx: ISymbolReplayContext, barOpenMs: number, cursor: IFundingCursor, events: readonly IFundingEvent[]): void {
         const barEndMs = barOpenMs + CANDLE_5M_INTERVAL_MS;
 
-        while (cursor.index < events.length && events[cursor.index].tsMs < barEndMs) {
+        // Inclusive upper bound: a funding event landing exactly at barEndMs (e.g. 08:00 UTC
+        // on a 5m boundary) settles within this bar rather than being deferred to the next,
+        // matching Binance's settlement semantics at the boundary instant.
+        while (cursor.index < events.length && events[cursor.index].tsMs <= barEndMs) {
             this.applyFundingEvent(ctx, events[cursor.index]);
             cursor.index += 1;
         }
