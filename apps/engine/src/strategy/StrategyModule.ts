@@ -28,6 +28,6 @@ import { V0BaselineStrategy, V1MeanReversionStrategy, V2MomentumStrategy, V3Hybr
         V2MomentumStrategy,
         V3HybridRouterStrategy,
     ],
-    exports: [StrategyVersionRepository, DecisionRepository],
+    exports: [StrategyVersionRepository, DecisionRepository, StrategyRegistry],
 })
 export class StrategyModule {}
