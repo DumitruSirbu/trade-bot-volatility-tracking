@@ -38,7 +38,7 @@ import { AccountSnapshotRepository } from '../../src/position/repository/Account
 import { PositionRepository } from '../../src/position/repository/PositionRepository';
 import { TransactionRepository } from '../../src/position/repository/TransactionRepository';
 import { AccountSnapshotWriter } from '../../src/position/service/AccountSnapshotWriter';
-import { EngineBootstrapService } from '../../src/position/service/EngineBootstrapService';
+import { EngineBootstrapService } from '../../src/bootstrap/service/EngineBootstrapService';
 import { PositionInstrumentor } from '../../src/position/service/PositionInstrumentor';
 import { PositionLifecycleRetentionListener } from '../../src/position/service/PositionLifecycleRetentionListener';
 import { IllegalClosePayloadException, IllegalQtyAdjustmentException, PositionService } from '../../src/position/service/PositionService';

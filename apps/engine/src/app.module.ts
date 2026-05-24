@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { BootstrapModule } from './bootstrap/BootstrapModule';
 import { CommonModule } from './common/CommonModule';
 import { AppConfigModule } from './config/AppConfigModule';
 import { DatabaseModule } from './database/DatabaseModule';
@@ -11,6 +12,8 @@ import { PositionModule } from './position/PositionModule';
 import { RiskModule } from './risk/RiskModule';
 import { StrategyModule } from './strategy/StrategyModule';
 
+// BootstrapModule sits last so its OnApplicationBootstrap hook fires after
+// every other module's providers are fully initialised.
 @Module({
     imports: [
         AppConfigModule,
@@ -23,6 +26,7 @@ import { StrategyModule } from './strategy/StrategyModule';
         PositionModule,
         RiskModule,
         ExecutionModule,
+        BootstrapModule,
     ],
 })
 export class AppModule {}

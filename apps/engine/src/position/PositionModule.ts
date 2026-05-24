@@ -9,17 +9,11 @@ import { RiskModule } from '../risk/RiskModule';
 import { StrategyVersionEntity } from '../strategy/entity';
 import { StrategyVersionRepository } from '../strategy/repository/StrategyVersionRepository';
 import { AccountSnapshotEntity, PositionEntity, TransactionEntity } from './entity';
+import { POSITION_QUERY } from './interface';
 import { AccountSnapshotRepository } from './repository/AccountSnapshotRepository';
 import { PositionRepository } from './repository/PositionRepository';
 import { TransactionRepository } from './repository/TransactionRepository';
-import {
-    AccountSnapshotWriter,
-    EngineBootstrapService,
-    PositionInstrumentor,
-    PositionLifecycleRetentionListener,
-    PositionService,
-    ReconciliationService,
-} from './service';
+import { AccountSnapshotWriter, PositionInstrumentor, PositionLifecycleRetentionListener, PositionService, ReconciliationService } from './service';
 
 // Owns positions + transactions + account_snapshots entities and repositories,
 // plus the M6 PositionService — the single write API for the position state
@@ -56,7 +50,11 @@ import {
         ReconciliationService,
         PositionInstrumentor,
         AccountSnapshotWriter,
-        EngineBootstrapService,
+        // POSITION_QUERY: minimal read-only port the risk gate consumes (ADR 0010 §1b/§1c).
+        // Binding the token to the same PositionRepository instance keeps the gate's reads
+        // synchronous while letting RiskModule depend on a token instead of importing
+        // PositionModule — removing the prior `forwardRef(() => PositionModule)` cycle.
+        { provide: POSITION_QUERY, useExisting: PositionRepository },
     ],
     exports: [
         PositionRepository,
@@ -66,7 +64,7 @@ import {
         ReconciliationService,
         PositionInstrumentor,
         AccountSnapshotWriter,
-        EngineBootstrapService,
+        POSITION_QUERY,
     ],
 })
 export class PositionModule {}

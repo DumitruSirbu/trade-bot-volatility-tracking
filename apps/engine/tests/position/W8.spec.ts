@@ -34,7 +34,7 @@ import { AccountSnapshotEntity, PositionEntity } from '../../src/position/entity
 import { AccountSnapshotRepository } from '../../src/position/repository/AccountSnapshotRepository';
 import { PositionRepository } from '../../src/position/repository/PositionRepository';
 import { AccountSnapshotWriter } from '../../src/position/service/AccountSnapshotWriter';
-import { EngineBootstrapService } from '../../src/position/service/EngineBootstrapService';
+import { EngineBootstrapService } from '../../src/bootstrap/service/EngineBootstrapService';
 import { PositionInstrumentor } from '../../src/position/service/PositionInstrumentor';
 import { ReconciliationService } from '../../src/position/service/ReconciliationService';
 import { ReservationLedger } from '../../src/risk/service/ReservationLedger';

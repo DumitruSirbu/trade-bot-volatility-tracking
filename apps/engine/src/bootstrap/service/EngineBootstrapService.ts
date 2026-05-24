@@ -1,21 +1,29 @@
 import { PositionStateEnum, ProtectiveOrderTypeEnum, RetainReasonEnum } from '@bot/shared';
-import { Injectable, Logger, OnApplicationBootstrap, forwardRef, Inject } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 
 import { Money, MoneyValue } from '../../common/utils/money';
 import { LocalProtectiveMonitor } from '../../execution/service/LocalProtectiveMonitor';
 import { SubscriptionRetainer } from '../../market-data/service/SubscriptionRetainer';
+import { PositionEntity } from '../../position/entity';
+import { AccountSnapshotRepository } from '../../position/repository/AccountSnapshotRepository';
+import { PositionRepository } from '../../position/repository/PositionRepository';
+import { ACCOUNT_SNAPSHOT_DRIFT_TOLERANCE_USDT, AccountSnapshotWriter } from '../../position/service/AccountSnapshotWriter';
+import { PositionInstrumentor } from '../../position/service/PositionInstrumentor';
+import { ReconciliationService } from '../../position/service/ReconciliationService';
 import { RiskGateService } from '../../risk/service/RiskGateService';
-import { PositionEntity } from '../entity';
-import { PositionRepository } from '../repository/PositionRepository';
-import { ACCOUNT_SNAPSHOT_DRIFT_TOLERANCE_USDT, AccountSnapshotWriter } from './AccountSnapshotWriter';
-import { AccountSnapshotRepository } from '../repository/AccountSnapshotRepository';
-import { PositionInstrumentor } from './PositionInstrumentor';
-import { ReconciliationService } from './ReconciliationService';
 
 // M6 W8 (ADR 0014). The ordered ten-phase boot pipeline that re-associates
 // post-restart state with the exchange truth before the orchestrator opens.
 // Phases are strictly sequential — phase N+1 starts only after phase N
 // resolves (ADR §1, §9 reviewer rule).
+//
+// Composition-root: this service now lives in its own `BootstrapModule` which
+// sits structurally ABOVE PositionModule, ExecutionModule, and RiskModule. That
+// placement is what lets every dependency be injected plainly — no `forwardRef`
+// is needed because BootstrapModule has no consumers (it self-runs through
+// `OnApplicationBootstrap`), so it never re-enters a cycle. Previously this
+// class lived in `position/service/` and used three `forwardRef`s to reach
+// ReconciliationService, LocalProtectiveMonitor, and RiskGateService.
 //
 // Phase 0 happens implicitly during NestJS DI (module init); this service's
 // `OnApplicationBootstrap` hook runs after DI completes, kicking off phases
@@ -46,13 +54,10 @@ export class EngineBootstrapService implements OnApplicationBootstrap {
 
     constructor(
         private readonly positions: PositionRepository,
-        @Inject(forwardRef(() => ReconciliationService))
         private readonly reconciliation: ReconciliationService,
-        @Inject(forwardRef(() => LocalProtectiveMonitor))
         private readonly localProtectiveMonitor: LocalProtectiveMonitor,
         private readonly instrumentor: PositionInstrumentor,
         private readonly retainer: SubscriptionRetainer,
-        @Inject(forwardRef(() => RiskGateService))
         private readonly riskGate: RiskGateService,
         private readonly snapshotWriter: AccountSnapshotWriter,
         private readonly accountSnapshots: AccountSnapshotRepository,

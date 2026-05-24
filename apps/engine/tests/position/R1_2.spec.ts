@@ -40,7 +40,7 @@ import { PositionRepository } from '../../src/position/repository/PositionReposi
 import { TransactionRepository } from '../../src/position/repository/TransactionRepository';
 import { AccountSnapshotRepository } from '../../src/position/repository/AccountSnapshotRepository';
 import { AccountSnapshotWriter } from '../../src/position/service/AccountSnapshotWriter';
-import { EngineBootstrapService } from '../../src/position/service/EngineBootstrapService';
+import { EngineBootstrapService } from '../../src/bootstrap/service/EngineBootstrapService';
 import { PositionInstrumentor } from '../../src/position/service/PositionInstrumentor';
 import { IllegalAdoptionAckPayloadException, PositionService } from '../../src/position/service/PositionService';
 import { RECONCILIATION_RESOLVED_EVENT, ReconciliationService, UNKNOWN_INTENT_TTL_MS } from '../../src/position/service/ReconciliationService';

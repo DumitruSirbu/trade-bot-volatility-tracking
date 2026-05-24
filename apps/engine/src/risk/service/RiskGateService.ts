@@ -1,5 +1,5 @@
 import { CoinTierEnum, OrderIntentActionEnum, PositionSideEnum, PositionSlotEnum, RejectReasonEnum, RiskOutcomeEnum } from '@bot/shared';
-import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import { MS_PER_MINUTE } from '../../common/const';
@@ -18,7 +18,7 @@ import {
 } from '../const';
 import { ReservationStateEnum } from '../enum';
 import { IClosedPositionView, IExposureReservation, IOpenPositionView, IOrderIntent, IRiskDecision, IRiskGateContext, IRiskStateDay } from '../interface';
-import { PositionRepository } from '../../position/repository/PositionRepository';
+import { IPositionQuery, POSITION_QUERY } from '../../position/interface';
 import { RiskStateRepository } from '../repository/RiskStateRepository';
 import { ReservationLedger } from './ReservationLedger';
 import { IOccupiedSlot, SlotAssignment, SlotManager } from './SlotManager';
@@ -65,11 +65,15 @@ export class RiskGateService {
         private readonly stress: StressHaltEvaluator,
         // M6 W4b seams (ADR 0010 §1b/§1c, §7). RiskStateRepository is in the same module
         // so direct injection is canonical (no port indirection needed for an internal
-        // M6 mutation path). PositionRepository is imported via PositionModule which is
-        // already in RiskModule.imports; the forwardRef is a no-op today but keeps the
-        // construction safe against future tightening of the position-side cycle.
-        @Inject(forwardRef(() => PositionRepository))
-        private readonly positions: PositionRepository,
+        // M6 mutation path). Position state arrives through the minimal `IPositionQuery`
+        // port bound to the `POSITION_QUERY` token in PositionModule — this is the seam
+        // that lets RiskModule depend on a token rather than `forwardRef(() => PositionModule)`
+        // and lets the gate's constructor drop its `@Inject(forwardRef(...))` wrapper.
+        // Surface is intentionally narrow: only `findById` (case-(b) reconcileClose +
+        // case-(c) recordExposureDrift). Broader read access stays on the repository
+        // and is consumed via `IOpenPositionsPort` from `RiskGateContext`.
+        @Inject(POSITION_QUERY)
+        private readonly positions: IPositionQuery,
         private readonly riskState: RiskStateRepository,
         private readonly events: EventEmitter2,
     ) {}

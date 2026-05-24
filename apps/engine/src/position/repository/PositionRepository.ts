@@ -5,11 +5,18 @@ import { And, DeepPartial, In, LessThan, MoreThanOrEqual, Repository } from 'typ
 
 import { BaseRepository } from '../../common/repository/BaseRepository';
 import { PositionEntity } from '../entity';
+import { IPositionQuery } from '../interface';
 
 // Reads/writes authoritative position state. No live writer until M3–M6; M2 ships the
 // query surface later milestones need.
+//
+// Implements `IPositionQuery` — the minimal read-only port the risk gate consumes
+// via the `POSITION_QUERY` token. The interface is structurally satisfied by
+// `BaseRepository<T>.findById`; the explicit `implements` clause locks the
+// contract so a future signature drift on `findById` breaks compilation here
+// instead of silently breaking the gate.
 @Injectable()
-export class PositionRepository extends BaseRepository<PositionEntity> {
+export class PositionRepository extends BaseRepository<PositionEntity> implements IPositionQuery {
     constructor(@InjectRepository(PositionEntity) repository: Repository<PositionEntity>) {
         super(repository);
     }
