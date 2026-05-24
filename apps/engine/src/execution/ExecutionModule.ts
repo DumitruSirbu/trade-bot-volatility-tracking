@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 
 import { CommonModule } from '../common/CommonModule';
 import { AppConfigModule } from '../config/AppConfigModule';
@@ -26,7 +26,7 @@ import {
 // the OrderPolicyRouter, or call ccxt's createOrder/cancelOrder/fetchOrder. Reviewer must-fix
 // invariant from ADR 0005/0006: a single chokepoint preserves idempotency + risk-gate routing.
 @Module({
-    imports: [AppConfigModule, CommonModule, ExchangeModule, PositionModule, RiskModule, StrategyModule],
+    imports: [AppConfigModule, CommonModule, ExchangeModule, forwardRef(() => PositionModule), forwardRef(() => RiskModule), StrategyModule],
     providers: [
         ClientOrderIdFactory,
         ExchangeOrderSubmitter,
