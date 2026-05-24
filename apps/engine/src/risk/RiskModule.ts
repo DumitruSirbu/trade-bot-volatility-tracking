@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { MarketDataModule } from '../market-data/MarketDataModule';
@@ -33,7 +33,7 @@ import {
 // those position-side services off RiskGate, which is intentionally out of scope per the
 // dispatch spec ("synchronous semantics" note).
 @Module({
-    imports: [TypeOrmModule.forFeature([RiskStateEntity]), PositionModule, MarketDataModule],
+    imports: [TypeOrmModule.forFeature([RiskStateEntity]), forwardRef(() => PositionModule), MarketDataModule],
     providers: [
         RiskStateRepository,
         PositionSizer,

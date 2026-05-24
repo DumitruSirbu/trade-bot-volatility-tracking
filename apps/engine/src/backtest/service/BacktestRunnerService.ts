@@ -1,5 +1,6 @@
 import {
     CoinTierEnum,
+    ExitReasonEnum,
     FlowTypeEnum,
     IBacktestConfig,
     IBacktestFill,
@@ -41,6 +42,7 @@ import { assertNoLookAhead } from '../guard/CausalityGuard';
 import { BacktestBook } from '../state/BacktestBook';
 import { BacktestEquityCurve } from '../state/BacktestEquityCurve';
 import { BacktestPnLLedger } from '../state/BacktestPnLLedger';
+import { ITapedEvent } from '../interface/ITapedEvent';
 import { buildBacktestEvent } from './BacktestEventBuilder';
 import { BacktestExecutionSink } from './BacktestExecutionSink';
 import { BacktestOrchestrator, IBacktestOrchestratorContext } from './BacktestOrchestrator';
@@ -109,6 +111,56 @@ export class BacktestRunnerService {
     ) {}
 
     async run(config: IBacktestConfig): Promise<IBacktestReport> {
+        return this.executeReplay(config, { kind: 'normal' });
+    }
+
+    // Pass 1 of the M8 same-event comparison (ADR 0017 §2.2). Walks the exact same
+    // candle + indicator + trigger pipeline a normal `run` walks, but instead of routing
+    // each fired trigger into the strategy + risk gate + fill simulator, it appends a
+    // stable `ITapedEvent` to an in-memory tape. The returned tape is then handed to
+    // `replayTape` once per candidate version. Two invariants worth pinning:
+    //   - The tape is version-agnostic — no strategy is loaded; the resolved registry
+    //     entry is the operator-supplied `tapeStrategyVersionId` (any valid version)
+    //     used purely for params-driven trigger threshold resolution.
+    //   - Tape `eventId` matches what `run` would dispatch under the same fixture, so
+    //     the W4 paired test can zip outcomes back to `IBacktestTradeResult.eventId`.
+    async recordEventTape(config: IBacktestConfig): Promise<ITapedEvent[]> {
+        const tape: ITapedEvent[] = [];
+        await this.executeReplay(config, { kind: 'record', tape });
+
+        return tape;
+    }
+
+    // Pass 2 of the M8 same-event comparison (ADR 0017 §2.2). Accepts the tape recorded
+    // by `recordEventTape` and routes each tape entry through the loaded strategy + risk
+    // gate + fill simulator. Bars are still walked end-to-end so intra-bar stops, funding
+    // settlement, and time-stops follow the exact same path as `run`; the only behavioural
+    // change is that `passesTrigger` is bypassed and replaced by a tape lookup keyed by
+    // `(symbol, barOpenMs)`. This guarantees every version sees the same event set.
+    async replayTape(config: IBacktestConfig, tape: readonly ITapedEvent[]): Promise<IBacktestReport> {
+        const byKey: Map<string, ITapedEvent> = new Map();
+
+        for (const taped of tape) {
+            byKey.set(`${taped.symbol}:${taped.triggerTs}`, taped);
+        }
+
+        return this.executeReplay(config, { kind: 'replay-tape', byKey });
+    }
+
+    // Single replay entry point shared by `run`, `recordEventTape`, and `replayTape`. The
+    // `mode` discriminator routes per-bar dispatch:
+    //   - normal      → existing behaviour (passesTrigger → dispatchTriggerEvent)
+    //   - record      → fire trigger predicate, but stash the event in `mode.tape` instead
+    //                   of calling the orchestrator
+    //   - replay-tape → bypass the trigger predicate entirely; look up the tape entry for
+    //                   `(symbol, bar.openTimeMs)` and dispatch only if present
+    // `normal` mode is byte-for-byte identical to the pre-W4 implementation — the only
+    // change is that the dispatch step is now selected by `mode.kind`. Position-exit,
+    // funding application, tier resolution, BTC reference resolution, and force-close all
+    // run unchanged across modes (they are state-mutating and must mirror live behaviour
+    // for every replay, including the tape-recording pass which exercises them with a
+    // strategy that never opens).
+    private async executeReplay(config: IBacktestConfig, mode: IReplayMode): Promise<IBacktestReport> {
         const strategyVersion = await this.strategyVersionRepository.findById(config.strategyVersionId);
 
         if (strategyVersion === null) {
@@ -134,7 +186,7 @@ export class BacktestRunnerService {
         const tradeMetadata: Map<string, ITradeMetadata> = new Map();
         const dailyTierCache: Map<string, Map<string, CoinTierEnum>> = new Map();
 
-        this.logger.log(`backtest run=${config.runLabel} version=${strategyVersion.name}:${strategyVersion.version} symbols=${symbols.length}`);
+        this.logger.log(`backtest run=${config.runLabel} version=${strategyVersion.name}:${strategyVersion.version} symbols=${symbols.length} mode=${mode.kind}`);
 
         for (const symbol of symbols) {
             const ctx: ISymbolReplayContext = {
@@ -150,6 +202,7 @@ export class BacktestRunnerService {
                 counters,
                 tradeMetadata,
                 dailyTierCache,
+                mode,
             };
             await this.replaySymbol(ctx);
         }
@@ -219,7 +272,7 @@ export class BacktestRunnerService {
         const grossPnl = this.computeGrossPnl(position, fill);
         const tradesBefore = runState.book.completedTrades.length;
 
-        runState.sink.applyCloseFill(fill, grossPnl, 'time_stop');
+        runState.sink.applyCloseFill(fill, grossPnl, ExitReasonEnum.FORCE_CLOSE);
 
         if (runState.book.completedTrades.length > tradesBefore) {
             const lastIndex = runState.book.completedTrades.length - 1;
@@ -388,11 +441,91 @@ export class BacktestRunnerService {
             return;
         }
 
+        // M8 W4: replay-tape mode bypasses the live trigger predicate and routes only
+        // those bars whose `(symbol, openTimeMs)` matches a recorded tape entry. Every
+        // candidate version replaying the same tape therefore sees the same event set,
+        // independent of param-driven trigger thresholds. Normal + record modes still
+        // run the trigger predicate.
+        if (ctx.mode.kind === 'replay-tape') {
+            const taped = ctx.mode.byKey.get(`${ctx.symbol}:${bar.openTimeMs}`);
+
+            if (taped === undefined) {
+                return;
+            }
+
+            await this.dispatchTapedEvent(ctx, bar, taped, data, utcDateString, ticks);
+
+            return;
+        }
+
         if (!this.passesTrigger(snapshot, tier)) {
             return;
         }
 
+        if (ctx.mode.kind === 'record') {
+            this.recordTriggerEvent(ctx, bar, snapshot, data, tier);
+
+            return;
+        }
+
         await this.dispatchTriggerEvent(ctx, bar, snapshot, data, tier, utcDateString, ticks);
+    }
+
+    // Tape-recording branch (ADR 0017 §2.2 #1). Builds the same `IVolatilityDetectedEvent`
+    // a `normal` dispatch would build — so `eventId`, `regimeLabel`, and the market
+    // snapshot all match what the strategy would see — but appends to the tape instead
+    // of routing into the orchestrator. flowType is classified at trigger time (the same
+    // way the orchestrator does in pass 2) so the tape can be filtered by flow without
+    // re-classifying.
+    private recordTriggerEvent(
+        ctx: ISymbolReplayContext,
+        bar: ICandle,
+        snapshot: IIndicatorSnapshot,
+        data: ISymbolReplayData,
+        tier: CoinTierEnum,
+    ): void {
+        if (ctx.mode.kind !== 'record') {
+            return;
+        }
+
+        const event = this.buildEvent(ctx, bar, snapshot, data, tier);
+        const flowType = classifyFlowType(event, ctx.params);
+
+        ctx.mode.tape.push({
+            eventId: event.eventId,
+            symbol: event.symbol,
+            triggerTs: bar.openTimeMs,
+            regime: event.regimeLabel,
+            flowType,
+            marketSnapshot: { ...event, flowType },
+        });
+    }
+
+    // Tape-replay branch (ADR 0017 §2.2 #2). Skips event reconstruction and feeds the
+    // pre-recorded `marketSnapshot` straight into the orchestrator. The market path
+    // (candles, ticks, OI, book, funding, BTC reference) is loaded the same way as
+    // `normal` — only the upstream trigger predicate is replaced by the tape lookup, so
+    // pass-2 fills, exits, and funding settlement match pass-1 byte for byte.
+    private async dispatchTapedEvent(
+        ctx: ISymbolReplayContext,
+        bar: ICandle,
+        taped: ITapedEvent,
+        data: ISymbolReplayData,
+        utcDateString: string,
+        ticks: TickAggregateEntity[],
+    ): Promise<void> {
+        const event = taped.marketSnapshot;
+        const btcDataMissing = !ctx.btcReferenceBars.has(bar.openTimeMs);
+        const bookSnapshot = data.bookByBarOpenMs.get(bar.openTimeMs) ?? null;
+        const barIndex = data.replayBars.indexOf(bar);
+        const nextBar = barIndex >= 0 && barIndex + 1 < data.replayBars.length ? data.replayBars[barIndex + 1] : null;
+        const nextBarOpen = nextBar !== null ? new Money(nextBar.open) : null;
+        const orchestratorContext = this.buildOrchestratorContext(ctx, ticks, bookSnapshot, utcDateString, nextBarOpen);
+
+        const result = await this.orchestrator.processEvent(event, orchestratorContext);
+
+        this.recordResultCounters(ctx.counters, result);
+        this.stampTradeMetadataIfFilled(ctx, event, event.coinTier, result.filled, btcDataMissing);
     }
 
     private passesTrigger(snapshot: IIndicatorSnapshot, tier: CoinTierEnum): boolean {
@@ -874,7 +1007,17 @@ interface ISymbolReplayContext {
     readonly counters: IRunCounters;
     readonly tradeMetadata: Map<string, ITradeMetadata>;
     readonly dailyTierCache: Map<string, Map<string, CoinTierEnum>>;
+    readonly mode: IReplayMode;
 }
+
+// Discriminated union threaded through the per-symbol replay (M8 W4). Splitting the modes
+// at the dispatch boundary keeps the bar walker, exit handlers, funding settlement, and
+// force-close path mode-agnostic — they need to run for every pass (record + tape too)
+// so the tape pass exercises the same state machine the comparison passes observe.
+type IReplayMode =
+    | { readonly kind: 'normal' }
+    | { readonly kind: 'record'; readonly tape: ITapedEvent[] }
+    | { readonly kind: 'replay-tape'; readonly byKey: Map<string, ITapedEvent> };
 
 interface IFundingCursor {
     index: number;

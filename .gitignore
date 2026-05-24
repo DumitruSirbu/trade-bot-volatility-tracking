@@ -51,3 +51,6 @@ coverage/
 # Misc
 *.tgz
 .pnpm-debug.log
+
+# Backtest artefact output
+apps/engine/var/

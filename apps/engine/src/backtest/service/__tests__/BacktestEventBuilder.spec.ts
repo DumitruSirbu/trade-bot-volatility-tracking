@@ -160,9 +160,14 @@ describe('buildBacktestEvent — computeIdiosyncrasyScore', () => {
     });
 });
 
-// ─── R3: deriveRegimeLabel ─────────────────────────────────────────────────────
+// ─── R3: regime label classification (delegates to live computeRegimeLabel) ──
+//
+// R1-H3 fix: BacktestEventBuilder now delegates to `market-data/indicator/computeRegimeLabel`
+// to guarantee backtest replays classify identically to the live engine. The live
+// taxonomy: ADX < 20 → RANGING; ADX > 25 → TRENDING_{UP,DOWN} by DI ordering with
+// diPlus >= diMinus (note >=, not >); 20 <= ADX <= 25 → TRANSITIONING.
 
-describe('buildBacktestEvent — deriveRegimeLabel', () => {
+describe('buildBacktestEvent — regime classification matches live', () => {
     it('returns TRENDING_UP when ADX>25 and diPlus>diMinus', () => {
         const snapshot = buildSnapshot({ adx14: 30, adxDiPlus: 28, adxDiMinus: 15 });
         const event = buildBacktestEvent(snapshot, 1_700_000_000_000, buildContext());
@@ -177,25 +182,55 @@ describe('buildBacktestEvent — deriveRegimeLabel', () => {
         expect(event.regimeLabel).toBe(RegimeLabelEnum.TRENDING_DOWN);
     });
 
-    it('returns RANGING when ADX<25 regardless of DI ordering', () => {
+    it('returns RANGING when ADX<20 (live classifier strict lower bound)', () => {
+        const snapshot = buildSnapshot({ adx14: 19, adxDiPlus: 30, adxDiMinus: 5 });
+        const event = buildBacktestEvent(snapshot, 1_700_000_000_000, buildContext());
+
+        expect(event.regimeLabel).toBe(RegimeLabelEnum.RANGING);
+    });
+
+    it('returns TRANSITIONING at ADX=20 boundary (live classifier — used to collapse to RANGING in backtest)', () => {
+        // R1-H3 regression: BacktestEventBuilder used to return RANGING for ADX in [20, 25].
+        // Live computeRegimeLabel returns TRANSITIONING. Backtest must match.
         const snapshot = buildSnapshot({ adx14: 20, adxDiPlus: 30, adxDiMinus: 5 });
         const event = buildBacktestEvent(snapshot, 1_700_000_000_000, buildContext());
 
-        expect(event.regimeLabel).toBe(RegimeLabelEnum.RANGING);
+        expect(event.regimeLabel).toBe(RegimeLabelEnum.TRANSITIONING);
     });
 
-    it('returns RANGING at ADX==25 (boundary — threshold is strictly greater-than)', () => {
+    it('returns TRANSITIONING at ADX=22 mid-band (live classifier — was RANGING in backtest pre-fix)', () => {
+        const snapshot = buildSnapshot({ adx14: 22, adxDiPlus: 30, adxDiMinus: 5 });
+        const event = buildBacktestEvent(snapshot, 1_700_000_000_000, buildContext());
+
+        expect(event.regimeLabel).toBe(RegimeLabelEnum.TRANSITIONING);
+    });
+
+    it('returns TRANSITIONING at ADX=25 boundary (live classifier uses ADX > 25 strict)', () => {
         const snapshot = buildSnapshot({ adx14: 25, adxDiPlus: 30, adxDiMinus: 5 });
         const event = buildBacktestEvent(snapshot, 1_700_000_000_000, buildContext());
 
-        expect(event.regimeLabel).toBe(RegimeLabelEnum.RANGING);
+        expect(event.regimeLabel).toBe(RegimeLabelEnum.TRANSITIONING);
     });
 
-    it('returns RANGING when ADX>25 but diPlus equals diMinus (no dominant direction)', () => {
+    it('R1-H3 paired boundary: ADX=22 with diPlus=diMinus classifies identically to live computeRegimeLabel', () => {
+        // The exact divergence flagged in the R1 review: backtest used strict > on DI
+        // ordering and collapsed 20..25 into RANGING. With the live classifier this is
+        // TRANSITIONING (the 20..25 band) — DI ordering only matters when ADX > 25 and
+        // there it uses >= (diPlus >= diMinus → TRENDING_UP on tie). At ADX=22 the band
+        // dominates → TRANSITIONING.
+        const snapshot = buildSnapshot({ adx14: 22, adxDiPlus: 20, adxDiMinus: 20 });
+        const event = buildBacktestEvent(snapshot, 1_700_000_000_000, buildContext());
+
+        expect(event.regimeLabel).toBe(RegimeLabelEnum.TRANSITIONING);
+    });
+
+    it('returns TRENDING_UP when ADX>25 and diPlus equals diMinus (live uses diPlus >= diMinus)', () => {
+        // R1-H3 paired regression: backtest used strict > so this used to fall through
+        // to RANGING. Live uses diPlus >= diMinus → TRENDING_UP on ties.
         const snapshot = buildSnapshot({ adx14: 30, adxDiPlus: 20, adxDiMinus: 20 });
         const event = buildBacktestEvent(snapshot, 1_700_000_000_000, buildContext());
 
-        expect(event.regimeLabel).toBe(RegimeLabelEnum.RANGING);
+        expect(event.regimeLabel).toBe(RegimeLabelEnum.TRENDING_UP);
     });
 });
 

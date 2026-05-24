@@ -2,19 +2,21 @@ import {
     classifyFlowType,
     computeSignalScore,
     CorrelationModeEnum,
+    FlowTypeEnum,
     IBacktestConfig,
     IBacktestPosition,
     IStrategyParams,
     IVolatilityDetectedEvent,
     OrderIntentActionEnum,
-    OrderPolicyEnum,
     PositionSideEnum,
     PositionSlotEnum,
     SignalActionEnum,
+    StrategyDirectionEnum,
 } from '@bot/shared';
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { Money, MoneyValue } from '../../common/utils/money';
+import { OrderPolicyRouter } from '../../execution/service/OrderPolicyRouter';
 import { TickAggregateEntity, BookSnapshotEntity } from '../../market-data/entity';
 import { CANDLE_5M_INTERVAL_MS } from '../../market-data/const/candleConsts';
 import {
@@ -37,8 +39,10 @@ import { IOpenPositionState, IStrategy, ISignal } from '../../strategy/interface
 import { BacktestInstrumentAdapter } from '../adapter/BacktestInstrumentAdapter';
 import { BacktestPositionAdapter } from '../adapter/BacktestPositionAdapter';
 import { BacktestRiskStateAdapter } from '../adapter/BacktestRiskStateAdapter';
+import { BACKTEST_ORDER_POLICY_ROUTER } from '../const/backtestTokens';
 import { FillSimulator, IFillRequest } from '../fill/FillSimulator';
 import { ITierSlippageParams } from '../fill/TierSlippageModel';
+import { IOrderPolicyRouter } from '../interface';
 import { BacktestBook } from '../state/BacktestBook';
 import { BacktestPnLLedger } from '../state/BacktestPnLLedger';
 import { BacktestExecutionSink } from './BacktestExecutionSink';
@@ -104,6 +108,11 @@ export class BacktestOrchestrator {
     constructor(
         private readonly riskGate: RiskGateService,
         private readonly sizer: PositionSizer,
+        // M8 W1: order-policy routing is the live `OrderPolicyRouter` by default so backtest
+        // routing matches live byte-for-byte. The DI token is loose-typed (`IOrderPolicyRouter`)
+        // so tests can substitute a single-policy fake without dragging ExecutionModule into
+        // the replay container. Live router has no I/O — see OrderPolicyRouter doc comment.
+        @Inject(BACKTEST_ORDER_POLICY_ROUTER) private readonly policyRouter: IOrderPolicyRouter,
     ) {}
 
     async processEvent(event: IVolatilityDetectedEvent, ctx: IBacktestOrchestratorContext): Promise<IOrchestratorResult> {
@@ -305,11 +314,14 @@ export class BacktestOrchestrator {
     }
 
     private buildFillRequest(event: IVolatilityDetectedEvent, intent: IOrderIntent, decision: IApprovedRiskDecision, ctx: IBacktestOrchestratorContext): IFillRequest {
-        // OPEN intents flow through MARKETABLE_LIMIT_IOC in the live policy matrix's
-        // dominant path; without a dedicated router injection in this slice the backtest
-        // defaults to it. FillSimulator only branches on policy for fee + missed-fill
-        // timeout, so the default produces a faithful taker-fee + IOC-timeout cost path.
-        const policy = OrderPolicyEnum.MARKETABLE_LIMIT_IOC;
+        // M8 W1: route through the (injected) live OrderPolicyRouter so backtest fee +
+        // missed-fill-timeout semantics match live for every (action, direction, tier, flow)
+        // combination. v3 (HYBRID) has no row in the matrix — the orchestrator resolves the
+        // router leg from the signal's flowType before calling, per ADR 0005 §1 / matrix
+        // comment ("the orchestrator resolves the router leg before calling here").
+        const strategyDirection = this.resolveStrategyDirection(ctx.strategy.direction, intent.flowType);
+        const plan = this.policyRouter.plan({ intent, strategyDirection, maxSlippageOfSlPct: null });
+        const policy = plan.policy;
 
         const side = intent.tradeSide === PositionSideEnum.LONG ? 'long' : 'short';
 
@@ -363,6 +375,26 @@ export class BacktestOrchestrator {
             maxFavorableExcursionPct: '0',
             accumulatedFundingUsdt: '0',
         };
+    }
+
+    // Resolve the OrderPolicyRouter's `strategyDirection` argument from the active strategy.
+    // v0/v1 are MEAN_REVERSION, v2 is MOMENTUM, v3 is HYBRID. HYBRID has no rows in the
+    // policy matrix; the orchestrator must pick a concrete leg from the signal's flow_type
+    // (ADR 0005 §1 / orderPolicyMatrix line 149–151). Mapping:
+    //   FORCED_EXHAUSTION              → MEAN_REVERSION (fade the cascade)
+    //   TREND_INITIATION, CATALYST_RISK → MOMENTUM       (follow the new-money / catalyst leg)
+    //   else                            → MEAN_REVERSION (conservative default; matches the
+    //                                                     skip-first culture — maker, no take)
+    private resolveStrategyDirection(direction: StrategyDirectionEnum, flowType: FlowTypeEnum): StrategyDirectionEnum {
+        if (direction !== StrategyDirectionEnum.HYBRID) {
+            return direction;
+        }
+
+        if (flowType === FlowTypeEnum.TREND_INITIATION || flowType === FlowTypeEnum.CATALYST_RISK) {
+            return StrategyDirectionEnum.MOMENTUM;
+        }
+
+        return StrategyDirectionEnum.MEAN_REVERSION;
     }
 
     private mapSlot(slot: PositionSlotEnum): IBacktestPosition['slot'] {

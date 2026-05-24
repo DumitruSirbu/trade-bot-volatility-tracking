@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { BacktestModule } from './backtest/BacktestModule';
 import { BootstrapModule } from './bootstrap/BootstrapModule';
 import { CommonModule } from './common/CommonModule';
 import { AppConfigModule } from './config/AppConfigModule';
@@ -9,6 +10,7 @@ import { ExecutionModule } from './execution/ExecutionModule';
 import { HealthModule } from './health/HealthModule';
 import { MarketDataModule } from './market-data/MarketDataModule';
 import { PositionModule } from './position/PositionModule';
+import { PromotionModule } from './promotion/PromotionModule';
 import { RiskModule } from './risk/RiskModule';
 import { StrategyModule } from './strategy/StrategyModule';
 
@@ -26,6 +28,8 @@ import { StrategyModule } from './strategy/StrategyModule';
         PositionModule,
         RiskModule,
         ExecutionModule,
+        BacktestModule,
+        PromotionModule,
         BootstrapModule,
     ],
 })

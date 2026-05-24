@@ -53,7 +53,18 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
             apiKey: this.appConfig.exchangeApiKey,
             secret: this.appConfig.exchangeApiSecret,
             enableRateLimit: ENABLE_RATE_LIMIT,
-            options: { defaultType: 'swap', disableFuturesSandboxWarning: true },
+            options: {
+                defaultType: 'swap',
+                disableFuturesSandboxWarning: true,
+                warnOnFetchOpenOrdersWithoutSymbol: false,
+                // CCXT's binanceusdm WS orderbook emits transient checksum-mismatch errors
+                // on sequence gaps; the stream auto-recovers but each gap surfaces as an
+                // ERROR-level throw. Mute per the CCXT-recommended option — reconciliation
+                // already polls REST as the authoritative source for orderbook depth used
+                // by the gate, so muting the WS-level checksum diagnostic does not relax
+                // any safety invariant.
+                watchOrderBook: { checksum: false },
+            },
         });
 
         if (this.appConfig.isExchangeTestnet) {

@@ -34,4 +34,21 @@ export class StrategyVersionEntity {
 
     @Column({ name: 'created_at', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
     createdAt!: Date;
+
+    // M8 W2 (ADR 0016 §2.1) promotion-audit fields. Populated by PromotionService when a
+    // draft row is promoted to active; cleared/refreshed by reactivate. promotion_report_id
+    // FKs comparison_reports.id (ON DELETE SET NULL) so a deleted report unlinks but does
+    // not orphan-cascade the strategy row. promotion_note is a free-text operator reason
+    // (M11 will add identity; the column is forward-compatible).
+    @Column({ name: 'promoted_at', type: 'timestamptz', nullable: true })
+    promotedAt?: Date | null;
+
+    @Column({ name: 'archived_at', type: 'timestamptz', nullable: true })
+    archivedAt?: Date | null;
+
+    @Column({ name: 'promotion_report_id', type: 'integer', nullable: true })
+    promotionReportId?: number | null;
+
+    @Column({ name: 'promotion_note', type: 'text', nullable: true })
+    promotionNote?: string | null;
 }

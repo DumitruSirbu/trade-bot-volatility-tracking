@@ -1,14 +1,18 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { OrderPolicyRouter } from '../execution/service/OrderPolicyRouter';
 import { MarketDataModule } from '../market-data/MarketDataModule';
 import { BookSnapshotEntity, CandleEntity, FundingRateEntity, OpenInterestEntity, TickAggregateEntity, UniverseMembershipEntity } from '../market-data/entity';
 import { RiskModule } from '../risk/RiskModule';
 import { StrategyModule } from '../strategy/StrategyModule';
 import { RunBacktestCommand } from './cli/RunBacktestCommand';
+import { BACKTEST_ORDER_POLICY_ROUTER } from './const/backtestTokens';
 import { BacktestOrchestrator } from './service/BacktestOrchestrator';
 import { BacktestRunnerService } from './service/BacktestRunnerService';
+import { BootstrapStatsService } from './service/BootstrapStatsService';
 import { CandleLoader } from './service/CandleLoader';
+import { ComparisonRunnerService } from './service/ComparisonRunnerService';
 import { FundingReplayLoader } from './service/FundingReplayLoader';
 import { IndicatorStateBuilder } from './service/IndicatorStateBuilder';
 import { MetricsComputer } from './service/MetricsComputer';
@@ -42,8 +46,18 @@ import { PointInTimeUniverse } from './service/PointInTimeUniverse';
         MetricsComputer,
         BacktestOrchestrator,
         BacktestRunnerService,
+        BootstrapStatsService,
+        ComparisonRunnerService,
         RunBacktestCommand,
+        // M8 W1: bind the live `OrderPolicyRouter` to the backtest token by default. The
+        // router is pure (no I/O — see OrderPolicyRouter doc comment) so registering it
+        // here in addition to ExecutionModule is safe; both modules import the same
+        // `orderPolicyMatrix` (single source of truth per ADR 0005 §5). We deliberately do
+        // NOT import ExecutionModule (which would drag in ccxt / ExchangeModule) — ADR 0015
+        // §4.9 requires the backtest CLI's Nest context to be free of live exchange wiring.
+        OrderPolicyRouter,
+        { provide: BACKTEST_ORDER_POLICY_ROUTER, useExisting: OrderPolicyRouter },
     ],
-    exports: [BacktestRunnerService, RunBacktestCommand],
+    exports: [BacktestRunnerService, ComparisonRunnerService, RunBacktestCommand],
 })
 export class BacktestModule {}

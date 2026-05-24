@@ -164,6 +164,23 @@ works. Happy-path is the floor; adversarial coverage is the ceiling. Both ship.
   outcome section with the owning future milestone named (e.g., "BNB→USDT fee
   normalization deferred to M7/M8").
 
+### 6.4 Live-app smoke is mandatory before close
+
+- After the last R-Fix wave passes review, **before the scribe writes the
+  outcome section**, the orchestrator MUST boot the actual app against the
+  live Postgres container and watch it run for at least **10 minutes**.
+- For milestones that ship a new CLI/entrypoint, the orchestrator MUST also
+  drive that entrypoint end-to-end at least once (not just argv parsing).
+- Any `ERROR`, unhandled rejection, DI cycle / `UndefinedModuleException`,
+  missing-module-registration error, boot-pipeline phase failure, or
+  reconnect storm → **fix-and-report** before close. Treat the finding at
+  the severity it deserves (often `blocker` or `high`).
+- Unit + integration tests use isolated Nest module graphs and can hide
+  app-wide composition bugs (forwardRef asymmetry, missing module in
+  `AppModule.imports`, top-of-file circular imports). M8 caught a real
+  `RiskModule ↔ PositionModule` cycle and a missing `BacktestModule` in
+  `AppModule` only at this stage.
+
 ## 7 — Documentation discipline at close-out
 
 ### 7.1 Scribe records the cycle

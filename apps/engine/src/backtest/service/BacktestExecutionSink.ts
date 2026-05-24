@@ -105,6 +105,21 @@ export class BacktestExecutionSink {
             ? '0.00'
             : netPnlUsdt.dividedBy(entryNotional).times(100).toFixed(2);
 
+        // M8 W5b (ADR 0018 §2.1): the post-clamp risk budget the position carried —
+        // |entryPrice - stopLossPrice| × qty, read off the position at close. This is
+        // equal to the ATR target (`atr14 × atrStopMultiplier × qty`) when no
+        // liquidation-buffer clamp fires (the common path); when the clamp engages it
+        // strictly reduces stop-distance, so this value is always ≤ the gate's pre-clamp
+        // ATR risk budget. The clamp is monotonically tightening — never widening — so
+        // "post-clamp" is the worst-case exposure the protective stop is approved for.
+        // Computed at close from the already-populated position fields so no plumbing
+        // change through the risk path is required; per the brief, this lives in-memory
+        // only and never hits Postgres.
+        const entryPrice = new Money(position.entryPriceUsdt);
+        const stopLoss = new Money(position.stopLossUsdt);
+        const qty = new Money(position.qty);
+        const riskBudgetSpent = entryPrice.minus(stopLoss).abs().times(qty);
+
         return {
             eventId: closeFill.eventId,
             symbol: position.symbol,
@@ -129,6 +144,7 @@ export class BacktestExecutionSink {
             fundingUsdt: snapshot.fundingUsdt.toFixed(8),
             slippageCostUsdt: snapshot.slippageCostUsdt.toFixed(8),
             netPnlUsdt: netPnlUsdt.toFixed(8),
+            riskBudgetSpent: riskBudgetSpent.toFixed(8),
             returnPct,
             openedAtMs: position.openedAtMs,
             closedAtMs: closeFill.tsMs,

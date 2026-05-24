@@ -21,6 +21,7 @@ import {
     CorrelationModeEnum,
     DeviationSideEnum,
     FlowTypeEnum,
+    OrderPolicyEnum,
     PositionSideEnum,
     PositionSlotEnum,
     RegimeLabelEnum,
@@ -263,6 +264,7 @@ function buildContext(
         isInUniverse: true,
         utcDateString: '2024-01-15',
         allocatedCapitalUsdt: '10000',
+        nextBarOpen: new Money('2000'),
     };
 }
 
@@ -291,7 +293,21 @@ function buildOrchestrator(
         size: jest.fn().mockReturnValue(sizing),
     } as any;
 
-    return { orchestrator: new BacktestOrchestrator(riskGate, sizer), riskGate, sizer };
+    // M8 W1: BacktestOrchestrator depends on IOrderPolicyRouter. The default test fake
+    // returns MARKETABLE_LIMIT_IOC for every call, preserving the pre-M8 hard-coded
+    // behaviour these legacy assertions were calibrated against. Tests that exercise
+    // policy routing construct the orchestrator directly with a custom router.
+    const policyRouter = {
+        plan: jest.fn().mockReturnValue({
+            policy: OrderPolicyEnum.MARKETABLE_LIMIT_IOC,
+            limitPrice: new Money('2000'),
+            timeoutMs: 800,
+            slippageCapPct: new Money('0.05'),
+            reduceOnly: false,
+        }),
+    } as any;
+
+    return { orchestrator: new BacktestOrchestrator(riskGate, sizer, policyRouter), riskGate, sizer, policyRouter };
 }
 
 // ─── O1: SKIP signal ──────────────────────────────────────────────────────────
@@ -806,10 +822,120 @@ describe('BacktestOrchestrator.processEvent — missing instrument', () => {
             isInUniverse: true,
             utcDateString: '2024-01-15',
             allocatedCapitalUsdt: '10000',
+            nextBarOpen: new Money('2000'),
         };
 
         const result = await orchestrator.processEvent(buildEvent(), ctx);
 
         expect(result.skipped).toBe(true);
+    });
+});
+
+// ─── M8 W1: OrderPolicyRouter injection ───────────────────────────────────────
+
+describe('BacktestOrchestrator — OrderPolicyRouter injection (M8 W1)', () => {
+    // Builds an orchestrator with a spy router so we can assert call args and override
+    // the policy returned per-test. Mirrors buildOrchestrator() but exposes the spy.
+    function buildOrchestratorWithRouter(routerPolicy: OrderPolicyEnum) {
+        const riskGate = { evaluate: jest.fn().mockResolvedValue(buildApprovedDecision()) } as any;
+        const sizer = {
+            size: jest.fn().mockReturnValue({
+                kind: 'sized' as const,
+                sizing: {
+                    qty: new Money('0.5'),
+                    notional: new Money('1000'),
+                    leverage: new Money('2'),
+                    riskPerTradeUsdt: new Money('20'),
+                },
+            }),
+        } as any;
+        const policyRouter = {
+            plan: jest.fn().mockReturnValue({
+                policy: routerPolicy,
+                limitPrice: new Money('2000'),
+                timeoutMs: 800,
+                slippageCapPct: new Money('0.05'),
+                reduceOnly: false,
+            }),
+        } as any;
+
+        return { orchestrator: new BacktestOrchestrator(riskGate, sizer, policyRouter), policyRouter };
+    }
+
+    it('passes the intent (including flowType) into the injected policy router', async () => {
+        const { orchestrator, policyRouter } = buildOrchestratorWithRouter(OrderPolicyEnum.MARKETABLE_LIMIT_IOC);
+        // V1 strategy stub — MEAN_REVERSION direction, returns an OPEN signal with FORCED_EXHAUSTION.
+        const v1Strategy = {
+            name: 'v1',
+            version: 1,
+            direction: 'mean_reversion' as any,
+            evaluate: jest.fn().mockReturnValue(buildOpenSignal()),
+        };
+        const ctx = buildContext(undefined, v1Strategy);
+        // Patch nextBarOpen so the orchestrator builds a fill request (which is what routes
+        // through the policy router). buildContext supplies the rest.
+        const ctxWithNextBar: IBacktestOrchestratorContext = { ...ctx, nextBarOpen: new Money('2000') } as any;
+
+        await orchestrator.processEvent(buildEvent(), ctxWithNextBar);
+
+        expect(policyRouter.plan).toHaveBeenCalledTimes(1);
+        const arg = policyRouter.plan.mock.calls[0][0];
+        expect(arg.intent.flowType).toBe(FlowTypeEnum.FORCED_EXHAUSTION);
+        expect(arg.strategyDirection).toBe('mean_reversion');
+        expect(arg.maxSlippageOfSlPct).toBeNull();
+    });
+
+    it('resolves HYBRID strategy direction by flow_type: TREND_INITIATION → MOMENTUM, FORCED_EXHAUSTION → MEAN_REVERSION', async () => {
+        const v3Strategy = (flowType: FlowTypeEnum): IStrategy => ({
+            name: 'v3',
+            version: 1,
+            direction: 'hybrid' as any,
+            evaluate: jest.fn().mockReturnValue({ ...buildOpenSignal(), flowType }),
+        } as any);
+
+        // Case 1: TREND_INITIATION (new-money / catalyst leg) → MOMENTUM leg routed.
+        {
+            const { orchestrator, policyRouter } = buildOrchestratorWithRouter(OrderPolicyEnum.MARKETABLE_LIMIT_IOC);
+            const ctx = buildContext(undefined, v3Strategy(FlowTypeEnum.TREND_INITIATION));
+            const ctxWithNextBar: IBacktestOrchestratorContext = { ...ctx, nextBarOpen: new Money('2000') } as any;
+            await orchestrator.processEvent(buildEvent(), ctxWithNextBar);
+
+            expect(policyRouter.plan).toHaveBeenCalledTimes(1);
+            expect(policyRouter.plan.mock.calls[0][0].strategyDirection).toBe('momentum');
+            expect(policyRouter.plan.mock.calls[0][0].intent.flowType).toBe(FlowTypeEnum.TREND_INITIATION);
+        }
+
+        // Case 2: FORCED_EXHAUSTION (cascade) → MEAN_REVERSION leg routed (fade).
+        {
+            const { orchestrator, policyRouter } = buildOrchestratorWithRouter(OrderPolicyEnum.MARKETABLE_LIMIT_IOC);
+            const ctx = buildContext(undefined, v3Strategy(FlowTypeEnum.FORCED_EXHAUSTION));
+            const ctxWithNextBar: IBacktestOrchestratorContext = { ...ctx, nextBarOpen: new Money('2000') } as any;
+            await orchestrator.processEvent(buildEvent(), ctxWithNextBar);
+
+            expect(policyRouter.plan).toHaveBeenCalledTimes(1);
+            expect(policyRouter.plan.mock.calls[0][0].strategyDirection).toBe('mean_reversion');
+            expect(policyRouter.plan.mock.calls[0][0].intent.flowType).toBe(FlowTypeEnum.FORCED_EXHAUSTION);
+        }
+    });
+
+    it('substituting a single-policy fake routes every event through that policy (isolation override)', async () => {
+        const { orchestrator, policyRouter } = buildOrchestratorWithRouter(OrderPolicyEnum.POST_ONLY_MAKER);
+        const v1Strategy = {
+            name: 'v1',
+            version: 1,
+            direction: 'mean_reversion' as any,
+            evaluate: jest.fn().mockReturnValue(buildOpenSignal()),
+        };
+        const ctx = buildContext(undefined, v1Strategy);
+        const ctxWithNextBar: IBacktestOrchestratorContext = { ...ctx, nextBarOpen: new Money('2000') } as any;
+
+        await orchestrator.processEvent(buildEvent(), ctxWithNextBar);
+
+        // The override fake returned POST_ONLY_MAKER irrespective of inputs; the orchestrator
+        // routed through it and asked the FillSimulator with the overridden policy.
+        const fillSimMock = ctxWithNextBar.fillSim.simulateFill as jest.Mock;
+        expect(fillSimMock).toHaveBeenCalledTimes(1);
+        expect(fillSimMock.mock.calls[0][0].policy).toBe(OrderPolicyEnum.POST_ONLY_MAKER);
+        expect(policyRouter.plan).toHaveBeenCalledTimes(1);
     });
 });

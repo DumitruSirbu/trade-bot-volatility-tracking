@@ -1593,6 +1593,6 @@ describe('BacktestRunnerService — force-close survivors at end-of-window (R1b 
         // After fix-1 the runner force-closes it at last-bar close, so it appears as a closed trade.
         expect(capturedTrades.length).toBe(1);
         expect(capturedTrades[0].symbol).toBe('ETHUSDT');
-        expect(capturedTrades[0].exitReason).toBe('time_stop');
+        expect(capturedTrades[0].exitReason).toBe('force_close');
     });
 });

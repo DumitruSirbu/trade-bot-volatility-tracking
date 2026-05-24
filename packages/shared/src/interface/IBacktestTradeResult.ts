@@ -19,10 +19,11 @@ export interface IBacktestTradeResult {
     readonly fundingUsdt: string; // signed; cashflows over the hold
     readonly slippageCostUsdt: string; // |entry_slippage_pct| + |exit_slippage_pct| applied to notional
     readonly netPnlUsdt: string; // gross - fees - |funding paid| - slippage cost (see ADR 0012)
+    readonly riskBudgetSpent: string; // decimal stop-distance × qty (the ATR-sized risk budget the gate approved), ADR 0018 §2.1
     readonly returnPct: string; // netPnlUsdt / entryNotionalUsdt * 100
     readonly openedAtMs: number;
     readonly closedAtMs: number;
     readonly holdMs: number;
-    readonly exitReason: 'take_profit' | 'stop_loss' | 'time_stop' | 'signal' | 'liquidation';
+    readonly exitReason: 'take_profit' | 'stop_loss' | 'time_stop' | 'signal' | 'liquidation' | 'force_close';
     readonly lowFidelity: boolean; // true if EITHER fill used tier-floor only (no book_snapshots)
 }

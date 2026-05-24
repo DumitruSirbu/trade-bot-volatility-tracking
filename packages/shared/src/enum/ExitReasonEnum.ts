@@ -7,4 +7,5 @@ export enum ExitReasonEnum {
 	KILL_SWITCH = 'kill_switch',
 	RECONCILED_MISSING = 'reconciled_missing',
 	LIQUIDATED = 'liquidated',
+	FORCE_CLOSE = 'force_close',
 }

@@ -1,13 +1,8 @@
-import { CoinTierEnum, DeviationSideEnum, FlowTypeEnum, IVolatilityDetectedEvent, RegimeLabelEnum } from '@bot/shared';
+import { CoinTierEnum, DeviationSideEnum, FlowTypeEnum, IVolatilityDetectedEvent } from '@bot/shared';
 
 import { MoneyValue } from '../../common/utils/money';
+import { computeRegimeLabel } from '../../market-data/indicator/computeRegimeLabel';
 import { IIndicatorSnapshot } from '../../market-data/interface';
-
-// ADX threshold above which the snapshot is labelled trending (matches the regime label
-// taxonomy used by the live snapshot mapper; below it the bar is RANGING regardless of
-// DI+/- ordering). Kept local — risk/strategy params own the trade decisions, this is only
-// a label for the persisted decision row + analytics.
-const ADX_TRENDING_THRESHOLD = 25;
 
 // Idiosyncrasy denominator floor: prevents 0/0 when both moves are exactly zero. Tiny —
 // 0.0001 — so it does not bias the score for realistic inputs.
@@ -90,7 +85,7 @@ export function buildBacktestEvent(snapshot: IIndicatorSnapshot, barOpenTimeMs: 
         bookDepth10bpsUsdt: context.bookDepth10bpsUsdt !== null ? context.bookDepth10bpsUsdt.toFixed(18) : '0',
         bookDepth50bpsUsdt: context.bookDepth50bpsUsdt !== null ? context.bookDepth50bpsUsdt.toFixed(18) : '0',
 
-        regimeLabel: deriveRegimeLabel(snapshot.adx14, snapshot.adxDiPlus, snapshot.adxDiMinus),
+        regimeLabel: computeRegimeLabel(snapshot.adx14, snapshot.adxDiPlus, snapshot.adxDiMinus),
         marketBreadth5mUpPct: context.marketBreadth5mUpPct,
         sameBarTriggerCount: context.sameBarTriggerCount,
         btc1mMovePct: context.btc1mMovePct,
@@ -141,14 +136,3 @@ function clampUnitInterval(value: number): number {
     return value;
 }
 
-function deriveRegimeLabel(adx14: number, diPlus: number, diMinus: number): RegimeLabelEnum {
-    if (adx14 > ADX_TRENDING_THRESHOLD && diPlus > diMinus) {
-        return RegimeLabelEnum.TRENDING_UP;
-    }
-
-    if (adx14 > ADX_TRENDING_THRESHOLD && diMinus > diPlus) {
-        return RegimeLabelEnum.TRENDING_DOWN;
-    }
-
-    return RegimeLabelEnum.RANGING;
-}
