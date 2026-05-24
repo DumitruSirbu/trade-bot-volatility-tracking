@@ -2,19 +2,17 @@
  * PositionService.transition — unit tests (M6 W1, ADR 0009 §2/§3/§6).
  *
  * Coverage matrix:
- *   - Every legal transition succeeds, persists state + status alias, emits event.
+ *   - Every legal transition succeeds, persists state, emits event.
  *   - Every illegal transition throws IllegalStateTransitionException, no event emitted,
  *     no row write.
  *   - PositionNotFoundException raised when positionId does not resolve.
  *   - Event payload carries the correct fields (fromState, toState, transitionedAtMs,
  *     eventClass).
- *   - statusAliasFor maps CLOSED -> 'closed', every other state -> 'open' (so M2-era
- *     readers querying .status keep resolving sensibly).
  *
  * Pure unit test: the repository and EventEmitter2 are jest mocks; no DB.
  */
 
-import { IPositionStateTransitionedEvent, PositionStateEnum, PositionStatusEnum } from '@bot/shared';
+import { IPositionStateTransitionedEvent, PositionStateEnum } from '@bot/shared';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import { POSITION_STATE_TRANSITIONED_EVENT } from '../../src/position/const';
@@ -34,7 +32,6 @@ function buildPosition(overrides: Partial<PositionEntity> = {}): PositionEntity 
         id: 42,
         symbol: 'BTCUSDT',
         state: PositionStateEnum.OPEN,
-        status: PositionStatusEnum.OPEN,
         ...overrides,
     } as PositionEntity;
 }
@@ -91,8 +88,8 @@ function isLegalArrow(from: PositionStateEnum, to: PositionStateEnum): boolean {
     return LEGAL_ARROWS.some((edge) => edge.from === from && edge.to === to);
 }
 
-describe('PositionService.transition — legal transitions (ADR 0009 §3)', () => {
-    it.each(LEGAL_ARROWS)('persists $from -> $to with state + status alias, emits event', async ({ from, to }) => {
+describe('PositionService.transition — legal transitions (ADR 0009 §3)', () => { // statusAliasFor removed in M7 W0c
+    it.each(LEGAL_ARROWS)('persists $from -> $to with correct state, emits event', async ({ from, to }) => {
         // BUILD
         const position = buildPosition({ state: from });
         const { repository, events, service } = buildService(position);
@@ -105,9 +102,6 @@ describe('PositionService.transition — legal transitions (ADR 0009 §3)', () =
         expect(repository.save).toHaveBeenCalledTimes(1);
         const savedRow = repository.save.mock.calls[0][0];
         expect(savedRow.state).toBe(to);
-        // Status alias: anything non-CLOSED → 'open'; CLOSED → 'closed'.
-        const expectedStatus = to === PositionStateEnum.CLOSED ? PositionStatusEnum.CLOSED : PositionStatusEnum.OPEN;
-        expect(savedRow.status).toBe(expectedStatus);
         expect(events.emit).toHaveBeenCalledTimes(1);
     });
 

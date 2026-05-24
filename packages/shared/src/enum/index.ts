@@ -4,7 +4,6 @@ export { VwapAnchorTypeEnum } from './VwapAnchorTypeEnum.js';
 export { DeviationSideEnum } from './DeviationSideEnum.js';
 export { FlowTypeEnum } from './FlowTypeEnum.js';
 export { PositionSideEnum } from './PositionSideEnum.js';
-export { PositionStatusEnum } from './PositionStatusEnum.js';
 export { PositionStateEnum } from './PositionStateEnum.js';
 export { ExitReasonEnum } from './ExitReasonEnum.js';
 export { PositionSlotEnum } from './PositionSlotEnum.js';

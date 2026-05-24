@@ -41,8 +41,6 @@ import {
     OrderIntentActionEnum,
     OrderPolicyEnum,
     PositionSideEnum,
-    PositionSlotEnum,
-    PositionStatusEnum,
     ProtectiveOrderTypeEnum,
     StrategyDirectionEnum,
 } from '@bot/shared';
@@ -103,7 +101,6 @@ function makeBundle(
             qty?: MoneyValue;
             entryPrice?: MoneyValue;
             entryNotional?: MoneyValue;
-            status?: PositionStatusEnum;
         };
         findOpenResult?: unknown;
     } = {},
@@ -133,7 +130,6 @@ function makeBundle(
         qty: new Money('0.01'),
         entryPrice: new Money('30000'),
         entryNotional: new Money('300'),
-        status: PositionStatusEnum.OPEN,
     };
     const positionRow = overrides.positionRow ?? defaultPositionRow;
 
@@ -701,7 +697,6 @@ describe('S3 (adversarial) — drift: filled qty > position.qty triggers UNKNOWN
             entryPrice: new Money('30000'),
             entryNotional: new Money('300'),
             side: 'short' as const,
-            status: PositionStatusEnum.OPEN,
         };
 
         const bundle = makeBundle({
@@ -780,7 +775,6 @@ describe('S3 (adversarial) — ledger and decrement agree on clamped qty (not ra
             entryPrice: new Money('30000'),
             entryNotional: new Money('300'),
             side: 'short' as const,
-            status: PositionStatusEnum.OPEN,
         };
 
         const bundle = makeBundle({
@@ -947,7 +941,6 @@ describe('S4 (adversarial) — halt fires during REDUCE_MARKET remainder recursi
             entryPrice: new Money('30000'),
             entryNotional: new Money('300'),
             side: 'short' as const,
-            status: PositionStatusEnum.OPEN,
         };
 
         const bundle = makeBundle({ plan: reducePlan, findOpenResult: positionRow });

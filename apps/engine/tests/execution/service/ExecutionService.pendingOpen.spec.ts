@@ -144,18 +144,14 @@ function makeWiredService(
 }
 
 describe('M6 W1.5 — ExecutionService entry path inserts at PENDING_OPEN (ADR 0009 §6.1a)', () => {
-    it('createOpen receives state=PENDING_OPEN AND status=open in the same INSERT (dual-write contract, ADR 0009 §1 / §6.1)', async () => {
+    it('createOpen receives state=PENDING_OPEN in the INSERT (ADR 0009 §6.1)', async () => {
         const { service, positions } = makeWiredService();
 
         await service.onOrderIntentApproved(buildApprovedEvent());
 
         expect(positions.createOpen).toHaveBeenCalledTimes(1);
-        const insertedRow = (positions.createOpen as jest.Mock).mock.calls[0][0] as { state?: PositionStateEnum; status?: string };
+        const insertedRow = (positions.createOpen as jest.Mock).mock.calls[0][0] as { state?: PositionStateEnum };
         expect(insertedRow.state).toBe(PositionStateEnum.PENDING_OPEN);
-        // The deprecated alias is projected per ADR 0009 §1 (pending_open → status='open').
-        // The PositionRepository.createOpen builder always stamps status='open' so this is
-        // the same single INSERT — no split write.
-        expect(insertedRow.status).toBe('open');
     });
 
     it('transitions PENDING_OPEN -> OPEN with eventClass="protective.attached" on exchange-side attach success', async () => {

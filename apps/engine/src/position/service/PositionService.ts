@@ -4,7 +4,6 @@ import {
     IPositionStateTransitionedEvent,
     PositionSideEnum,
     PositionStateEnum,
-    PositionStatusEnum,
     QtyAdjustmentReasonEnum,
     TransactionTypeEnum,
 } from '@bot/shared';
@@ -107,10 +106,8 @@ export interface IRecordFundingInputs {
 }
 
 // PositionService is the SINGLE write API for position state (ADR 0009 §2 / §6
-// invariant 1). Callers that previously mutated PositionEntity.status directly
-// (ExecutionService open / close paths, RiskGate close paths) must now route
-// through transition(). Direct repository.update({state: ...}) outside this
-// service is a reviewer must-fix.
+// invariant 1). All callers must route through transition(). Direct
+// repository.update({state: ...}) outside this service is a reviewer must-fix.
 //
 // DB-first ordering (ADR 0009 §2 / §6 invariant 2): row write → event emit.
 // A crash between row write and event emit is recoverable on boot from the row;
@@ -131,8 +128,7 @@ export class PositionService {
     // arrow (including transitions out of CLOSED, which is terminal). PositionNotFoundException
     // for an unknown positionId.
     //
-    // On success: writes positions.state (and the deprecated positions.status alias
-    // — see ADR 0009 §1) atomically via repository.save, then emits
+    // On success: writes positions.state atomically via repository.save, then emits
     // POSITION_STATE_TRANSITIONED_EVENT carrying the IPositionStateTransitionedEvent
     // payload. Returns the persisted row.
     async transition(
@@ -171,7 +167,6 @@ export class PositionService {
         }
 
         position.state = toState;
-        position.status = this.statusAliasFor(toState);
 
         // ADR 0009 §6.1: close-side fields land in the same UPDATE as the state.
         // A CLOSED row without exit_reason is a reviewer must-fix (ADR 0012 §7).
@@ -380,19 +375,4 @@ export class PositionService {
         return { fillPnl, feesPaid, fundingPaid, realizedPnl, closingFills, hasClosingFills: closingFills.length > 0 };
     }
 
-    // Maps the expanded PositionStateEnum back to the legacy two-value
-    // PositionStatusEnum so any M2-era reader that still queries .status keeps
-    // resolving sensibly until the column is dropped in M7 (ADR 0009 §1).
-    //   CLOSED       -> 'closed'
-    //   everything else (pending_open / open / closing / reconciling /
-    //                    manual_adopted_unmanaged) -> 'open'
-    // Rationale: every non-CLOSED state is "the bot considers this position
-    // alive and slot-consuming" — exactly what the legacy OPEN meant.
-    private statusAliasFor(state: PositionStateEnum): PositionStatusEnum {
-        if (state === PositionStateEnum.CLOSED) {
-            return PositionStatusEnum.CLOSED;
-        }
-
-        return PositionStatusEnum.OPEN;
-    }
 }

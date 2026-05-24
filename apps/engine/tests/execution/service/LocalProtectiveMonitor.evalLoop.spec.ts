@@ -68,7 +68,6 @@ function buildHarness(opts: IHarnessOpts = {}): IHarness {
                   id: 42,
                   symbol: 'BTCUSDT',
                   side,
-                  status: 'open',
                   state: PositionStateEnum.OPEN,
                   entryPrice: new Money(opts.entryPrice ?? '30000'),
                   qty: new Money(opts.positionQty ?? '0.01'),

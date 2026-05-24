@@ -19,8 +19,8 @@ import { StrategyVersionEntity } from '../../strategy/entity';
 // stores the CoinTierEnum string (ADR §5, overrides the brief's SMALLINT). No live writer
 // until M3–M6 (schema + repository only in M2).
 @Entity({ name: 'positions', synchronize: false })
-@Index('idx_positions_strategy_version_id_status', ['strategyVersionId', 'status'])
-@Index('idx_positions_symbol_status', ['symbol', 'status'])
+@Index('idx_positions_strategy_version_id_state', ['strategyVersionId', 'state'])
+@Index('idx_positions_symbol_state', ['symbol', 'state'])
 export class PositionEntity {
     @PrimaryGeneratedColumn({ name: 'positions_id' })
     id!: number;
@@ -37,12 +37,6 @@ export class PositionEntity {
 
     @Column({ name: 'side', type: 'varchar' })
     side!: PositionSideEnum;
-
-    // Deprecated alias for M6 (ADR 0009 §1). The legacy two-value status column is
-    // preserved one milestone so M2-era reads still resolve; writers go through
-    // PositionService.transition() and stamp BOTH columns until M7 removes status.
-    @Column({ name: 'status', type: 'varchar' })
-    status!: string;
 
     // Authoritative state column (ADR 0009 §1). PositionStateEnum domain; backfilled to
     // 'open' for pre-M6 rows by migration 20260525010000. The DB default keeps inserts
