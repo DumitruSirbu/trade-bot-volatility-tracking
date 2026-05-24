@@ -9,3 +9,8 @@ export { IReconciliationResolvedEvent } from './IReconciliationResolvedEvent.js'
 export { IPositionAdoptedEvent } from './IPositionAdoptedEvent.js';
 export { IPositionAdoptionVanishedEvent } from './IPositionAdoptionVanishedEvent.js';
 export { IExchangeOverfillDriftEvent } from './IExchangeOverfillDriftEvent.js';
+export { IBacktestConfig } from './IBacktestConfig.js';
+export { IBacktestFill } from './IBacktestFill.js';
+export { IBacktestPosition } from './IBacktestPosition.js';
+export { IBacktestTradeResult } from './IBacktestTradeResult.js';
+export { IBacktestReport, IBacktestEquityPoint, IBacktestBreakdownRow } from './IBacktestReport.js';
