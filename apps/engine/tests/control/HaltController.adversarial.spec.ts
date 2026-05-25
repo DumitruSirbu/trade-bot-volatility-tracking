@@ -1,4 +1,4 @@
-import { AlertTypeEnum, AuthScopeEnum, HaltSourceEnum, HaltStateEnum, IAlertPayload, IHaltAuditEntry } from '@bot/shared';
+import { AlertTypeEnum, AuthScopeEnum, HaltAuditActionEnum, HaltSourceEnum, HaltStateEnum, IAlertPayload, IHaltAuditEntry } from '@bot/shared';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { Response } from 'express';
 
@@ -32,7 +32,7 @@ class FakeControlAuditRepository {
             actorSub: params.actorSub,
             actorJti: params.actorJti,
             sourceIp: params.sourceIp,
-            action: params.action === 'HALT' ? 'halt' : 'resume',
+            action: params.action === 'HALT' ? HaltAuditActionEnum.HALT : HaltAuditActionEnum.RESUME,
             reason: params.reason,
             flattenRequested: params.flattenRequested,
             previousState: params.previousState === 'HALTED' ? 'halted' : 'running',
@@ -50,7 +50,7 @@ class FakeControlAuditRepository {
             actorSub: `SYSTEM:${params.source}`,
             actorJti: 'SYSTEM',
             sourceIp: null,
-            action: params.newState === 'HALTED' ? 'halt' : 'resume',
+            action: params.newState === 'HALTED' ? HaltAuditActionEnum.HALT : HaltAuditActionEnum.RESUME,
             reason: params.reason,
             flattenRequested: params.flattenRequested,
             previousState: params.previousState === 'HALTED' ? 'halted' : 'running',
@@ -126,25 +126,21 @@ function makeRequest(sub = 'operator-1', jti = 'jti-1') {
     };
 }
 
-function buildController(opts: {
-    clock?: FixedClock;
-    auditRepo?: FakeControlAuditRepository;
-    alerts?: StubAlertSink;
-    flatten?: StubFlattenCoordinator;
-    haltFlag?: HaltFlagService;
-} = {}) {
+function buildController(
+    opts: {
+        clock?: FixedClock;
+        auditRepo?: FakeControlAuditRepository;
+        alerts?: StubAlertSink;
+        flatten?: StubFlattenCoordinator;
+        haltFlag?: HaltFlagService;
+    } = {},
+) {
     const clock = opts.clock ?? new FixedClock(NOW);
     const auditRepo = opts.auditRepo ?? new FakeControlAuditRepository();
     const alerts = opts.alerts ?? new StubAlertSink();
     const flatten = opts.flatten ?? new StubFlattenCoordinator();
     const haltFlag = opts.haltFlag ?? new HaltFlagService();
-    const service = new HaltService(
-        auditRepo as unknown as ControlAuditRepository,
-        haltFlag,
-        alerts,
-        flatten,
-        new EventEmitter2(),
-    );
+    const service = new HaltService(auditRepo as unknown as ControlAuditRepository, haltFlag, alerts, flatten, new EventEmitter2());
     const rateLimiter = new HaltRateLimiter();
     const controller = new HaltController(service, rateLimiter, auditRepo as unknown as ControlAuditRepository, clock);
     // M9 R1 fix #2: HaltStateRestoreService now takes (auditRepo, service, haltFlag, riskStateRepo).
@@ -168,9 +164,7 @@ describe('HaltController adversarial — rate-limit window boundary', () => {
         }
 
         // 6th within the 60s window must be rejected.
-        await expect(
-            harness.controller.halt({ reason: 'overflow' }, makeRequest() as never, buildResponseStub()),
-        ).rejects.toMatchObject({ status: 429 });
+        await expect(harness.controller.halt({ reason: 'overflow' }, makeRequest() as never, buildResponseStub())).rejects.toMatchObject({ status: 429 });
     });
 
     it('6th hit passes once the 60s sliding window has expired', async () => {
@@ -184,9 +178,7 @@ describe('HaltController adversarial — rate-limit window boundary', () => {
         // Slide the window past 60s.
         harness.clock.advance(60_001);
 
-        await expect(
-            harness.controller.halt({ reason: 'after-window' }, makeRequest() as never, buildResponseStub()),
-        ).resolves.toBeDefined();
+        await expect(harness.controller.halt({ reason: 'after-window' }, makeRequest() as never, buildResponseStub())).resolves.toBeDefined();
     });
 });
 
@@ -269,9 +261,7 @@ describe('HaltController adversarial — flatten with zero open positions', () =
         // The flatten coordinator is stubbed — it records calls but won't
         // emit real CLOSE intents. Having zero calls means it either wasn't
         // invoked or was invoked but had nothing to iterate. Both are valid.
-        await expect(
-            harness.controller.halt({ reason: 'empty-flatten', flatten: true }, makeRequest() as never, buildResponseStub()),
-        ).resolves.toBeDefined();
+        await expect(harness.controller.halt({ reason: 'empty-flatten', flatten: true }, makeRequest() as never, buildResponseStub())).resolves.toBeDefined();
 
         // Coordinator must have been called once (flatten=true triggers it);
         // the coordinator itself handles the "no positions" case without error.
@@ -318,9 +308,7 @@ describe('HaltController adversarial — rate-limit ordering + Retry-After', () 
         // 6th call carries a BAD body (missing reason). Pre-fix this would
         // trip the body validator first and return 400. Post-fix the rate
         // limiter fires first and returns 429.
-        await expect(
-            harness.controller.halt({} as never, makeRequest() as never, buildResponseStub()),
-        ).rejects.toMatchObject({ status: 429 });
+        await expect(harness.controller.halt({} as never, makeRequest() as never, buildResponseStub())).rejects.toMatchObject({ status: 429 });
     });
 
     it('sets the Retry-After header (seconds) on the response when rate-limited', async () => {
@@ -333,9 +321,7 @@ describe('HaltController adversarial — rate-limit ordering + Retry-After', () 
 
         const res = buildResponseStub();
 
-        await expect(
-            harness.controller.halt({ reason: 'overflow' }, makeRequest() as never, res),
-        ).rejects.toMatchObject({ status: 429 });
+        await expect(harness.controller.halt({ reason: 'overflow' }, makeRequest() as never, res)).rejects.toMatchObject({ status: 429 });
 
         const setHeader = (res as unknown as { setHeader: jest.Mock }).setHeader;
         const retryAfterCall = setHeader.mock.calls.find((args) => args[0] === 'Retry-After');
@@ -351,9 +337,7 @@ describe('HaltController adversarial — audit write failure ordering invariant'
         const harness = buildController();
         jest.spyOn(harness.auditRepo, 'appendOperator').mockRejectedValueOnce(new Error('DB unavailable'));
 
-        await expect(
-            harness.controller.halt({ reason: 'will-fail' }, makeRequest() as never, buildResponseStub()),
-        ).rejects.toThrow(/DB unavailable/u);
+        await expect(harness.controller.halt({ reason: 'will-fail' }, makeRequest() as never, buildResponseStub())).rejects.toThrow(/DB unavailable/u);
 
         expect(harness.haltFlag.isHalted()).toBe(false);
         expect(harness.alerts.published).toHaveLength(0);

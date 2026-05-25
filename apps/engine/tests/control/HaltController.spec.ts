@@ -1,4 +1,4 @@
-import { AlertTypeEnum, AuthScopeEnum, HaltSourceEnum, HaltStateEnum, IAlertPayload, IHaltAuditEntry } from '@bot/shared';
+import { AlertTypeEnum, AuthScopeEnum, HaltAuditActionEnum, HaltSourceEnum, HaltStateEnum, IAlertPayload, IHaltAuditEntry } from '@bot/shared';
 import { BadRequestException, ExecutionContext, HttpException, UnauthorizedException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { Response } from 'express';
@@ -57,7 +57,7 @@ class FakeControlAuditRepository {
             actorSub: params.actorSub,
             actorJti: params.actorJti,
             sourceIp: params.sourceIp,
-            action: params.action === 'HALT' ? 'halt' : 'resume',
+            action: params.action === 'HALT' ? HaltAuditActionEnum.HALT : HaltAuditActionEnum.RESUME,
             reason: params.reason,
             flattenRequested: params.flattenRequested,
             previousState: params.previousState === 'HALTED' ? 'halted' : 'running',
@@ -76,7 +76,7 @@ class FakeControlAuditRepository {
             actorSub: `SYSTEM:${params.source}`,
             actorJti: 'SYSTEM',
             sourceIp: null,
-            action: params.newState === 'HALTED' ? 'halt' : 'resume',
+            action: params.newState === 'HALTED' ? HaltAuditActionEnum.HALT : HaltAuditActionEnum.RESUME,
             reason: params.reason,
             flattenRequested: params.flattenRequested,
             previousState: params.previousState === 'HALTED' ? 'halted' : 'running',
@@ -96,7 +96,10 @@ class FakeControlAuditRepository {
         return this.rows[this.rows.length - 1];
     }
 
-    async findHistoryPage(_cursor: string | null, _pageSize: number | null): Promise<{ items: IHaltAuditEntry[]; nextCursor: string | null; pageSize: number }> {
+    async findHistoryPage(
+        _cursor: string | null,
+        _pageSize: number | null,
+    ): Promise<{ items: IHaltAuditEntry[]; nextCursor: string | null; pageSize: number }> {
         return { items: [...this.rows].reverse(), nextCursor: null, pageSize: 50 };
     }
 
@@ -172,13 +175,7 @@ function buildController(opts: IBuildOpts = {}): {
     const flatten = opts.flatten ?? new StubFlattenCoordinator();
     const haltFlag = opts.haltFlag ?? new HaltFlagService();
 
-    const service = new HaltService(
-        auditRepo as unknown as ControlAuditRepository,
-        haltFlag,
-        alerts,
-        flatten,
-        new EventEmitter2(),
-    );
+    const service = new HaltService(auditRepo as unknown as ControlAuditRepository, haltFlag, alerts, flatten, new EventEmitter2());
     const rateLimiter = new HaltRateLimiter();
 
     const controller = new HaltController(service, rateLimiter, auditRepo as unknown as ControlAuditRepository, clock);
@@ -191,7 +188,10 @@ function buildController(opts: IBuildOpts = {}): {
     return { controller, service, auditRepo, alerts, flatten, haltFlag, rateLimiter, clock, restore };
 }
 
-function makeRequest(sub = 'operator-1', jti = 'jti-1'): { authSubject: { sub: string; jti: string; scopes: AuthScopeEnum[] }; ip: string | undefined; headers: Record<string, string> } {
+function makeRequest(
+    sub = 'operator-1',
+    jti = 'jti-1',
+): { authSubject: { sub: string; jti: string; scopes: AuthScopeEnum[] }; ip: string | undefined; headers: Record<string, string> } {
     return {
         authSubject: { sub, jti, scopes: [AuthScopeEnum.HALT, AuthScopeEnum.READ] },
         ip: '203.0.113.1',
@@ -227,7 +227,7 @@ describe('HaltController', () => {
 
             expect(response.haltState).toBe(HaltStateEnum.RUNNING);
             expect(harness.haltFlag.isHalted()).toBe(false);
-            expect(harness.auditRepo.rows[0].action).toBe('resume');
+            expect(harness.auditRepo.rows[0].action).toBe(HaltAuditActionEnum.RESUME);
             expect(harness.auditRepo.rows[0].previousState).toBe('halted');
             expect(harness.auditRepo.rows[0].newState).toBe('running');
             expect(harness.alerts.published[0].type).toBe(AlertTypeEnum.OPERATOR_RESUME);
@@ -349,12 +349,12 @@ describe('HaltController', () => {
         });
 
         it('declares @RequiredScopes(HALT) on the halt handler', () => {
-            const scopes = Reflect.getMetadata('auth:required_scopes',HaltController.prototype.halt);
+            const scopes = Reflect.getMetadata('auth:required_scopes', HaltController.prototype.halt);
             expect(scopes).toEqual([AuthScopeEnum.HALT]);
         });
 
         it('declares @RequiredScopes(READ) on the getState handler', () => {
-            const scopes = Reflect.getMetadata('auth:required_scopes',HaltController.prototype.getState);
+            const scopes = Reflect.getMetadata('auth:required_scopes', HaltController.prototype.getState);
             expect(scopes).toEqual([AuthScopeEnum.READ]);
         });
 

@@ -26,6 +26,7 @@ export { RetainReasonEnum } from './RetainReasonEnum.js';
 export { QtyAdjustmentReasonEnum } from './QtyAdjustmentReasonEnum.js';
 export { HaltSourceEnum } from './HaltSourceEnum.js';
 export { HaltStateEnum } from './HaltStateEnum.js';
+export { HaltAuditActionEnum } from './HaltAuditActionEnum.js';
 export { AuthScopeEnum } from './AuthScopeEnum.js';
 export { AuthFailureReasonEnum } from './AuthFailureReasonEnum.js';
 export { AlertSeverityEnum } from './AlertSeverityEnum.js';

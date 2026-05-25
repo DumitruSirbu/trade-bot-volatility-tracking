@@ -2,7 +2,9 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AlertSinkModule } from '../alert/sink/AlertSinkModule';
+import { AuthController, LoginValidationFilter } from '../auth/AuthController';
 import { AuthModule } from '../auth/AuthModule';
+import { LoginRateLimiter } from '../auth/LoginRateLimiter';
 import { CommonModule } from '../common/CommonModule';
 import { CLOCK, SystemClock } from '../common/clock/Clock';
 import { CursorCodec } from '../read-api/pagination/CursorCodec';
@@ -41,9 +43,18 @@ import { HaltService } from './HaltService';
 // halt flag before any market-data subscription opens.
 @Module({
     imports: [AlertSinkModule, AuthModule, CommonModule, TypeOrmModule.forFeature([ControlAuditEntity])],
-    controllers: [HaltController],
+    // M10 W0.5 — AuthController (POST /v1/auth/login) registered here to
+    // avoid an AuthModule → ControlModule cycle (ControlModule already imports
+    // AuthModule for the guard). The controller depends on AppConfigService,
+    // CLOCK, HaltFlagService (CommonModule), AuthTokenService (AuthModule),
+    // ControlAuditRepository (this module), LoginRateLimiter (this module).
+    controllers: [HaltController, AuthController],
     providers: [
         ControlAuditRepository,
+        LoginRateLimiter,
+        // M10 R2 #1 — DI-resolved route filter so it can write the LOGIN_FAILURE
+        // audit row when the global ValidationPipe rejects a malformed body.
+        LoginValidationFilter,
         // R1 wave #6 (architect D): the audit-history cursor goes through the
         // same MAC-bound codec as the read-API surface (positions / metrics).
         // Locally provided here so ControlModule stays independent of the

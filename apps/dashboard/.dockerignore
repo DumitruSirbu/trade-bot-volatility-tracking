@@ -1,0 +1,15 @@
+# Dashboard build context — keep small.
+node_modules
+dist
+coverage
+.turbo
+.cache
+**/*.spec.ts
+**/*.spec.tsx
+**/*.test.ts
+**/*.test.tsx
+.env
+.env.*
+!.env.example
+Dockerfile
+.dockerignore

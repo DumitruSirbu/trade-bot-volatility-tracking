@@ -1,11 +1,11 @@
-import { HaltSourceEnum, IHaltAuditEntry } from '@bot/shared';
+import { HaltAuditActionEnum, HaltSourceEnum, IHaltAuditEntry } from '@bot/shared';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { CursorCodec } from '../../read-api/pagination/CursorCodec';
-import { HALT_HISTORY_PAGE_SIZE_DEFAULT, HALT_HISTORY_PAGE_SIZE_MAX, HALT_REASON_MAX_LEN } from '../const/controlConsts';
-import { ControlAuditEntity } from '../entity/ControlAuditEntity';
+import { HALT_HISTORY_PAGE_SIZE_DEFAULT, HALT_HISTORY_PAGE_SIZE_MAX, HALT_REASON_MAX_LEN, LOGIN_AUDIT_TIMEOUT_MS } from '../const/controlConsts';
+import { ControlAuditEntity, ControlAuditActionDb } from '../entity/ControlAuditEntity';
 
 // M9 W3 (ADR 0021 §2.3). Repository for the append-only `control_audit` table.
 //
@@ -49,6 +49,20 @@ export interface IAppendProgrammaticParams {
     flattenRequested: boolean;
     previousState: 'RUNNING' | 'HALTED';
     newState: 'RUNNING' | 'HALTED';
+}
+
+// M10 W0.5 (ADR 0027 §2.5). Login attempts share the `control_audit` table.
+// `action` widens to LOGIN_SUCCESS | LOGIN_FAILURE | LOGIN_THROTTLED;
+// previous/new state are unchanged by login (audit captures the operating
+// mode at attempt time, not a transition).
+export interface IAppendLoginAuditParams {
+    occurredAt: Date;
+    action: HaltAuditActionEnum.LOGIN_SUCCESS | HaltAuditActionEnum.LOGIN_FAILURE | HaltAuditActionEnum.LOGIN_THROTTLED;
+    sourceIp: string | null;
+    actorSub: string | null; // null on failure/throttle → sentinel 'unknown'
+    actorJti: string | null; // null on failure/throttle → empty string
+    reason: string; // 'login' | 'BAD_SECRET' | 'MALFORMED' | 'TOO_MANY_LOGIN_ATTEMPTS'
+    previousState: 'RUNNING' | 'HALTED';
 }
 
 @Injectable()
@@ -104,6 +118,35 @@ export class ControlAuditRepository {
         return toAuditEntry(saved);
     }
 
+    async appendLoginAudit(params: IAppendLoginAuditParams): Promise<IHaltAuditEntry> {
+        // Login is not a halt-state transition — previous_state === new_state.
+        // Sentinels for failed/throttled attempts per ADR 0027 §2.5.
+        const dbAction: ControlAuditActionDb = mapLoginActionToDb(params.action);
+        const row = this.repository.create({
+            occurredAt: params.occurredAt,
+            actorSub: params.actorSub ?? 'unknown',
+            actorJti: params.actorJti ?? '',
+            sourceIp: params.sourceIp,
+            action: dbAction,
+            reason: truncateReason(params.reason),
+            flattenRequested: false,
+            previousState: params.previousState,
+            newState: params.previousState,
+            correlationEventId: null,
+        });
+
+        // M10 R1 #3 (Security HIGH) — bounded by LOGIN_AUDIT_TIMEOUT_MS. A
+        // slow / wedged DB pool would otherwise stretch login latency
+        // arbitrarily while the rate-limit window advanced, letting an
+        // attacker amplify their effective probe rate. On timeout we throw a
+        // typed error; the AuthController already wraps appendLoginAudit in
+        // try/catch and continues per ADR 0027 §2.5 best-effort semantics, so
+        // the controller boundary is unchanged — only the worst-case latency.
+        const saved = await raceWithTimeout(this.repository.save(row), LOGIN_AUDIT_TIMEOUT_MS, 'control_audit.appendLoginAudit');
+
+        return toAuditEntry(saved);
+    }
+
     async findLatest(): Promise<IHaltAuditEntry | null> {
         const row = await this.repository.findOne({
             where: {},
@@ -122,11 +165,18 @@ export class ControlAuditRepository {
     // the index. A tampered / malformed cursor decodes to null — the caller
     // gets page 1 instead of a 4xx (matches the read-API's forgiving cursor
     // semantics in ADR 0022 §2.5).
-    async findHistoryPage(rawCursor: string | null, rawPageSize: number | null): Promise<{ items: IHaltAuditEntry[]; nextCursor: string | null; pageSize: number }> {
+    async findHistoryPage(
+        rawCursor: string | null,
+        rawPageSize: number | null,
+    ): Promise<{ items: IHaltAuditEntry[]; nextCursor: string | null; pageSize: number }> {
         const pageSize = clampPageSize(rawPageSize);
         const cursor = this.cursors.decode(rawCursor);
 
-        const qb = this.repository.createQueryBuilder('a').orderBy('a.occurred_at', 'DESC').addOrderBy('a.control_audit_id', 'DESC').limit(pageSize + 1);
+        const qb = this.repository
+            .createQueryBuilder('a')
+            .orderBy('a.occurred_at', 'DESC')
+            .addOrderBy('a.control_audit_id', 'DESC')
+            .limit(pageSize + 1);
 
         if (cursor !== null && typeof cursor.id === 'string') {
             qb.where('(a.occurred_at, a.control_audit_id) < (:ts, :id)', {
@@ -172,11 +222,63 @@ function toAuditEntry(row: ControlAuditEntity): IHaltAuditEntry {
         actorSub: row.actorSub,
         actorJti: row.actorJti,
         sourceIp: row.sourceIp,
-        action: row.action === 'HALT' ? 'halt' : 'resume',
+        action: mapDbActionToEnum(row.action),
         reason: row.reason,
         flattenRequested: row.flattenRequested,
         previousState: row.previousState === 'HALTED' ? 'halted' : 'running',
         newState: row.newState === 'HALTED' ? 'halted' : 'running',
         correlationEventId: row.correlationEventId,
     };
+}
+
+function mapDbActionToEnum(action: ControlAuditActionDb): HaltAuditActionEnum {
+    switch (action) {
+        case 'HALT':
+            return HaltAuditActionEnum.HALT;
+        case 'RESUME':
+            return HaltAuditActionEnum.RESUME;
+        case 'LOGIN_SUCCESS':
+            return HaltAuditActionEnum.LOGIN_SUCCESS;
+        case 'LOGIN_FAILURE':
+            return HaltAuditActionEnum.LOGIN_FAILURE;
+        case 'LOGIN_THROTTLED':
+            return HaltAuditActionEnum.LOGIN_THROTTLED;
+    }
+}
+
+function mapLoginActionToDb(
+    action: HaltAuditActionEnum.LOGIN_SUCCESS | HaltAuditActionEnum.LOGIN_FAILURE | HaltAuditActionEnum.LOGIN_THROTTLED,
+): ControlAuditActionDb {
+    if (action === HaltAuditActionEnum.LOGIN_SUCCESS) {
+        return 'LOGIN_SUCCESS';
+    }
+
+    if (action === HaltAuditActionEnum.LOGIN_FAILURE) {
+        return 'LOGIN_FAILURE';
+    }
+
+    return 'LOGIN_THROTTLED';
+}
+
+// M10 R1 #3 — bound a promise by ms; reject with a typed Error on expiry. The
+// underlying op continues (we don't AbortController the TypeORM save) but the
+// caller is unblocked. `.unref()` keeps the timer from holding the event loop.
+async function raceWithTimeout<T>(p: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+
+        if (typeof timer.unref === 'function') {
+            timer.unref();
+        }
+    });
+
+    try {
+        return await Promise.race([p, timeout]);
+    } finally {
+
+        if (timer !== undefined) {
+            clearTimeout(timer);
+        }
+    }
 }

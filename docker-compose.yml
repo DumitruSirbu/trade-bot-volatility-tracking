@@ -1,6 +1,7 @@
-# Local development stack for M0: Postgres + Adminer.
-# Engine and dashboard services are added in later milestones (own Dockerfiles).
-# Credentials come from the root .env (see .env.example) — never hard-coded here.
+# Local + dev stack: postgres + engine + dashboard (+ adminer for DB inspection).
+# All services share the default compose network so the dashboard's nginx can
+# resolve `engine`, and the engine can resolve `postgres`.
+# Credentials come from the root `.env` (see `.env.example`) — never inline here.
 
 services:
     postgres:
@@ -24,7 +25,103 @@ services:
             retries: 5
             start_period: 10s
 
+    # R3 A — One-shot migration runner. Reuses the engine image, runs the
+    # typeorm CLI against the compiled JS DataSource (dist/database/dataSource.js),
+    # then exits. Engine waits for `service_completed_successfully` before booting,
+    # so a fresh `docker compose up` always lands a schema-correct DB without the
+    # operator remembering to run `pnpm migration:run` manually.
+    # Stand-alone dev (`pnpm engine:dev` on the host) still uses the existing
+    # CLI workflow — this service is the docker-compose path only.
+    engine-migrator:
+        build:
+            context: .
+            dockerfile: apps/engine/Dockerfile
+            args:
+                INCLUDE_DEV_LOGS: 'true'
+        image: trade-bot-engine:local
+        container_name: trade-bot-engine-migrator
+        restart: 'no'
+        init: true
+        env_file:
+            - .env
+        environment:
+            DB_HOST: postgres
+            DB_PORT: '5432'
+            DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+        depends_on:
+            postgres:
+                condition: service_healthy
+        # Use Node's resolver to locate the typeorm CLI (pnpm hoists deps, so a
+        # hard-coded path would be brittle across pnpm versions).
+        command:
+            - sh
+            - -c
+            - exec node "$$(node -p "require.resolve('typeorm/cli.js')")" -d dist/database/dataSource.js migration:run
+
+    engine:
+        build:
+            context: .
+            dockerfile: apps/engine/Dockerfile
+            args:
+                # Bake pino-pretty into the image for local dev (NODE_ENV=development
+                # uses pretty logging). CI / prod must build with INCLUDE_DEV_LOGS=false
+                # to keep the image reproducible and free of dev-only network fetches.
+                INCLUDE_DEV_LOGS: 'true'
+        image: trade-bot-engine:local
+        container_name: trade-bot-engine
+        restart: unless-stopped
+        # `init: true` runs tini as PID 1 — proper SIGTERM/SIGINT delivery to node.
+        init: true
+        env_file:
+            - .env
+        environment:
+            # Compose-only overrides — `environment:` wins over `env_file:`.
+            # Inside the network postgres resolves by service name.
+            DB_HOST: postgres
+            DB_PORT: '5432'
+            DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+            # Bind the engine to a known port regardless of host-side ENGINE_PORT.
+            ENGINE_PORT: '3000'
+        depends_on:
+            postgres:
+                condition: service_healthy
+            engine-migrator:
+                condition: service_completed_successfully
+        ports:
+            # Exposed on the host for direct curl/debug; the dashboard reaches
+            # the engine over the compose network and never via this mapping.
+            - '${ENGINE_PORT:-3000}:3000'
+        healthcheck:
+            test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/v1/health >/dev/null 2>&1 || exit 1']
+            interval: 10s
+            timeout: 5s
+            retries: 6
+            start_period: 30s
+
+    dashboard:
+        build:
+            context: .
+            dockerfile: apps/dashboard/Dockerfile
+        image: trade-bot-dashboard:local
+        container_name: trade-bot-dashboard
+        restart: unless-stopped
+        init: true
+        depends_on:
+            engine:
+                condition: service_healthy
+        ports:
+            - '${DASHBOARD_PORT:-8080}:8080'
+        healthcheck:
+            test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1']
+            interval: 10s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+
     adminer:
+        # R2 security M3 — adminer is a DB admin UI. Do not publish it on the
+        # default stack. Opt-in via: `docker compose --profile dev up -d`.
+        profiles: [dev]
         image: adminer:5.4.2
         container_name: trade-bot-adminer
         restart: unless-stopped

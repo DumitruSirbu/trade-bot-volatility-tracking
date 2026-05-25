@@ -1,5 +1,6 @@
 import {
     AlertTypeEnum,
+    HaltAuditActionEnum,
     HaltSourceEnum,
     HaltStateEnum,
     IAlertPayload,
@@ -66,7 +67,7 @@ class FakeControlAuditRepository {
             actorSub: params.actorSub,
             actorJti: params.actorJti,
             sourceIp: params.sourceIp,
-            action: params.action === 'HALT' ? 'halt' : 'resume',
+            action: params.action === 'HALT' ? HaltAuditActionEnum.HALT : HaltAuditActionEnum.RESUME,
             reason: params.reason,
             flattenRequested: params.flattenRequested,
             previousState: params.previousState === 'HALTED' ? 'halted' : 'running',
@@ -84,7 +85,6 @@ class FakeControlAuditRepository {
     }
 
     async findLatest(): Promise<IHaltAuditEntry | null> {
-
         if (this.rows.length === 0) {
             return null;
         }
@@ -185,11 +185,7 @@ describe('RiskListeners — programmatic halt is alert-only (no engageHalt, no c
         // notePragmaticTransition with (source, reason, occurredAtMs) so
         // GET /v1/control/halt reflects the programmatic halt source.
         expect(notePragmaticSpy).toHaveBeenCalledTimes(1);
-        expect(notePragmaticSpy).toHaveBeenCalledWith(
-            HaltSourceEnum.MARKET_STRESS,
-            'spread widened',
-            NOW.getTime(),
-        );
+        expect(notePragmaticSpy).toHaveBeenCalledWith(HaltSourceEnum.MARKET_STRESS, 'spread widened', NOW.getTime());
     });
 
     it('a programmatic model-divergence event flips flag + fires MODEL_DIVERGENCE_ENGAGED alert, no audit', async () => {
@@ -274,13 +270,7 @@ describe('HaltService — wasAlreadyHalted flag on IHaltChangedEvent emit', () =
         const captured: IHaltChangedEvent[] = [];
         events.on(HALT_CHANGED_EVENT, (e: IHaltChangedEvent) => captured.push(e));
 
-        const service = new HaltService(
-            auditRepo as unknown as ControlAuditRepository,
-            haltFlag,
-            sink,
-            flatten,
-            events,
-        );
+        const service = new HaltService(auditRepo as unknown as ControlAuditRepository, haltFlag, sink, flatten, events);
 
         return { service, auditRepo, events, captured };
     }
@@ -358,13 +348,7 @@ describe('HaltStateRestoreService — newer-wins between control_audit and risk_
         const sink: IAlertSink = new NoopAlertSink();
         const flatten = new StubFlattenCoordinator();
         const events = new EventEmitter2();
-        const haltService = new HaltService(
-            auditRepo as unknown as ControlAuditRepository,
-            flag,
-            sink,
-            flatten,
-            events,
-        );
+        const haltService = new HaltService(auditRepo as unknown as ControlAuditRepository, flag, sink, flatten, events);
         const restore = new HaltStateRestoreService(
             auditRepo as unknown as ControlAuditRepository,
             haltService,
@@ -379,19 +363,14 @@ describe('HaltStateRestoreService — newer-wins between control_audit and risk_
         return new Date().toISOString().slice(0, 10);
     }
 
-    function seedAudit(
-        repo: FakeControlAuditRepository,
-        action: 'halt' | 'resume',
-        occurredAt: Date,
-        actorSub = 'operator-1',
-    ): void {
+    function seedAudit(repo: FakeControlAuditRepository, action: 'halt' | 'resume', occurredAt: Date, actorSub = 'operator-1'): void {
         repo.seedRow({
             id: `seeded-${repo.rows.length + 1}`,
             occurredAt: occurredAt.toISOString(),
             actorSub,
             actorJti: 'jti',
             sourceIp: null,
-            action,
+            action: action === 'halt' ? HaltAuditActionEnum.HALT : HaltAuditActionEnum.RESUME,
             reason: 'seeded',
             flattenRequested: false,
             previousState: action === 'halt' ? 'running' : 'halted',

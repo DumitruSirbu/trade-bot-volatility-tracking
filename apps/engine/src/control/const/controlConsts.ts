@@ -19,3 +19,14 @@ export const HALT_REASON_MAX_LEN = 256;
 // `GET /v1/control/halt/history` pagination caps (ADR 0021 §2.1).
 export const HALT_HISTORY_PAGE_SIZE_DEFAULT = 50;
 export const HALT_HISTORY_PAGE_SIZE_MAX = 200;
+
+// M10 R1 #3 (Security HIGH) — hard timeout on the login-audit insert. ADR
+// 0027 §2.5 declares audit best-effort; under a slow DB the rate-limit
+// window would advance while the controller waited, letting an attacker
+// amplify their effective probe rate by pinning the connection pool. The
+// timeout caps that latency at the repository boundary; on timeout the
+// repository logs and returns null so the controller continues to mint /
+// reject as if the audit had succeeded. 500ms comfortably covers a healthy
+// insert (~ single-digit ms) and is small enough to keep login latency well
+// under the per-IP rate-limit window granularity (10s).
+export const LOGIN_AUDIT_TIMEOUT_MS = 500;

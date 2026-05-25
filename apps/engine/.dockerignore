@@ -1,0 +1,14 @@
+# Engine build context — keep small.
+node_modules
+dist
+coverage
+.turbo
+.cache
+**/*.spec.ts
+**/*.test.ts
+**/__snapshots__
+.env
+.env.*
+!.env.example
+Dockerfile
+.dockerignore

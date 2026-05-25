@@ -32,7 +32,7 @@ trade-bot-volatility-tracking/
 │   │   │   ├── ws/                # WebSocket gateway
 │   │   │   └── common/            # Shared services (config, decimal, logging)
 │   │   └── tests/
-│   └── dashboard/                 # React monitoring UI (M10, phase 2)
+│   └── dashboard/                 # React monitoring UI (M10, Vite + React 19)
 ├── packages/
 │   └── shared/                    # Shared enums, types, schemas
 ├── docs/
@@ -211,7 +211,7 @@ pnpm --filter @bot/engine test -- --watch
 
 ## Project Status
 
-**Completed Milestones (M0–M8):**
+**Completed Milestones (M0–M10):**
 
 - **M0 — Foundation & scaffolding:** pnpm + Docker + NestJS 11 + TypeORM + event bus + halt-flag + money helpers.
 - **M1 — Exchange & market data:** ccxt/Binance testnet, MarketDataModule, VWAP-deviation trigger, 251 tests, zero blockers.
@@ -223,15 +223,12 @@ pnpm --filter @bot/engine test -- --watch
 - **M6 — Position management & reconciliation:** 8 implementation waves, state machine + reconciliation, crash recovery, funding/PnL, 851 focused tests, zero blockers.
 - **M7 — Backtesting & performance:** Replay engine, fill simulator, Sharpe/Sortino/drawdown metrics, 82 new tests, zero blockers.
 - **M8 — Strategy versioning & comparison:** Walk-forward OOS splits, paired circular-block bootstrap (n=10k, 95% CI), 12-criterion promotion gate, CLI suite, 264 focused tests, zero blockers.
+- **M9 — Observability & control:** Startup schema validation, auth guard HS256 + revoked_jti, HaltController + audit, ReadApi REST, socket.io gateway, TelegramAlertSink, 1,967 tests passing, zero blockers.
+- **M10 — Dashboard:** Vite + React 19 + TanStack Query, login endpoint (bootstrap-secret), read views + real-time WS, kill-switch UI, containerisation + nginx, 2,289 tests passing, zero blockers.
 
-**Current (M9):**
+**Current (M11+):**
 
-- **M9 — Observability & control:** Live hot-reload signaling, metric dashboards, operator CLI / log surfaces (in progress).
-
-**Phase 2 (deferred):**
-
-- M10 — React dashboard (read-only, Vercel-deployed)
-- M11 — Go-live hardening + migration to Binance demo trading
+- **M11 — Go-live hardening:** Binance demo trading migration, auth rotation, multi-instance scaling, external reverse-proxy, full topology validation.
 - M12 — Analysis MCP (read-only agentic analysis)
 - M13 — Agentic weekly loop (strategy proposal + backtest feedback)
 - M14 — CI review gate (automated checks)
@@ -303,19 +300,20 @@ Walk-forward out-of-sample (OOS) splits + paired circular-block bootstrap (n=10,
 - **Logs:** Structured JSON via Pino (stdout, alertable)
 - **Postgres:** All decisions, positions, transactions, and account snapshots
 - **Telegram (M9):** Real-time alerts on signal detection, position open/close, losses, halts, kill-switch
-- **WebSocket/SSE (M9):** Real-time metric dashboard (not yet live)
+- **WebSocket/SSE (M9–M10):** Real-time live gateway (position updates, PnL ticks, decisions, halt state)
+- **Dashboard (M10):** Vite + React SPA, authenticated (HS256 bearer), real-time positions + decisions + performance, kill-switch UI
 - **Health check:** `GET /health` → liveness probe
 
 ## Deployment
 
-The engine is containerized and designed to run as an always-on process (holds persistent Binance WebSocket, in-memory orchestrator state). Recommended topology:
+The engine and dashboard are containerized and designed to run as an always-on stack. Recommended topology:
 
 1. **Postgres:** Cloud-managed (AWS RDS, Google Cloud SQL) or self-hosted
 2. **Engine:** Single container (no scale-to-zero), auto-restart on failure
-3. **Dashboard (M10):** Separate React SPA, Vercel or CDN-deployed
-4. **Read API (M9):** Authentication required; operator tokens issued via CLI
+3. **Dashboard:** Separate nginx-served React SPA, same docker-compose or CDN-deployed
+4. **Authentication:** HS256 bearer tokens issued via `/v1/auth/login` (bootstrap-secret) or CLI (`pnpm engine auth issue`)
 
-See `docs/plans/M11-go-live-hardening.md` for full topology and rollout plan.
+See `docs/plans/M11-go-live-hardening.md` for full topology and rollout plan (Binance demo trading, external reverse-proxy, multi-instance scaling).
 
 ## Troubleshooting
 

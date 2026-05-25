@@ -19,6 +19,10 @@
 **/coverage
 **/.turbo
 **/.cache
+# TS incremental build cache — must be regenerated, otherwise composite tsc
+# thinks the project is up-to-date and skips emit (no dist/ output).
+**/*.tsbuildinfo
+**/.tsbuildinfo
 
 # Local env files — never bake secrets into image layers (see docs/development/docker.md)
 .env

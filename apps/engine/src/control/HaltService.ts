@@ -1,4 +1,13 @@
-import { AlertSeverityEnum, AlertTypeEnum, HaltSourceEnum, HaltStateEnum, IAlertPayload, IHaltAuditEntry, IKillSwitchState } from '@bot/shared';
+import {
+    AlertSeverityEnum,
+    AlertTypeEnum,
+    HaltAuditActionEnum,
+    HaltSourceEnum,
+    HaltStateEnum,
+    IAlertPayload,
+    IHaltAuditEntry,
+    IKillSwitchState,
+} from '@bot/shared';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
@@ -209,13 +218,7 @@ export class HaltService {
     // transition — only the audit row is new. WS + Telegram consumers still
     // fire (the operator wants confirmation the action landed) but the
     // dashboard uses the flag to suppress a `HALTED → HALTED` flash.
-    private emitHaltChanged(
-        action: 'HALT' | 'RESUME',
-        source: HaltSourceEnum,
-        reason: string,
-        audit: IHaltAuditEntry,
-        wasAlreadyHalted: boolean,
-    ): void {
+    private emitHaltChanged(action: 'HALT' | 'RESUME', source: HaltSourceEnum, reason: string, audit: IHaltAuditEntry, wasAlreadyHalted: boolean): void {
         const event: IHaltChangedEvent = {
             action,
             state: action === 'HALT' ? HaltStateEnum.HALTED : HaltStateEnum.RUNNING,
@@ -252,7 +255,7 @@ export class HaltService {
             actorSub: `SYSTEM:${source}`,
             actorJti: '',
             sourceIp: null,
-            action: 'halt',
+            action: HaltAuditActionEnum.HALT,
             reason,
             flattenRequested: false,
             previousState: 'running',

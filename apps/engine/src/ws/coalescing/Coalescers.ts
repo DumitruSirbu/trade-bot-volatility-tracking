@@ -1,4 +1,4 @@
-import { IOpenPositionView } from '@bot/shared';
+import { IOpenPositionView, IPnlTickEvent } from '@bot/shared';
 
 import { IClockMs, WS_PNL_THROTTLE_MS, WS_POSITION_COALESCE_MS } from '../WsConstants';
 
@@ -19,26 +19,25 @@ import { IClockMs, WS_PNL_THROTTLE_MS, WS_POSITION_COALESCE_MS } from '../WsCons
 // socket, keep-latest within the window.
 // ---------------------------------------------------------------------------
 
-export interface IPnlTickPayload {
-    asOf: string;
-    equityUsd: string;
-    openExposureUsd: string;
-    unrealizedPnlUsd: string;
-}
+// M10 W0.5 — local IPnlTickPayload was replaced by @bot/shared's IPnlTickEvent
+// (shapes are identical; bot-shared-maintainer verified at W0). The alias keeps
+// existing imports compiling without churn while the WS payload type is the
+// single shared definition.
+export type IPnlTickPayload = IPnlTickEvent;
 
 export class PnlThrottle {
     private lastEmittedAtMs: number | null = null;
 
-    private pendingPayload: IPnlTickPayload | null = null;
+    private pendingPayload: IPnlTickEvent | null = null;
 
     private pendingTimer: NodeJS.Timeout | null = null;
 
     constructor(
         private readonly clock: IClockMs,
-        private readonly emit: (payload: IPnlTickPayload) => void,
+        private readonly emit: (payload: IPnlTickEvent) => void,
     ) {}
 
-    offer(payload: IPnlTickPayload): void {
+    offer(payload: IPnlTickEvent): void {
         const now = this.clock();
 
         if (this.lastEmittedAtMs === null || now - this.lastEmittedAtMs >= WS_PNL_THROTTLE_MS) {
@@ -56,15 +55,18 @@ export class PnlThrottle {
         if (this.pendingTimer === null) {
             const delayMs = WS_PNL_THROTTLE_MS - (now - this.lastEmittedAtMs);
 
-            this.pendingTimer = setTimeout(() => {
-                this.pendingTimer = null;
+            this.pendingTimer = setTimeout(
+                () => {
+                    this.pendingTimer = null;
 
-                if (this.pendingPayload !== null) {
-                    this.emit(this.pendingPayload);
-                    this.lastEmittedAtMs = this.clock();
-                    this.pendingPayload = null;
-                }
-            }, Math.max(0, delayMs));
+                    if (this.pendingPayload !== null) {
+                        this.emit(this.pendingPayload);
+                        this.lastEmittedAtMs = this.clock();
+                        this.pendingPayload = null;
+                    }
+                },
+                Math.max(0, delayMs),
+            );
 
             if (typeof this.pendingTimer.unref === 'function') {
                 this.pendingTimer.unref();
@@ -101,9 +103,7 @@ interface IPendingPositionUpdate {
 export class PositionCoalescer {
     private readonly pending = new Map<string, IPendingPositionUpdate>();
 
-    constructor(
-        private readonly emit: (payload: IOpenPositionView) => void,
-    ) {}
+    constructor(private readonly emit: (payload: IOpenPositionView) => void) {}
 
     // Offer a position update. If no flush is scheduled for `positionId`,
     // schedule one for WS_POSITION_COALESCE_MS from now. If one is already

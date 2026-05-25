@@ -1,10 +1,12 @@
+import { HaltAuditActionEnum } from '../enum/HaltAuditActionEnum.js';
+
 export interface IHaltAuditEntry {
     id: string;
     occurredAt: string;
     actorSub: string;
     actorJti: string;
     sourceIp: string | null;
-    action: 'halt' | 'resume';
+    action: HaltAuditActionEnum;
     reason: string;
     flattenRequested: boolean;
     previousState: 'running' | 'halted';
