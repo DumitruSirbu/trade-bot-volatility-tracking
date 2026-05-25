@@ -1,8 +1,23 @@
 # M11a — Local soak hardening
 
+> ⚠️ **SUPERSESSION NOTICE.** Sections of this plan referring to **DEMO** mode
+> (`{enableReading, enableFutures}` key, "Binance demo trading", crash-recovery
+> against a Binance-hosted paper account, `BacktestRunnerService` reuse for
+> live fills) are **superseded** by
+> [`M11a-paper-mode-addendum.md`](./M11a-paper-mode-addendum.md). Binance
+> USDT-M Futures has no API-accessible paper-trading host distinct from
+> testnet; the addendum replaces DEMO with an engine-local **PAPER** mode
+> (live market data + local fill simulator + read-only-only key + dedicated
+> account-state port + two-call nullity probe + boot-mode HMAC chain). For
+> any agent dispatched against M11a, the addendum is the **source of
+> truth** until the scribe formally merges it back into this file (R4.2).
+> Specifically the addendum overrides W1.1, W1.2, W4.3 wording in this
+> plan; D1–D17 in the addendum are the locked decisions.
+
 **Goal:** Make the existing stack production-grade on a single trusted machine so
-the user can run a multi-week **Binance demo-trading** soak at $0 infra cost and
-collect real signal on the strategies before any cloud spend.
+the user can run a multi-week **PAPER** soak (engine-local paper trading against
+live market data; see addendum) at $0 infra cost and collect real signal on the
+strategies before any cloud spend.
 
 **Depends on:** M1–M10.
 **Follows into:** M11b (cloud go-live) — only entered once the soak confirms a

@@ -1,12 +1,13 @@
 # M11a — Paper-mode addendum (DEMO → PAPER course correction)
 
-**Status:** Draft v5 — folds round-3 internal delta findings on top of v4.
-Round-3 surfaced four new highs (CRN reproducibility + rotation + skip-case;
-D14 module-graph runtime bypass; D16 atomicity vs MTM; D7 transition-time
-predicate misroute) plus an editorial sweep (D1–D13 → D1–D17). The
-load-bearing convergence across all four reviewers: bootstrap-secret-derived
-material drifts under W1.8 rotation or env switching — unified treatment
-below. Replaces the `DEMO` mode introduced in W0.1 / W1.1.
+**Status:** Draft v6 — folds independent r2 reviews (GBT + Gemini) on top
+of v5. GBT R2's verdict on v5: *"Go for the PAPER architecture after a
+cleanup pass."* The architectural decisions D1–D17 are accepted; this pass
+sweeps stale wording in older sections that contradicted those decisions,
+plus addresses one new quant concern (CRN paired sample excludes
+one-trades-one-skips events — biases the comparison toward events where
+both versions were already willing to trade). Replaces the `DEMO` mode
+introduced in W0.1 / W1.1.
 
 ## PAPER is not exchange demo trading (invariant)
 
@@ -54,8 +55,10 @@ Rename `DEMO` → `PAPER` and make it an **engine-local paper-trading mode**:
 - WebSocket connects to **live** `fapi.binance.com` for market data + funding
   (real prices, real depth, real spread, real OI, real funding rates).
 - Orders are intercepted before reaching ccxt and routed to a local
-  `PaperFillSimulator` (reuses M7 `BacktestRunnerService` fill logic on live
-  event-time).
+  `PaperFillSimulator`, which uses `FillSimulatorCore` (D15 — pure shared
+  module; M7 backtests use the same core via `HistoricalFillAdapter`,
+  PAPER uses `StreamingFillAdapter` on live event-time; causality test
+  asserts no future-tick read).
 - Account state (positions, balances, margin) is simulated locally in a new
   `PaperAccountStateService`; never reads or writes a real Binance account.
 - Reconciliation in PAPER mode runs against the local simulated state plus a
@@ -79,25 +82,38 @@ Reject the `mode` discriminator on `positions` alternative. Reasons:
 - `paper_account_state` writes are restricted to the engine DB role; the
   read-API role gets `SELECT` only.
 
-### D2 — `IExecutionClient` surface (frozen)
+### D2 — `IExecutionClient` surface (frozen — order commands only)
 
-Split out of `IExchangeClient`. Methods:
+`IExecutionClient` is **order-command-only**. Methods:
 - `placeOrder(intent: IOrderIntent): Promise<IOrder>`
 - `cancelOrder(symbol: string, id: string): Promise<void>`
 - `cancelAllOrdersForSymbol(symbol: string): Promise<void>`
 - `fetchOrderStatus(symbol: string, id: string): Promise<IOrder>`
-- `fetchOpenOrders(symbol?: string): Promise<IOrder[]>`
+- `fetchOpenOrders(symbol?: string): Promise<IOrder[]>` (here because
+  the engine treats it as part of the order-lifecycle surface — pair
+  with cancel/status)
 
-**`fetchPosition` and `fetchBalance` stay on `IExchangeClient`** (the
-market-data + read surface), because those are also called by the
-reconciliation poller against the live exchange in LIVE/TESTNET. In PAPER
-mode the reconciliation adapter swaps `PaperAccountStateService` in as the
-account-state source — it does not call `IExchangeClient.fetchPosition` —
-but the interface boundary stays clean.
+Two implementations:
+- `CcxtExecutionClient` (LIVE / TESTNET) — delegates to ccxt.
+- `PaperExecutionClient` (PAPER) — delegates to `PaperFillSimulator`.
+
+**Account-state reads (balance, positions, funding history) are NOT on
+`IExecutionClient`.** They live on `IAccountStateSource` per D14
+(`fetchBalance`, `fetchPositions`, `fetchOpenOrders`, `fetchFundingHistory`).
+v5 said those stayed on `IExchangeClient`; that left a contract conflict
+with D14 that GBT R2-H2 flagged. The corrected boundary:
+
+- `IExecutionClient` — order-command verbs.
+- `IAccountStateSource` — account-state nouns.
+- `IExchangeClient` — the concrete ccxt adapter; **never injected into the
+  PAPER decision loop**. The only callers reaching `IExchangeClient`
+  account-state methods directly are the two D14 whitelisted services
+  (`KeyPermissionAssertionService`, `PaperExchangeNullityProbe`).
 
 Compile-time split: `PaperExecutionClient` does **not** import the
 `RateLimitPolicyService` module, so an accidental rate-limit call from PAPER
-is a build-time error, not a runtime assertion.
+is a build-time error, not a runtime assertion. Same compile-time rule
+extends to `PaperAccountStateSource` — it does not import any ccxt module.
 
 ### D3 — PaperFillSimulator determinism
 
@@ -141,9 +157,11 @@ commit-pinned hash. Defence against an operator tuning the simulator to
 flatter v1.
 
 **Replay determinism R3.1.** A SIGKILL mid-trade followed by restart
-replays the last 5 decisions to byte-identical `simulated_fill` rows.
-A separate offline replay using the same decision tape produces the
-same `simulated_fill` rows independently.
+replays the recent decision window via idempotency-ledger lookup
+(not re-rolling) and produces `simulated_fill` rows numerically equal
+to the pre-crash values per D15's whitelisted-tolerance equivalence.
+A separate offline replay using the same decision tape produces
+numerically equal `simulated_fill` rows independently.
 
 **Common Random Numbers vs cross-version independence** — see D17.
 
@@ -255,7 +273,11 @@ lowering `peak_equity` below the starting value, which would delay the
 abort threshold's first meaningful trigger.
 With D11's $500 starting equity and 0.25% risk per trade, peak-equity
 denominator means the abort fires on a true regime break, not on a routine
-losing streak from a high-water mark. Re-evaluated on every WS tick.
+losing streak from a high-water mark. Re-evaluated per D5 throttle
+(coalesced once per 100 ms per held symbol, or immediately on a
+>=1 tick-size move or on a funding-event force-flush). Note: `peak_equity`
+itself is derived from audited `paper_account_snapshots` per D16 — the
+in-memory peak is computed at evaluation time, not mutated in place.
 
 ### D6 — Mode-switch predicate + integrity
 
@@ -439,21 +461,50 @@ IP-restrict + allow-list + non-expired authority remain required (a
 read-only key on unrestricted IP is still a credential-replay risk against
 account-state endpoints).
 
-**Endpoint-accessibility verification (gemini-review 3.5).** Before R1
-starts, the engine team must verify against current Binance documentation
-that every futures endpoint PAPER needs (funding history `/fapi/v1/fundingRate`,
-exchange info `/fapi/v1/exchangeInfo`, mark price `/fapi/v1/premiumIndex`,
-order-book depth `/fapi/v1/depth`, the `/fapi/v1/openOrders` read needed
-by D13's nullity probe, and any signed account-state reads required for
-the M11b TESTNET drill) is accessible to a key whose
-`enableFutures === false`. If any required endpoint is futures-trade-gated,
-either:
-- raise a follow-up M11a-blocker (PAPER cannot work as designed), or
-- amend D8 to allow `enableFutures: true` strictly when paired with a
-  dedicated sub-account holding zero balance and the D13 probe extended
-  to verify zero balance + zero positions every cycle.
+**Endpoint-accessibility verification — promoted to R0 blocker
+(gbt R2-M1).** Before **R0** finishes (not R1), the engine team must
+verify against current Binance documentation that every futures
+endpoint PAPER needs (funding history `/fapi/v1/fundingRate`, exchange
+info `/fapi/v1/exchangeInfo`, mark price `/fapi/v1/premiumIndex`,
+order-book depth `/fapi/v1/depth`, the `/fapi/v1/openOrders` and
+`/fapi/v2/positionRisk` reads needed by D13's nullity probe, and any
+signed account-state reads required for the M11b TESTNET drill) is
+accessible to a key whose `enableFutures === false`.
 
-Verification result is recorded in `docs/work-log.md` before R1 dispatch.
+Three outcomes:
+1. **All endpoints accessible without `enableFutures`** → D8 profile
+   stands; R1 dispatches normally.
+2. **Some endpoints require `enableFutures: true`** → D8 amends to the
+   **Fallback Profile** (defined below). R1 dispatches under the
+   fallback.
+3. **Endpoints inaccessible under any non-tradeable profile** → M11a
+   blocker; design decision required (skip nullity probe and accept
+   the safety regression, or change PAPER scope).
+
+**Fallback Profile (R2-M1, define now so R1 has a deterministic spec).**
+If `enableFutures: true` is required, PAPER runs under a **dedicated
+zero-balance sub-account**:
+
+- API key on a dedicated Binance sub-account whose sole purpose is to
+  host the PAPER probe key. The main account is never reachable via
+  this key.
+- Allowlist amended: `{enableReading: true, enableFutures: true}` on
+  this key — but **the engine refuses to boot if any of the following
+  is true**:
+  - Sub-account balance ≠ 0 at boot or at any reconciliation tick.
+  - Sub-account has any open position at boot or at any tick.
+  - Key has any transfer permission (`enableInternalTransfer`,
+    `permitsUniversalTransfer`) — these must remain false.
+  - IP allow-list is empty.
+  - Trading authority is expired or null.
+- D13 probe extended: every cycle asserts (a) zero balance, (b) zero
+  positions, (c) zero open orders. Any non-zero → CRITICAL halt +
+  invalidate soak.
+- Operator runbook documents the sub-account creation procedure,
+  including the no-balance and no-transfer invariants.
+
+Verification result + selected profile is recorded in
+`docs/work-log.md` before R1 dispatch.
 
 ### D9 — `LIVE_GO_AHEAD_TOKEN` is LIVE-only (decision, not open question)
 
@@ -507,7 +558,8 @@ event types are reused from `@bot/shared` (no new event shapes).
 
 **Drift action in PAPER is more severe than in LIVE.** In LIVE, drift can
 have an exchange-clock cause; in PAPER, there is no exchange to blame, so
-any drift between `PaperAccountStateService` and `IPositionRepository` is
+any drift between in-memory `PaperAccountStateService` and the persisted
+`paper_account_state` rows is
 a production bug. Action: CRITICAL Telegram alert (not WARNING), audit
 row, halt new decision routing, await operator intervention. The existing
 M6 W4b drift handler gains a `mode`-aware severity rule.
@@ -560,6 +612,15 @@ responses are classified explicitly:
 `fetchOpenOrders` and `fetchPositions` (security round 2 M2). The cost
 (2 read calls/min × symbol fan-out) is reserved in the W1.4 token-bucket
 policy before R1 starts. ADR 0030 constants table is updated.
+
+**Symbol fan-out budget (gemini r2 forward-looking).** If the symbol
+universe expands beyond the restricted-profile single-symbol-per-trade
+assumption, the per-minute probe cost grows linearly. Before any future
+universe expansion, the W1.4 token-bucket policy must be re-checked
+against `(2 calls × universe_size + reconciliation cadence + funding
+poller)` — Binance per-IP REQUEST_WEIGHT_1M is the binding constraint.
+For M11a's single-position profile this is not load-bearing; flagged so
+M11b / scaling waves don't silently break the budget.
 
 ### D14 — `IAccountStateSource` port (full surface, not only orders)
 
@@ -648,6 +709,18 @@ future tick stream does not yet exist. Two options, both wrong:
 
 **Decision: extract a pure shared fill library, two adapters.**
 
+**Placement (gbt R2-M2):** `FillSimulatorCore` lives in
+**`packages/shared/`** because both `@bot/engine` (PAPER's
+`StreamingFillAdapter` + M7's `HistoricalFillAdapter`) consume it from
+the same boundary. The core is **dependency-light**: pure functions, no
+TypeORM entities, no Nest providers, no engine imports. Money helpers
+(decimal arithmetic, tier-size lookups) that the core needs are
+duplicated into the shared package as pure utilities if they currently
+live engine-side — the rule is that `packages/shared/fill-simulator/`
+has zero dependencies on `apps/engine/`. R2c.1 includes a
+dependency-direction lint that fails the build if a shared module
+imports from `apps/engine/`.
+
 ```
 @bot/shared/fill-simulator/
   FillSimulatorCore   // pure functions: applyFill(snapshot, intent, seed) → ISimulatedFill
@@ -657,9 +730,9 @@ future tick stream does not yet exist. Two options, both wrong:
                          // wraps Core; pre-resolved future ticks available
 
   StreamingFillAdapter   // PAPER: live event-time; subscribes to live tick
-                         // stream; schedules future-check callbacks for SL/TP
-                         // honour intra-bar semantics by reacting to ticks as
-                         // they arrive, not by waiting for the bar to close
+                         // stream; reacts to ticks as they arrive (no
+                         // setTimeout scheduling — see SL/TP rule below)
+                         // honours intra-bar semantics by event ordering
 ```
 
 The `BacktestRunnerService` is rewritten to delegate its fill logic to
@@ -848,15 +921,45 @@ A `pair_id` keyed on `event_id` alone collapses to "same event → same roll"
 only when both strategies trade; otherwise CRN does not actually pair, and
 the variance-reduction claim is structurally false.
 
-Rule: per `(event_id, simulator_component)`, the CRN roll is consumed by
-**whichever version trades**. If both trade, they consume the same roll
-(true pairing). If both skip, the row is excluded from the paired sample
-entirely. If one trades and one skips, the roll is consumed only by the
-trader and the pair is excluded — the paired difference series only
-contains events where **both** versions traded.
+**Roll consumption rule.** Per `(event_id, simulator_component)`, the CRN
+roll is consumed by **whichever version trades**. If both trade, they
+consume the same roll (true pairing). If only one trades, the roll is
+consumed by the trader.
+
+**Selectivity bias (gbt R2-M3).** Restricting the paired difference
+series to events where **both** versions traded biases the comparison
+toward events where both versions were already willing to trade. Skip is
+first-class in this bot — a strategy that earns its edge by being
+**more selective** would look weaker against one that's less selective
+on the trade-vs-trade subset. v6 mitigates by reporting **two paired
+cohorts**, not one:
+
+1. **Trade-vs-trade CRN cohort.** Both versions traded; same simulator
+   roll; isolates fill-noise differences and pure decision-edge
+   conditional on willingness to trade. The variance-reduction claim
+   applies here.
+2. **Full same-event cohort with skip-handling.** All events where at
+   least one version traded. For events where one trades and one skips,
+   the skipping version's contribution is `pnl = 0` (no trade, no PnL).
+   No CRN pairing on these — independent / no-fill roll handling. This
+   cohort captures **selectivity edge** that the trade-vs-trade cohort
+   discards.
+
+The "active version beats shadow v2/v3" criterion **requires the same
+winner on both cohorts** (mirroring the same-winner rule across the
+lowFidelity-included / -excluded rankings). If the trade-vs-trade
+cohort says v1 wins but the full cohort says v2 wins because v2's
+selectivity advantage dominates, the criterion is marked **inconclusive**
+— do not promote on the trade-vs-trade subset alone.
+
+The truth table from D17's "two evaluator outputs" extends accordingly:
+both cohorts × both lowFidelity rankings = up to four sub-criteria, all
+of which must agree on the winner for a pass. Disagreement on any pair
+→ inconclusive.
 
 The `lowFidelity`-included and -excluded rankings (D17 §"Two evaluator
-outputs" + ADR 0019 criterion 12) operate on this filtered paired sample.
+outputs" + ADR 0019 criterion 12) operate on **each** of the two
+cohorts independently.
 
 **Two evaluator outputs + inconclusive truth table (quant M2).**
 The soak-exit report produces two CIs on `E[v1] − E[v2]`:
@@ -999,6 +1102,14 @@ the duration of M11a. This changes how ADR 0019 criterion 12 and ADR 0029
   - **Power check** to prevent trivial pass on small N: the calibration
     sample must produce at least 200 simulated fills, otherwise the test
     is inconclusive and the calibration window is extended.
+  - **Calibration-window extension allowance (gemini r2 note)**: if the
+    restricted profile is selective enough that 60 days does not produce
+    200 calibration fills across the diverse zero-edge policy panel, the
+    runbook permits extending the window to **90 or 120 days** for the
+    TOST calibration only — provided the operator confirms market
+    regimes over the extended window are comparable to the soak target
+    period (no obvious regime break). The extension does not change the
+    soak window itself; it only widens the calibration tape.
 
   This step lands in M11a §W4.4 alongside the existing calibration day.
 
@@ -1113,10 +1224,15 @@ Three branches per updated ADR 0028:
 Failure path unchanged: Telegram CRITICAL + audit row + `process.exit(1)`.
 
 **R1.5 — Boot mode history HMAC chain.** Add the `boot_mode_history`
-migration + entity + repository. Engine writes a new HMAC-chained row at
-every successful boot. Boot-time check: verify chain integrity; if broken
-or if last row's `exchange_env` ≠ current `EXCHANGE_ENV`, abort with the
-documented transition error.
+migration + entity + repository. Engine implements the **D6 boot
+sequence verbatim** (verify chain integrity → on mismatch, check D7
+transition matrix + verify transition token → either ABORT with zero
+mutation or append TRANSITION + BOOT + rotation rows in a single
+transaction). The mismatch path is not a hard abort — it is conditional
+on whether an authorized transition exists per D7. R3.1 tests both
+branches: unauthorized mismatch aborts without mutation; authorized
+transition appends exactly one transition row + one boot row + one
+rotation row, all atomically.
 
 ### Wave R2 — PAPER mode core (engine, MANDATORY split into R2a–R2d)
 
@@ -1179,8 +1295,14 @@ QA mini-pass between R2b and R2c.
 - **R2c.2 — `HistoricalFillAdapter` wires `BacktestRunnerService`
   to `FillSimulatorCore`** (preserves the M7 backtest interface).
 - **R2c.3 — `StreamingFillAdapter` for PAPER (D15).** Subscribes to
-  live ticks; schedules future-tick callbacks for intra-bar SL/TP;
-  honours intra-bar semantics by reacting to ticks as they arrive.
+  live ticks; evaluates intra-bar SL/TP **on tick arrival**, never via
+  wall-clock `setTimeout` (D15 SL/TP rule). **Callback / subscription
+  lifecycle (gemini r2 forward-looking note)**: every tick subscription
+  and pending evaluator created for an open position is registered in a
+  per-position cleanup set, and **explicitly released** on position close,
+  cancel, or shutdown. R3.1 includes a long-running-soak memory-leak
+  test that opens/closes 1000 positions and asserts the adapter's
+  per-position registry is empty + total listener count stable.
 - **R2c.4 — `PaperFillSimulator`** (delegates to
   `StreamingFillAdapter`). Causality test asserts no future-tick read.
 - **R2c.5 — `PaperExecutionClient`** (D2 / D15 — real logic now).
@@ -1224,14 +1346,20 @@ QA mini-pass between R2d and R3 (final wave).
   security round 2 L3). A missed mock must not silently let an execution
   call slip through.
 - `enableDemoTrading` is never called in any environment (sentinel).
-- PaperFillSimulator deterministic across SIGKILL replay: kill mid-trade,
-  restart, last 5 decisions replay to identical `simulated_fill` rows.
+- PaperFillSimulator deterministic across SIGKILL replay via the
+  `paper_simulator_idempotency` ledger keyed by
+  `(event_id, order_intent_id, version_namespace)`: kill mid-trade,
+  restart, every previously-recorded fill returns by ledger lookup
+  (not by re-rolling) and is numerically equal to the pre-crash value
+  per D15's whitelisted-tolerance equivalence (no byte-for-byte
+  requirement on the persisted JSON).
 - Funding accrual sign convention (per D4 account-PnL form):
   `LONG + rate>0 → funding_pnl < 0`; `SHORT + rate>0 → funding_pnl > 0`.
 - Paper position closed at T−1ms before funding ts does not accrue.
 - Mark-to-market: drawdown abort triggers intra-bar on a fast adverse
   move (no decision-boundary lag).
-- `PaperReconciliationAdapter` drift between paper-state and position-repo
+- `PaperReconciliationAdapter` drift between in-memory `PaperAccountStateService`
+  and persisted `paper_account_state` rows (D16)
   emits CRITICAL (not WARNING) + halts.
 - `PaperExchangeNullityProbe`: non-empty `fetchOpenOrders` triggers
   CRITICAL + halt; non-empty `fetchPositions` triggers CRITICAL + halt
@@ -1414,10 +1542,14 @@ The PAPER mode is complete when:
   - applies live funding rates with correct side-sign convention +
     mark-to-market notional; **magnitude bound is audited + alerted,
     not enforced** (raw rate still applied — D4);
-  - mark-to-markets unrealised PnL on every WS tick; drawdown abort fires
-    intra-bar;
-  - recovers from a SIGKILL mid-trade with byte-identical replay of the
-    last decisions;
+  - evaluates derived unrealised PnL within D5's throttled cadence
+    (coalesced once per 100 ms, or immediately on a >=1 tick-size move,
+    or on a funding-event force-flush); drawdown abort reads against
+    audited `peak_equity` from `paper_account_snapshots` per D16, fires
+    within one MTM-throttle window of the trigger condition;
+  - recovers from a SIGKILL mid-trade via the
+    `paper_simulator_idempotency` ledger (numerical equivalence per
+    D15's whitelisted-tolerance rule, not byte-for-byte);
   - refuses to silently switch to TESTNET or LIVE if any condition in D7
     fails.
 - Pre-soak sanity step (asymmetric TOST equivalence per the updated
