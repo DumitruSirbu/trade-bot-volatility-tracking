@@ -65,6 +65,19 @@ export interface IAppendLoginAuditParams {
     previousState: 'RUNNING' | 'HALTED';
 }
 
+// M11a W1.2 (ADR 0028 §2.5). Key-permission assertion outcomes share the
+// `control_audit` table. `reason` carries a comma-separated list of failing
+// clause NAMES (never values); the redacted snapshot rides through the
+// optional `snapshotRedacted` field (serialised into the `reason` text per
+// ADR §2.5 — the existing schema has no JSONB column on control_audit, so
+// the snapshot is appended to the reason string within HALT_REASON_MAX_LEN).
+export interface IAppendKeyPermissionAuditParams {
+    occurredAt: Date;
+    action: HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_FAILED | HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_SKIPPED;
+    reason: string;
+    previousState: 'RUNNING' | 'HALTED';
+}
+
 @Injectable()
 export class ControlAuditRepository {
     // Repository is exposed read-only to the methods below; the @InjectRepository
@@ -143,6 +156,32 @@ export class ControlAuditRepository {
         // try/catch and continues per ADR 0027 §2.5 best-effort semantics, so
         // the controller boundary is unchanged — only the worst-case latency.
         const saved = await raceWithTimeout(this.repository.save(row), LOGIN_AUDIT_TIMEOUT_MS, 'control_audit.appendLoginAudit');
+
+        return toAuditEntry(saved);
+    }
+
+    // M11a W1.2 (ADR 0028 §2.5). Boot-time row written before `process.exit(1)`
+    // (FAILED) or right after the TESTNET exemption logs (SKIPPED). Actor is
+    // fixed to 'system' per ADR; source IP is null (boot has no request).
+    // Best-effort under boot-time DB unreachability — the caller still exits
+    // even if this write fails (the Telegram alert is the ultimate fallback).
+    async appendKeyPermissionAudit(params: IAppendKeyPermissionAuditParams): Promise<IHaltAuditEntry> {
+        const dbAction: ControlAuditActionDb =
+            params.action === HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_FAILED ? 'KEY_PERMISSION_ASSERTION_FAILED' : 'KEY_PERMISSION_ASSERTION_SKIPPED';
+        const row = this.repository.create({
+            occurredAt: params.occurredAt,
+            actorSub: 'system',
+            actorJti: 'SYSTEM',
+            sourceIp: null,
+            action: dbAction,
+            reason: truncateReason(params.reason),
+            flattenRequested: false,
+            previousState: params.previousState,
+            newState: params.previousState,
+            correlationEventId: null,
+        });
+
+        const saved = await this.repository.save(row);
 
         return toAuditEntry(saved);
     }
@@ -243,6 +282,10 @@ function mapDbActionToEnum(action: ControlAuditActionDb): HaltAuditActionEnum {
             return HaltAuditActionEnum.LOGIN_FAILURE;
         case 'LOGIN_THROTTLED':
             return HaltAuditActionEnum.LOGIN_THROTTLED;
+        case 'KEY_PERMISSION_ASSERTION_FAILED':
+            return HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_FAILED;
+        case 'KEY_PERMISSION_ASSERTION_SKIPPED':
+            return HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_SKIPPED;
     }
 }
 
@@ -276,7 +319,6 @@ async function raceWithTimeout<T>(p: Promise<T>, timeoutMs: number, label: strin
     try {
         return await Promise.race([p, timeout]);
     } finally {
-
         if (timer !== undefined) {
             clearTimeout(timer);
         }

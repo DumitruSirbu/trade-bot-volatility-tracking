@@ -3,7 +3,18 @@ import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 // M10 W0.5 — widened from `'HALT' | 'RESUME'` to include login-attempt actions
 // (ADR 0027 §2.5). The DB CHECK constraint widening lives in migration
 // 20260601000000-WidenControlAuditActionForLogin.ts.
-export type ControlAuditActionDb = 'HALT' | 'RESUME' | 'LOGIN_SUCCESS' | 'LOGIN_FAILURE' | 'LOGIN_THROTTLED';
+//
+// M11a W1.2 (ADR 0028 §2.5) — further widened with the two key-permission
+// assertion outcomes. Migration 20260605000000-WidenControlAuditActionFor-
+// KeyPermissionAssertion.ts widens the DB CHECK constraint accordingly.
+export type ControlAuditActionDb =
+    | 'HALT'
+    | 'RESUME'
+    | 'LOGIN_SUCCESS'
+    | 'LOGIN_FAILURE'
+    | 'LOGIN_THROTTLED'
+    | 'KEY_PERMISSION_ASSERTION_FAILED'
+    | 'KEY_PERMISSION_ASSERTION_SKIPPED';
 
 // M9 W3 (ADR 0021 §2.3). Persistence projection of `control_audit`. One row
 // per accepted halt/resume toggle — operator-driven (via /v1/control/halt) or

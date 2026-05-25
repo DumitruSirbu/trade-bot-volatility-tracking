@@ -1,3 +1,4 @@
+import { ExchangeEnvironmentEnum, IKeyPermissionSnapshot } from '@bot/shared';
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { pro as ccxtPro } from 'ccxt';
 import type {
@@ -16,7 +17,13 @@ import type {
 } from 'ccxt';
 
 import { AppConfigService } from '../../config/service';
-import { ENABLE_RATE_LIMIT, ORDER_BOOK_DEPTH_LIMIT, PERPETUAL_SETTLE_CURRENCY } from '../const';
+import {
+    ENABLE_RATE_LIMIT,
+    KEY_PERMISSION_SOURCE_ENDPOINTS,
+    ORDER_BOOK_DEPTH_LIMIT,
+    PERPETUAL_SETTLE_CURRENCY,
+    TRADING_AUTHORITY_NEVER_EXPIRES_SENTINEL,
+} from '../const';
 import { ExchangeCredentialsException, ExchangeRequestException } from '../exception';
 import { sanitizeExchangeError } from '../utils';
 import {
@@ -67,12 +74,44 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
             },
         });
 
-        if (this.appConfig.isExchangeTestnet) {
+        this.selectEnvironmentUrls(this.appConfig.exchangeEnv);
+    }
+
+    // M11a W1.1. Selects ccxt's URL set per `ExchangeEnvironmentEnum`:
+    //   TESTNET -> setSandboxMode(true)            (testnet.binancefuture.com)
+    //   DEMO    -> enableDemoTrading(true)         (demo-fapi.binance.com)
+    //   LIVE    -> default URLs                    (fapi.binance.com)
+    // Single switch keeps the URL surface and the env decision in one place;
+    // any future env is fail-loud because of the exhaustive default.
+    private selectEnvironmentUrls(env: ExchangeEnvironmentEnum): void {
+        if (env === ExchangeEnvironmentEnum.TESTNET) {
             this.client.setSandboxMode(true);
             this.logger.log('Binance USDT-M client initialised in TESTNET (sandbox) mode');
-        } else {
-            this.logger.warn('Binance USDT-M client initialised in LIVE mode');
+
+            return;
         }
+
+        if (env === ExchangeEnvironmentEnum.DEMO) {
+            // ccxt 4.5.x ships an `enableDemoTrading(true)` helper that swaps
+            // `urls.api` to the demo-fapi.binance.com / demo-api.binance.com
+            // host set (binance.js §enableDemoTrading). Paper fills against
+            // live order-book depth — the M11a soak target.
+            this.client.enableDemoTrading(true);
+            this.logger.warn('Binance USDT-M client initialised in DEMO mode (demo-fapi.binance.com)');
+
+            return;
+        }
+
+        if (env === ExchangeEnvironmentEnum.LIVE) {
+            this.logger.warn('Binance USDT-M client initialised in LIVE mode (fapi.binance.com)');
+
+            return;
+        }
+
+        // Defence-in-depth: an unknown enum value here means env validation
+        // upstream is broken. Throw rather than silently default — the bot
+        // refuses to be a long-running process under a misconfigured URL set.
+        throw new ExchangeCredentialsException(`unknown ExchangeEnvironmentEnum value: ${String(env)}`);
     }
 
     // Both testnet and live require signed credentials to fetch balances and (M5)
@@ -82,9 +121,9 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
         const hasCredentials = Boolean(this.appConfig.exchangeApiKey) && Boolean(this.appConfig.exchangeApiSecret);
 
         if (!hasCredentials) {
-            const profile = this.appConfig.isExchangeTestnet ? 'testnet' : 'live';
-
-            throw new ExchangeCredentialsException(profile);
+            // M11a W1.1 — profile string carries the resolved enum value so the
+            // exception body is unambiguous (testnet | demo | live).
+            throw new ExchangeCredentialsException(this.appConfig.exchangeEnv);
         }
     }
 
@@ -225,6 +264,35 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
         const orders = await this.callExchange('fetchOpenOrders', () => this.client.fetchOpenOrders());
 
         return orders.map((order) => this.toOpenOrderSnapshot(order));
+    }
+
+    // M11a W1.2 (ADR 0028 §2.2). Two ccxt calls merged into one boundary type
+    // so the boot caller reads a single snapshot. Failures propagate as
+    // ExchangeRequestException; the caller maps that into assertion-failure
+    // (ADR §2.5).
+    async fetchKeyPermissions(): Promise<IKeyPermissionSnapshot> {
+        const [restrictions, ipRestriction] = await Promise.all([
+            this.callExchange('sapiGetAccountApiRestrictions', () => this.callSapiGetAccountApiRestrictions()),
+            this.callExchange('sapiGetAccountApiRestrictionsIpRestriction', () => this.callSapiGetAccountApiRestrictionsIpRestriction()),
+        ]);
+
+        return this.toKeyPermissionSnapshot(restrictions, ipRestriction);
+    }
+
+    private async callSapiGetAccountApiRestrictions(): Promise<Record<string, unknown>> {
+        // ccxt's binanceusdm exposes the spot-side restriction endpoints via
+        // the `sapi*` implicit methods on the parent binance class; the
+        // narrow cast lets us call them through the ccxt-pro surface without
+        // declaring every implicit endpoint signature.
+        const sapiClient = this.client as unknown as { sapiGetAccountApiRestrictions(): Promise<Record<string, unknown>> };
+
+        return sapiClient.sapiGetAccountApiRestrictions();
+    }
+
+    private async callSapiGetAccountApiRestrictionsIpRestriction(): Promise<Record<string, unknown>> {
+        const sapiClient = this.client as unknown as { sapiGetAccountApiRestrictionsIpRestriction(): Promise<Record<string, unknown>> };
+
+        return sapiClient.sapiGetAccountApiRestrictionsIpRestriction();
     }
 
     async close(): Promise<void> {
@@ -471,6 +539,70 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
         }
 
         return String(value);
+    }
+
+    // M11a W1.2 (ADR 0028 §2.2). Per-field provider table: every field has an
+    // explicit source endpoint + conservative default (missing-fields-fail-
+    // allowlist). The mapper drops every field not in IKeyPermissionSnapshot.
+    private toKeyPermissionSnapshot(restrictions: Record<string, unknown>, ipRestriction: Record<string, unknown>): IKeyPermissionSnapshot {
+        const enableSpotAndMargin = this.boolFromPayload(restrictions, 'enableSpotAndMarginTrading', false);
+        const enableSpotAlias = this.boolFromPayload(restrictions, 'enableSpot', false);
+
+        return {
+            enableReading: this.boolFromPayload(restrictions, 'enableReading', false),
+            enableFutures: this.boolFromPayload(restrictions, 'enableFutures', false),
+            // ADR §2.2: enableSpot = logical OR of the two field names.
+            enableSpot: enableSpotAndMargin || enableSpotAlias,
+            // Capabilities expected `false` default to `true` when the field
+            // is missing — so a missing field fails the allowlist (ADR §2.2).
+            enableWithdrawals: this.boolFromPayload(restrictions, 'enableWithdrawals', true),
+            enableInternalTransfer: this.boolFromPayload(restrictions, 'enableInternalTransfer', true),
+            permitsUniversalTransfer: this.boolFromPayload(restrictions, 'permitsUniversalTransfer', true),
+            enableMargin: this.boolFromPayload(restrictions, 'enableMargin', true),
+            enableVanillaOptions: this.boolFromPayload(restrictions, 'enableVanillaOptions', true),
+            enableSubAccountManagement: this.boolFromPayload(restrictions, 'enableSubAccountManagement', true),
+            // ipRestrict = logical AND across both endpoints (conservative if
+            // either source disagrees).
+            ipRestrict: this.boolFromPayload(restrictions, 'ipRestrict', false) && this.boolFromPayload(ipRestriction, 'ipRestrict', false),
+            ipAllowList: this.parseIpAllowList(ipRestriction),
+            tradingAuthorityExpirationTime: this.parseTradingAuthorityExpiration(restrictions),
+            // boundary-clock read (audit-only, never used as a freshness gate).
+            fetchedAtMs: Date.now(),
+            sourceEndpoints: KEY_PERMISSION_SOURCE_ENDPOINTS,
+        };
+    }
+
+    private boolFromPayload(payload: Record<string, unknown>, key: string, defaultIfMissing: boolean): boolean {
+        const value = payload[key];
+
+        if (value === undefined || value === null) {
+            return defaultIfMissing;
+        }
+
+        return value === true;
+    }
+
+    private parseIpAllowList(ipRestriction: Record<string, unknown>): readonly string[] {
+        const list = ipRestriction['ipList'];
+
+        if (!Array.isArray(list)) {
+            return [];
+        }
+
+        return list.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+    }
+
+    // Binance docs: `tradingAuthorityExpirationTime` is epoch ms; `-1` means
+    // "never expires" (ADR §2.2). The allowlist treats null as expired, so
+    // the sentinel maps to null and fails the predicate.
+    private parseTradingAuthorityExpiration(restrictions: Record<string, unknown>): number | null {
+        const raw = restrictions['tradingAuthorityExpirationTime'];
+
+        if (typeof raw !== 'number' || raw === TRADING_AUTHORITY_NEVER_EXPIRES_SENTINEL) {
+            return null;
+        }
+
+        return raw;
     }
 
     private parseFundingIntervalHours(interval: string | undefined): number | null {

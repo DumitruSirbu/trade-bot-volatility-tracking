@@ -1,3 +1,4 @@
+import { ExchangeEnvironmentEnum } from '@bot/shared';
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
@@ -61,11 +62,35 @@ export class EnvironmentVariables {
     @IsString()
     EXCHANGE_API_SECRET?: string;
 
+    // M11a W1.1 — primary exchange-environment selector. NO default — boot
+    // refuses to start when unset, so an operator must opt in explicitly.
+    // Valid values: 'testnet' | 'demo' | 'live'. The legacy EXCHANGE_TESTNET
+    // boolean (below) is retained read-only for the CcxtBinanceExchangeClient's
+    // pre-M11a code path; new code branches on EXCHANGE_ENV exclusively.
+    @IsEnum(ExchangeEnvironmentEnum)
+    EXCHANGE_ENV!: ExchangeEnvironmentEnum;
+
+    // M11a W1.1 — two-token live-mode boot (ADR 0028 / M11a W0.1). When
+    // EXCHANGE_ENV=LIVE, the operator must point LIVE_GO_AHEAD_TOKEN_FILE at a
+    // local file whose hex-encoded SHA-256 matches LIVE_GO_AHEAD_TOKEN_HASH
+    // (baked into config). Both unset is fatal for LIVE; ignored otherwise.
+    @IsOptional()
+    @IsString()
+    LIVE_GO_AHEAD_TOKEN_FILE?: string;
+
+    @IsOptional()
+    @IsString()
+    LIVE_GO_AHEAD_TOKEN_HASH?: string;
+
     // Safety: only the exact string 'false' selects LIVE endpoints. A typo
     // ('flase'), an empty value, or a missing var defaults to testnet (true) so a
     // mistake can never silently route orders to live (testnet-first invariant).
     // The field default covers an ABSENT key (class-transformer skips @Transform
     // when the key is missing); the transform covers any PRESENT value.
+    //
+    // LEGACY (pre-M11a): superseded by EXCHANGE_ENV. Retained to keep config
+    // consumers that still read it compiling; the engine now switches on
+    // EXCHANGE_ENV everywhere it cares about the exchange URL.
     @Transform(({ value }) => String(value).toLowerCase().trim() !== 'false')
     @IsBoolean()
     EXCHANGE_TESTNET: boolean = true;

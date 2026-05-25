@@ -1,4 +1,4 @@
-import { LOG_CIRCULAR_REF, LOG_REDACT_CENSOR, LOG_SENSITIVE_KEYS } from '../const';
+import { LOG_CIRCULAR_REF, LOG_REDACT_CENSOR, LOG_SENSITIVE_KEYS, TELEGRAM_TOKEN_URL_REGEX } from '../const';
 
 // Recursively replaces the value of any key in LOG_SENSITIVE_KEYS (matched
 // case-insensitively) with the censor, at ANY depth and inside arrays. Used as
@@ -12,6 +12,14 @@ export function deepRedactLog(logObject: Record<string, unknown>): Record<string
 }
 
 function redactValue(value: unknown, seen: WeakSet<object>): unknown {
+    if (typeof value === 'string') {
+        // M11a W1.11 — strip Telegram bot tokens embedded in URLs even when
+        // the URL is the VALUE of a non-sensitive key (e.g. `err.config.url`
+        // on an axios/undici retry line). The host stays visible so the
+        // operator sees the failed endpoint.
+        return value.replace(TELEGRAM_TOKEN_URL_REGEX, `$1${LOG_REDACT_CENSOR}`);
+    }
+
     if (value === null || typeof value !== 'object') {
         return value;
     }

@@ -13,6 +13,9 @@ const VALID_ENV: Record<string, unknown> = {
     DB_NAME: 'botdb',
     DATABASE_URL: 'postgresql://bot:secret@localhost:5432/botdb',
     ADMINER_PORT: '8080',
+    // M11a W1.1 — primary env selector; tests pin to testnet so no key
+    // permission assertion + no demo-trading URL switch.
+    EXCHANGE_ENV: 'testnet',
     EXCHANGE_TESTNET: 'true',
     MAX_OPEN_POSITIONS: '3',
     MAX_EXPOSURE_PER_COIN_USDT: '100',

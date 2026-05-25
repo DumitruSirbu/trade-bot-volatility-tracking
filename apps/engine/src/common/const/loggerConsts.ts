@@ -42,3 +42,12 @@ export const LOG_REDACT_CENSOR = '[REDACTED]';
 // Placeholder substituted for objects already seen during recursive redaction,
 // so circular references (common in Express req/res and error objects) don't loop.
 export const LOG_CIRCULAR_REF = '[Circular]';
+
+// M11a W1.11 — Telegram bot tokens travel in the URL path (`/bot<token>/...`)
+// on every outbound request. Any axios/undici retry log line that echoes the
+// failing URL would leak the token through the structured logger. This regex
+// runs on every string value (recursively) emitted through `deepRedactLog`
+// and rewrites the `/bot<token>/` segment with the censor, regardless of host
+// case or trailing path. The host portion (`api.telegram.org`) is preserved
+// so the operator still sees WHICH service failed.
+export const TELEGRAM_TOKEN_URL_REGEX = /(api\.telegram\.org\/bot)[^/\s"']+/gi;

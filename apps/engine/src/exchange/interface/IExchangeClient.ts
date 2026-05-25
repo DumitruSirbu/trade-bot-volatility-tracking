@@ -1,3 +1,5 @@
+import { IKeyPermissionSnapshot } from '@bot/shared';
+
 import {
     IBalanceSnapshot,
     ICreateOrderRequest,
@@ -83,6 +85,14 @@ export interface IExchangeClient {
     // and retry on the next sweep — funding ingestion must NOT cascade into the main
     // strategy loop).
     fetchFundingHistory(symbol: string, sinceMs: number): Promise<readonly IFundingPaymentSnapshot[]>;
+
+    // M11a W1.2 (ADR 0028 §2.2). Capability + IP-allow-list snapshot used by
+    // the startup allowlist gate. Implementations merge
+    // `sapiGetAccountApiRestrictions` + `sapiGetAccountApiRestrictionsIpRestriction`
+    // into a single `IKeyPermissionSnapshot`. Throws `ExchangeRequestException`
+    // on any underlying ccxt failure — the boot caller treats that as
+    // assertion-failure, never as "skip and continue."
+    fetchKeyPermissions(): Promise<IKeyPermissionSnapshot>;
 
     // Releases the underlying socket(s); called on shutdown.
     close(): Promise<void>;

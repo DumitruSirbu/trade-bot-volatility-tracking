@@ -2,11 +2,14 @@ import { Module } from '@nestjs/common';
 
 import { AlertModule } from '../alert/AlertModule';
 import { ControlModule } from '../control/ControlModule';
+import { ExchangeModule } from '../exchange/ExchangeModule';
 import { ExecutionModule } from '../execution/ExecutionModule';
 import { MarketDataModule } from '../market-data/MarketDataModule';
 import { PositionModule } from '../position/PositionModule';
 import { RiskModule } from '../risk/RiskModule';
 import { HaltStateRestoreService } from './HaltStateRestoreService';
+import { KeyPermissionAssertionService } from './KeyPermissionAssertionService';
+import { LiveGoAheadVerifier } from './LiveGoAheadVerifier';
 import { SchemaValidationService } from './SchemaValidationService';
 import { EngineBootstrapService } from './service';
 
@@ -43,8 +46,13 @@ import { EngineBootstrapService } from './service';
 // orchestrator. NestJS dispatches lifecycle hooks in provider declaration
 // order inside a module.
 @Module({
-    imports: [AlertModule, ControlModule, PositionModule, ExecutionModule, RiskModule, MarketDataModule],
-    providers: [SchemaValidationService, HaltStateRestoreService, EngineBootstrapService],
+    imports: [AlertModule, ControlModule, ExchangeModule, PositionModule, ExecutionModule, RiskModule, MarketDataModule],
+    // M11a W1.2 — KeyPermissionAssertionService is declared AFTER
+    // SchemaValidationService so its OnApplicationBootstrap hook fires once
+    // the `control_audit` schema has been verified, and BEFORE
+    // HaltStateRestoreService + EngineBootstrapService so a misconfigured key
+    // refuses to boot before any subscription / phase-1 read happens.
+    providers: [SchemaValidationService, LiveGoAheadVerifier, KeyPermissionAssertionService, HaltStateRestoreService, EngineBootstrapService],
     // M9 W4 — `SchemaValidationService.lastValidationResult()` backs `GET /v1/health`'s
     // `schemaValid` flag in ReadApiModule. The provider stays singleton-scoped here.
     exports: [SchemaValidationService],

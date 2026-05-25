@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
-import { AuthScopeEnum } from '@bot/shared';
+import { AuthScopeEnum, ExchangeEnvironmentEnum } from '@bot/shared';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -97,6 +97,22 @@ export class AppConfigService {
 
     get isExchangeTestnet(): boolean {
         return this.configService.get('EXCHANGE_TESTNET', { infer: true });
+    }
+
+    // M11a W1.1 — exchange-environment selector. NO default; an unset value
+    // throws at boot via the class-validator @IsEnum(EnvironmentVariables).
+    get exchangeEnv(): ExchangeEnvironmentEnum {
+        return this.configService.get('EXCHANGE_ENV', { infer: true });
+    }
+
+    // M11a W1.1 — two-token live-mode boot inputs. Both optional at schema
+    // level; the LIVE branch of LiveGoAheadVerifier requires both to be set.
+    get liveGoAheadTokenFile(): string | undefined {
+        return this.configService.get('LIVE_GO_AHEAD_TOKEN_FILE', { infer: true });
+    }
+
+    get liveGoAheadTokenHash(): string | undefined {
+        return this.configService.get('LIVE_GO_AHEAD_TOKEN_HASH', { infer: true });
     }
 
     get telegramBotToken(): string | undefined {

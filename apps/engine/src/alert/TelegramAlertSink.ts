@@ -134,9 +134,26 @@ export class TelegramAlertSink implements IAlertSink {
     }
 }
 
+// M11a W1.11 — field WHITELIST (not blacklist). The wire surface is exactly
+// these three fields plus the optional suppressed-count footer. `data` and
+// `occurredAt` and `type` are intentionally NOT rendered — they remain
+// available for internal listeners but never travel through Telegram. This
+// is what guarantees a synthetic payload that smuggles a secret into a
+// non-whitelisted field can never exfiltrate it through the alert path.
+const TELEGRAM_RENDER_FIELDS: ReadonlyArray<'severity' | 'title' | 'body'> = ['severity', 'title', 'body'];
+
 function renderAlertText(payload: IAlertPayload, suppressedCount: number): string {
-    const severityTag = severityPrefix(payload.severity);
-    const lines: string[] = [`${severityTag} ${payload.title}`, payload.body];
+    // Build a defensive projection over the whitelist so a future field
+    // addition does not silently leak through this renderer.
+    const projected: Pick<IAlertPayload, 'severity' | 'title' | 'body'> = {
+        severity: payload.severity,
+        title: payload.title,
+        body: payload.body,
+    };
+    void TELEGRAM_RENDER_FIELDS; // anchor reference so the list is not dead code
+
+    const severityTag = severityPrefix(projected.severity);
+    const lines: string[] = [`${severityTag} ${projected.title}`, projected.body];
 
     if (suppressedCount > 0) {
         lines.push(`[${suppressedCount} alerts suppressed in last 60s]`);
