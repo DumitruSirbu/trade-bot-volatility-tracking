@@ -9,6 +9,7 @@ export { IReconciliationResolvedEvent } from './IReconciliationResolvedEvent.js'
 export { IPositionAdoptedEvent } from './IPositionAdoptedEvent.js';
 export { IPositionAdoptionVanishedEvent } from './IPositionAdoptionVanishedEvent.js';
 export { IExchangeOverfillDriftEvent } from './IExchangeOverfillDriftEvent.js';
+export { IExchangeNotInDbDriftEvent } from './IExchangeNotInDbDriftEvent.js';
 export { IBacktestConfig } from './IBacktestConfig.js';
 export { IBacktestFill } from './IBacktestFill.js';
 export { IBacktestPosition } from './IBacktestPosition.js';
@@ -35,3 +36,5 @@ export { IPnlTickEvent, IStreamLaggedEvent } from './IPnlTickEvent.js';
 export { IPaginated } from './IPaginated.js';
 export { IAlertPayload } from './IAlertPayload.js';
 export { IHealthView } from './IHealthView.js';
+export { IKeyPermissionSnapshot } from './IKeyPermissionSnapshot.js';
+export { ILiveModeProfile } from './ILiveModeProfile.js';

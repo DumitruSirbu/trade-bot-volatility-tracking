@@ -32,3 +32,4 @@ export { AuthFailureReasonEnum } from './AuthFailureReasonEnum.js';
 export { AlertSeverityEnum } from './AlertSeverityEnum.js';
 export { AlertTypeEnum } from './AlertTypeEnum.js';
 export { WsRoomEnum } from './WsRoomEnum.js';
+export { ExchangeEnvironmentEnum } from './ExchangeEnvironmentEnum.js';
