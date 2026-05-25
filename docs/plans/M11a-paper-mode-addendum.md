@@ -1,8 +1,8 @@
 # M11a — Paper-mode addendum (DEMO → PAPER course correction)
 
-**Status:** Draft v2 — folds round-1 review findings (architect, logic, quant,
-security) into a coherent plan that R0 can dispatch against. Replaces the
-`DEMO` mode introduced in W0.1 / W1.1.
+**Status:** Draft v3 — folds round-2 review findings (architect, logic, quant,
+security; zero blockers, four highs, ~15 mediums) on top of v2's locked
+decisions. Replaces the `DEMO` mode introduced in W0.1 / W1.1.
 
 **Depends on:** the rest of M11a as previously planned and partially
 implemented (W0 shared contracts + W1 engine wave both landed; the rename in
@@ -84,8 +84,13 @@ Per-order PRNG seed schema:
 ```
 order_seed = HMAC-SHA256(boot_seed, decision.event_id || symbol || order_intent_id)
 ```
-- `boot_seed` is generated at first PAPER boot, persisted to
-  `paper_account_state_meta` (a 1-row meta table), reloaded on every restart.
+- `boot_seed` is **derived** at boot via `HKDF(bootstrap_secret, info='paper_simulator_seed v1')`,
+  not generated and stored in plaintext (security round 2 M1). Reuses the
+  HKDF primitive already established in W1.7 + D6. The derivation is
+  deterministic given the bootstrap secret, so the soak's seed is
+  reproducible across restarts without writing it to disk. The
+  `paper_account_state_meta` table stores only the **RNG cursor**
+  (`last_consumed_event_id`), not the seed itself.
 - Reusing the existing M7 `BacktestRunnerService` seed strategy verbatim is
   required — soak fills must be replayable identically by an offline M7 run
   against the same decision tape. The ADR 0032 cites M7's seed locking.
@@ -122,17 +127,35 @@ R3.1 paired test: `side_sign(LONG) × funding_paid(rate > 0) > 0` (long pays);
 `side_sign(SHORT) × funding_paid(rate > 0) < 0` (short receives).
 
 Funding-rate ingest passes the same M1 validator chain (rate sanity bounds,
-monotonic timestamps, signed-source check) and additionally enforces
-`|rate| ≤ 0.0075` (Binance's published cap) before applying to
-`PaperAccountStateService`.
+monotonic timestamps, signed-source check). The Binance cap `|rate| ≤ 0.0075`
+(per-funding-window absolute cap, cite Binance source in ADR 0032 so a
+schedule change does not silently desync) is enforced as a **warning, not a
+hard reject** (quant round 2 M1): when exceeded, apply the rate, write an
+audit row, and emit a CRITICAL Telegram alert. A simulator that silently
+zeroes funding during a stress regime would flatter expectancy at exactly
+the moment funding cost matters most for shorts.
 
-### D5 — Mark-to-market cadence
+Funding / PnL ordering inside a tick batch is pinned (logic round 2 M1):
+`apply_funding → recompute_unrealised_pnl → evaluate_drawdown_abort`. R3.1
+adds a test for a funding event coincident with an adverse mark.
+
+### D5 — Mark-to-market cadence + drawdown denominator
 
 PaperAccountStateService unrealised PnL is recomputed on **every WS price
 tick for held symbols**, not only at decision boundaries. Restricted-profile
-soak has `max_open_positions: 1`, so cost is trivial. The drawdown
-abort-threshold (15%) is re-evaluated on each update so a fast adverse move
-fires the abort intra-bar.
+soak has `max_open_positions: 1`, so cost is trivial (if the profile ever
+relaxes, the per-tick MTM cost must be re-validated — quant round 2 L2).
+
+**Drawdown denominator pinned to running peak equity** (quant round 2 H1).
+The drawdown abort threshold (15%) compares against `peak_equity`, not
+starting equity:
+```
+drawdown(t) = (peak_equity(t) - equity(t)) / peak_equity(t)
+peak_equity(t) = max(equity(τ)) for τ ∈ [soak_start, t]
+```
+With D11's $500 starting equity and 0.25% risk per trade, peak-equity
+denominator means the abort fires on a true regime break, not on a routine
+losing streak from a high-water mark. Re-evaluated on every WS tick.
 
 ### D6 — Mode-switch predicate + integrity
 
@@ -143,35 +166,89 @@ written **at successful boot** (not at shutdown — crash-safety):
 ```
 boot_mode_history (
   id            uuid PK,
+  seq           BIGSERIAL NOT NULL UNIQUE,  -- monotonic ordering independent of clock
   booted_at     timestamptz NOT NULL DEFAULT now(),
   exchange_env  text NOT NULL,  -- 'testnet' | 'paper' | 'live'
-  prev_row_hash bytea,          -- HMAC-SHA256(bootstrap_secret, prev_row_serialized)
-  this_row_hmac bytea NOT NULL  -- HMAC-SHA256(bootstrap_secret, this_row_minus_hmac)
+  row_kind      text NOT NULL,  -- 'BOOT' | 'TRANSITION_TESTNET_TO_PAPER' | ...
+  prev_row_hash bytea,          -- HMAC over prev row's signed payload (incl seq)
+  this_row_hmac bytea NOT NULL  -- HMAC over this row's signed payload (incl seq)
 )
 ```
 
-HMAC chain (each row signs the previous row's hash with a key derived from
-the engine's bootstrap secret per ADR 0027) prevents an attacker with DB
-write access from silently mutating the mode history. Phase-1 crash recovery
-verifies the chain and refuses to proceed if it is broken or if the last
-row's `exchange_env` differs from the current `EXCHANGE_ENV`. Non-empty
-`paper_account_state` is a **secondary** defence inside the mode-switch
-branch, not the primary predicate.
+`seq BIGSERIAL` is included in the signed payload (security round 2 M3) so
+clock-skew cannot let an attacker insert a row appearing "earlier" than tip
+by manipulating `booted_at`.
 
-### D7 — Mode-transition matrix
+**HMAC subkey derivation** (security round 2 H2). The chain HMAC key is
+**not** the raw bootstrap secret. Per-purpose subkeys via HKDF:
+```
+boot_mode_history_key  = HKDF(bootstrap_secret, info='boot_mode_history v1')
+paper_state_audit_key  = HKDF(bootstrap_secret, info='paper_state_audit v1')
+```
+Same primitive as W1.7's `cursor v1` / `auth v1`. A leak of the
+boot_mode_history key does not compromise paper_state_audit or login HMAC,
+and vice versa.
+
+**Bootstrap-secret rotation interaction (W1.8).** Rotation produces fresh
+sub-keys for both chains. The pre-rotation chain tip is witnessed by
+appending a typed `KEY_ROTATION_WITNESS` row referencing the old tip hash,
+signed with the **new** sub-key. R3.1 includes a test that a rotation
+followed by tampering with a pre-rotation row is detected via the witness.
+
+Phase-1 crash recovery verifies the chain and refuses to proceed if it is
+broken or if the last row's `exchange_env` differs from the current
+`EXCHANGE_ENV`. Non-empty `paper_account_state` is a **secondary** defence
+inside the mode-switch branch, not the primary predicate.
+
+**Mid-soak chain break action** (security round 2 M4). A chain-integrity
+failure detected during the soak (e.g. by the soak-exit-gate evaluator
+verifying the chain before reading state) is CRITICAL: alert, halt new
+decision routing, **invalidate the soak result**. Mid-soak chain breaks
+never silently downgrade — they disqualify the run.
+
+### D7 — Mode-transition matrix (append-only, never truncate the chain)
 
 ADR 0032 includes the transition matrix; the operator must follow the
 documented drain procedure for each transition. **Undocumented transitions
 are rejected at boot**.
 
-| From | To | Drain procedure |
-|------|----|----------------|
-| TESTNET | PAPER | Confirm `paper_account_state` empty; clear `boot_mode_history` chain via documented runbook step (HMAC-resign with current secret); proceed. |
-| TESTNET | LIVE | Same as PAPER→LIVE plus standard `LIVE_GO_AHEAD_TOKEN` gate. |
-| PAPER | TESTNET | Reject unless `paper_account_state` is empty (operator must close all paper positions first); document the cleanup procedure. |
-| PAPER | LIVE | Reject unless `paper_account_state` empty + audit chain rotated; require `LIVE_GO_AHEAD_TOKEN`; CRITICAL Telegram alert at boot. |
-| LIVE | PAPER | Reject unless no open live positions; require operator confirmation token (separate from LIVE_GO_AHEAD); CRITICAL alert. |
-| LIVE | TESTNET | Reject. Use a separate machine. |
+**Chain rotation primitive: append-only typed rows.** Three reviewers
+(architect, logic, security) converged on the round-2 finding that "clear
+and resign" creates a sanctioned escape hatch from D6's tamper-evidence
+guarantee. Every legitimate transition is now recorded as an **append-only
+typed row** (e.g. `TRANSITION_TESTNET_TO_PAPER`) that references the prior
+tip's HMAC, signed under the appropriate sub-key. The chain is **never
+truncated**. Rotation events themselves are persisted in a separate
+`boot_mode_chain_rotations` table (also HMAC-chained) so a forensic auditor
+can distinguish a sanctioned transition from a compromise.
+
+```
+boot_mode_chain_rotations (
+  id              uuid PK,
+  seq             BIGSERIAL NOT NULL UNIQUE,
+  rotated_at      timestamptz NOT NULL DEFAULT now(),
+  from_env        text NOT NULL,
+  to_env          text NOT NULL,
+  pre_tip_hash    bytea NOT NULL,           -- HMAC of the boot_mode_history tip before transition
+  transition_token_hash bytea NOT NULL,     -- sha256 of the operator-provided transition token
+  prev_row_hash   bytea,
+  this_row_hmac   bytea NOT NULL
+)
+```
+
+Each transition requires a **separate transition token** (analogous to
+`LIVE_GO_AHEAD_TOKEN`): a file whose hash is baked into config and matched
+at boot. The transition is single-use — once a `TRANSITION_*` row is
+written, the same token cannot drive another transition without rotating.
+
+| From | To | Procedure |
+|------|----|-----------|
+| TESTNET | PAPER | Confirm `paper_account_state` empty; operator provides `TESTNET_TO_PAPER_TOKEN_FILE` (hash baked at build); boot appends `TRANSITION_TESTNET_TO_PAPER` row + records rotation; proceeds. |
+| TESTNET | LIVE | Operator provides both `TESTNET_TO_LIVE_TOKEN_FILE` **and** `LIVE_GO_AHEAD_TOKEN_FILE`; standard LIVE allowlist applies; CRITICAL alert. |
+| PAPER | TESTNET | Reject unless `paper_account_state` is empty; operator provides `PAPER_TO_TESTNET_TOKEN_FILE`; runbook documents the paper-position-cleanup step. |
+| PAPER | LIVE | Reject unless `paper_account_state` empty; operator provides `PAPER_TO_LIVE_TOKEN_FILE` **and** `LIVE_GO_AHEAD_TOKEN_FILE`; CRITICAL Telegram alert at boot. |
+| LIVE | PAPER | Reject unless no open live positions; operator provides `LIVE_TO_PAPER_TOKEN_FILE` (separate from `LIVE_GO_AHEAD`); CRITICAL alert; never re-uses any prior token. |
+| LIVE | TESTNET | Reject. Operationally: use a separate machine, **or** execute the documented destructive-wipe runbook step that records a `MACHINE_REPURPOSE_WIPE` row before re-init (logic round 2 H2 + security round 2 L1). |
 
 ### D8 — PAPER allowlist (full enumeration)
 
@@ -209,19 +286,42 @@ PAPER does **not** require the go-ahead token. The read-only-only assertion
 (D8) is PAPER's safety teeth. ADR 0028 records this explicitly so a future
 reader does not re-introduce a PAPER token gate by analogy.
 
-### D10 — Closed-trade counting for the ≥80-trade floor
+### D10 — Closed-trade counting (full enumeration)
 
-A PAPER fill counts toward the soak's ≥80 closed-trade floor iff its
-`closeReason ∈ {sl, tp, intra_bar_stop}`. `force_close` (M7 end-of-window
-rule) fills are excluded — otherwise the floor is trivially gameable by a
-long soak producing window-edge closes. M11a §"Minimum trade count" gets a
-cross-reference in the same fold-in pass.
+Logic round 2 M3: enumerate the full `closeReason` set against the floor,
+not only the excluded one. Quant round 2 M4: missed fills do not consume
+the `max_trades_per_day` daily slot. Architect round 2 L1: excluded
+`force_close` PnL is still reported in a separate soak-evaluator panel so
+the operator sees what was discarded.
+
+| `closeReason` | Counts toward ≥80-trade floor? | Notes |
+|--------------|-------------------------------|-------|
+| `sl` | ✅ Yes | Stop-loss intra-bar fill. |
+| `tp` | ✅ Yes | Take-profit intra-bar fill. |
+| `intra_bar_stop` | ✅ Yes | Generic intra-bar protective stop. |
+| `force_close` | ❌ No (excluded) | M7 end-of-window. Surfaced in a separate evaluator panel for visibility. |
+| Operator drain (halt + close) | ❌ No (excluded) | Operator-initiated close during incident or transition. |
+| Reconciliation-forced close | ❌ No (excluded) | Engine-internal cleanup. |
+
+Additionally:
+- A simulator decision with `missed: true` does **not** consume the
+  restricted profile's `max_trades_per_day: 3` slot (quant round 2 M4).
+  Missed fills are observability only — they do not crowd out future
+  decisions in the same risk-day.
+- The soak evaluator emits a "excluded fills" report alongside the
+  primary trade count so excluded-but-real PnL is auditable.
+
+M11a §"Minimum trade count" gets a cross-reference in the same fold-in
+pass.
 
 ### D11 — PAPER starting equity
 
-PAPER starting equity is pinned at **$500** to match the live restricted
-profile's lower bound. The drawdown abort threshold (15%) is therefore
-comparable to live-mode risk: ≥$75 paper loss aborts the soak.
+PAPER starting equity defaults to **$500** to match the live restricted
+profile's lower bound. Surfaced as `PAPER_STARTING_EQUITY_USDT` env var
+(security round 2 L2 — keeps trust-posture-relevant magic numbers out of
+code), validated by Zod schema with `$500` as the default. R3.1 includes
+a boundary test that a 15% adverse mark from peak equity triggers the
+abort within one WS tick (architect round 2 M2).
 
 ### D12 — Reconciliation in PAPER
 
@@ -243,8 +343,21 @@ Independent of `PaperExecutionClient`'s internal invariants, the
 reconciliation cycle calls `ccxt.fetchOpenOrders()` (read-only, against the
 live key, against the live exchange) and asserts it returns empty in PAPER.
 This catches the worst-case bug — accidental order leak to the exchange —
-independently of any in-engine routing assumption. Cost: one read call per
-reconciliation tick. If non-empty: CRITICAL Telegram, halt, audit.
+independently of any in-engine routing assumption.
+
+**Cadence + failure handling** (security round 2 M2; logic round 2 M2):
+- Probe runs **once per minute**, not every reconciliation tick.
+- The probe **filters by the engine's client-order-ID prefix** (or, if the
+  operator chooses to use a dedicated PAPER-only key documented in the
+  runbook, asserts the entire response is empty). Without the prefix
+  filter, a stale order from a prior LIVE session or a manual UI order
+  would trigger a CRITICAL on every reconciliation cycle — false-positive
+  spam that defeats the alert.
+- **Transport error → log and continue**, do **not** halt. A Binance
+  outage halting the soak is not a defensible failure mode.
+- Only a **non-empty engine-attributed response** triggers CRITICAL +
+  halt + audit. The probe's W1.4 rate-limit cost (one read call/min) is
+  budgeted explicitly in the token-bucket policy.
 
 ## lowFidelity behaviour in PAPER (load-bearing for the soak gate)
 
@@ -269,14 +382,23 @@ the duration of M11a. This changes how ADR 0019 criterion 12 and ADR 0029
   strategy edge alone. M11b's go-live decision must treat the PAPER CI as
   a **necessary but not sufficient** condition.
 
-- **Pre-soak sanity step (mandatory).** Before the soak begins, run the
-  M7 simulator over the prior 60 days of the same symbol universe with a
-  known-zero-edge strategy (random entries respecting the restricted
-  profile gates). Measure the simulator's residual expectancy. The soak
-  proceeds only if the residual is statistically indistinguishable from
-  zero at 95% confidence; otherwise the simulator has a known bias and
-  the PAPER CI is uninterpretable. This step lands in M11a §W4.4
-  alongside the existing calibration day.
+- **Pre-soak sanity step (mandatory, TOST equivalence).** Logic round-2 H1
+  + quant round-2 M2: a "fail to reject zero" null test trivially passes
+  with small N — that is power against the null, not evidence of
+  unbiasedness. Replace with the **Two One-Sided Tests (TOST) equivalence
+  procedure**:
+  - Run the M7 simulator over the prior 60 days of the same symbol
+    universe with a known-zero-edge strategy (random entries respecting
+    the restricted profile gates).
+  - Compute the **90% CI on residual expectancy**.
+  - Set tolerance band `ε = 25% of v1's backtested expectancy on the same
+    window`.
+  - **Pass criterion:** the 90% CI must lie entirely within `[−ε, +ε]`.
+  - If the CI is wider than the band, the simulator has unknown bias
+    relative to the soak's expected detection signal and the soak does
+    not start. Documented as an operator decision in the runbook: extend
+    the calibration window, or accept the soak as exploratory only.
+  This step lands in M11a §W4.4 alongside the existing calibration day.
 
 - **v1 vs v0 reframing.** v0 is exactly zero with zero variance, so "v1's
   CI excludes zero from above" is a one-sided test against a degenerate
@@ -294,10 +416,18 @@ zero regardless of strategy edge. Required pre-soak step:
 2. Compute per-trade variance attributable to missed-fill + slippage rolls
    by holding strategy decisions fixed and varying only the simulator seed
    across N=1000 runs.
-3. Derive the minimum detectable effect size at n=80 with α=0.05.
-4. If the MDE exceeds the historical between-version expectancy gap on
+3. **Also report `Var(E[v1] − E[v2])` across the same N=1000 paired runs**
+   (both strategies decide on the same tape, both go through the
+   simulator). This is the paired-difference variance the soak's bootstrap
+   actually estimates — the isolated noise estimate from step 2 alone
+   under-estimates the real floor when missed-fill is correlated with
+   adverse selection (quant round 2 M3).
+4. Derive the minimum detectable effect size at n=80 with α=0.05 from the
+   paired-difference variance.
+5. If the MDE exceeds the historical between-version expectancy gap on
    backtest, the soak is statistically underpowered before it starts. The
-   trade floor must be raised (or the soak is acknowledged as exploratory).
+   trade floor must be raised (or the soak is acknowledged as
+   exploratory).
 
 This step lands in W4.4 (calibration day).
 
@@ -425,8 +555,11 @@ identical fills.
   aborts.
 - PAPER boot with `EXCHANGE_ENV` unset → aborts (the W0.1 Zod schema
   already throws — regression guard).
-- PAPER order placement never calls `ccxt.createOrder` (mock ccxt, assert
-  zero order-method calls).
+- PAPER order placement never calls **any** execution method on ccxt
+  (mock ccxt, assert zero calls on `createOrder`, `cancelOrder`,
+  `cancelAllOrdersForSymbol`, `fetchOrderStatus`, plus the D2 surface —
+  security round 2 L3). A missed mock must not silently let an execution
+  call slip through.
 - `enableDemoTrading` is never called in any environment (sentinel).
 - PaperFillSimulator deterministic across SIGKILL replay: kill mid-trade,
   restart, last 5 decisions replay to identical `simulated_fill` rows.
@@ -441,8 +574,23 @@ identical fills.
   triggers CRITICAL + halt.
 - `boot_mode_history` HMAC chain: tampering with a row produces a chain
   verification failure on next boot.
-- Pre-soak sanity step's residual-expectancy check refuses to start the
-  soak when M7 has bias above tolerance.
+- Pre-soak sanity step's TOST band rejects the start when the 90% CI on
+  residual expectancy is not contained in `[−ε, +ε]`.
+- Funding event coincident with adverse mark: ordering is
+  apply_funding → recompute_unrealised → evaluate_abort; the abort
+  decision incorporates the funding hit.
+- $75 drawdown boundary test from peak equity fires the abort intra-bar.
+- Funding `|rate| > 0.0075` writes audit row + CRITICAL alert, applies
+  the rate (does not zero it).
+- Soak fills replayable identically by an offline M7 run against the
+  same decision tape (D3 cross-run determinism check; logic round 2 L1).
+- `boot_mode_history` chain: tampering with a pre-rotation row after a
+  bootstrap-secret rotation is detected via the `KEY_ROTATION_WITNESS`
+  row (D6 rotation interaction).
+- `seq` ordering protects against clock-skew row-insertion attacks.
+- Mid-soak chain break → CRITICAL + halt + soak result invalidated.
+- D7 transition: a single-use transition token cannot drive a second
+  transition without rotating.
 
 ### Wave R4 — Reviewer round + scribe
 
@@ -452,8 +600,10 @@ devops if compose changes).
 **R4.2 — Scribe.** Merge this addendum into `M11a-local-soak.md` (replace
 W1.1 wording with the PAPER design; integrate D10 / lowFidelity / pre-soak
 sanity into §"Reduced evaluation gate" + §"Minimum trade count" + §W4.4).
-Delete this addendum file. Update `CLAUDE.md` status. Append a single
-work-log line referencing the merged commit.
+Delete this addendum file. **Preserve anchor IDs D1–D13** (logic round 2 L3)
+in the merged content so existing cross-references survive. Update
+`CLAUDE.md` status. Append a single work-log line referencing the merged
+commit.
 
 ## Migration of work already landed
 
