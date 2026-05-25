@@ -1,12 +1,12 @@
 # M11a — Paper-mode addendum (DEMO → PAPER course correction)
 
-**Status:** Draft v4 — folds two independent external reviews (`gbt`, `gemini`)
-on top of v3. Substantive corrections: look-ahead bias in fill simulator,
-`IAccountStateSource` port gap, boot-sequence ordering, seed-handling
-contradiction, nullity probe blind to permission failures and to
-immediately-filled orders, MTM event-loop saturation, paper-state coherence,
-shadow-randomness contradiction, TOST tolerance circularity. Replaces the
-`DEMO` mode introduced in W0.1 / W1.1.
+**Status:** Draft v5 — folds round-3 internal delta findings on top of v4.
+Round-3 surfaced four new highs (CRN reproducibility + rotation + skip-case;
+D14 module-graph runtime bypass; D16 atomicity vs MTM; D7 transition-time
+predicate misroute) plus an editorial sweep (D1–D13 → D1–D17). The
+load-bearing convergence across all four reviewers: bootstrap-secret-derived
+material drifts under W1.8 rotation or env switching — unified treatment
+below. Replaces the `DEMO` mode introduced in W0.1 / W1.1.
 
 ## PAPER is not exchange demo trading (invariant)
 
@@ -121,7 +121,13 @@ with a `paper_simulator_idempotency` table keyed by
 `(event_id, order_intent_id, version_namespace)` recording the
 `simulated_fill_id` produced. On restart, the simulator looks up by key
 before rolling; if a fill already exists for the key, return it verbatim
-(byte-identical replay). Garbage-collect rows older than retention floor.
+(byte-identical replay).
+
+**Retention floor pinned (logic round-3 M3):** the idempotency ledger
+retains for **soak_duration + 30 days**, identical to `paper_account_state`.
+A SIGKILL replay after GC'd ledger rows would silently break replay
+determinism otherwise. The ledger goes on W3.10's paper-table retention
+list.
 
 `paper_account_state_meta` stores only **non-secret derived metadata**:
 seed version label, HKDF info string version, simulator config hash, and
@@ -197,6 +203,15 @@ matters most for shorts. Operator decides response, not the simulator.
 → recompute_unrealised_pnl → evaluate_drawdown_abort`. R3.1 adds a test
 for a funding event coincident with an adverse mark.
 
+**Funding force-flushes the MTM throttle** (quant round-3 M3). D5 throttles
+unrealised-PnL evaluation to one per 100 ms per held symbol. A funding
+event arriving mid-throttle-window would otherwise wait up to 100 ms
+before being applied — and a coincident adverse mark could delay the
+abort by the same window. Funding event arrival is therefore a
+throttle-exemption trigger: immediate `apply_funding +
+recompute_unrealised + evaluate_abort`, regardless of throttle state.
+R3.1 explicitly asserts no throttle delay on this path.
+
 **Timing approximation noted.** Applying funding at local receipt of the
 Binance funding timestamp may have sub-second desync with Binance's
 own snapshot. Acceptable for paper trading; documented in ADR 0032 as a
@@ -231,9 +246,13 @@ re-validated (quant round 2 L2).
 The drawdown abort threshold (15%) compares against `peak_equity`, not
 starting equity:
 ```
-drawdown(t) = (peak_equity(t) - equity(t)) / peak_equity(t)
+drawdown(t)    = (peak_equity(t) - equity(t)) / peak_equity(t)
 peak_equity(t) = max(equity(τ)) for τ ∈ [soak_start, t]
+peak_equity(0) = PAPER_STARTING_EQUITY_USDT   // cold start; not the first MTM tick
 ```
+The cold-start pin (quant round-3 L1) prevents an adverse first tick from
+lowering `peak_equity` below the starting value, which would delay the
+abort threshold's first meaningful trigger.
 With D11's $500 starting equity and 0.25% risk per trade, peak-equity
 denominator means the abort fires on a true regime break, not on a routine
 losing streak from a high-water mark. Re-evaluated on every WS tick.
@@ -387,7 +406,7 @@ written, the same token cannot drive another transition without rotating.
 | TESTNET | LIVE | Operator provides both `TESTNET_TO_LIVE_TOKEN_FILE` **and** `LIVE_GO_AHEAD_TOKEN_FILE`; standard LIVE allowlist applies; CRITICAL alert. |
 | PAPER | TESTNET | Reject unless `paper_account_state` is empty; operator provides `PAPER_TO_TESTNET_TOKEN_FILE`; runbook documents the paper-position-cleanup step. |
 | PAPER | LIVE | Reject unless `paper_account_state` empty; operator provides `PAPER_TO_LIVE_TOKEN_FILE` **and** `LIVE_GO_AHEAD_TOKEN_FILE`; CRITICAL Telegram alert at boot. |
-| LIVE | PAPER | Reject unless no open live positions; operator provides `LIVE_TO_PAPER_TOKEN_FILE` (separate from `LIVE_GO_AHEAD`); CRITICAL alert; never re-uses any prior token. |
+| LIVE | PAPER | Reject unless no open live positions; operator provides `LIVE_TO_PAPER_TOKEN_FILE` (separate from `LIVE_GO_AHEAD`); CRITICAL alert; never re-uses any prior token. **Predicate routing fix** (logic round-3 M1): at LIVE→PAPER boot, `EXCHANGE_ENV` is already PAPER so the bound `IAccountStateSource` is `PaperAccountStateSource` (returns empty trivially). The "no open live positions" predicate **must use a transition-only `ExchangeAccountStateSource(prior_env_credentials)`** that reads the live exchange under the prior LIVE key. The transition-time source is bound by the boot sequence (D6 step 6) under a dedicated provider name; the normal port binding is restored after the transition row commits. R3.1 includes a test asserting the predicate sees real positions when they exist. |
 | LIVE | TESTNET | Reject. Operationally: use a separate machine, **or** execute the documented destructive-wipe runbook step that records a `MACHINE_REPURPOSE_WIPE` row before re-init (logic round 2 H2 + security round 2 L1). |
 
 ### D8 — PAPER allowlist (full enumeration)
@@ -477,7 +496,7 @@ profile's lower bound. Surfaced as `PAPER_STARTING_EQUITY_USDT` env var
 (security round 2 L2 — keeps trust-posture-relevant magic numbers out of
 code), validated by Zod schema with `$500` as the default. R3.1 includes
 a boundary test that a 15% adverse mark from peak equity triggers the
-abort within one WS tick (architect round 2 M2).
+abort within one MTM-throttle window per D5 (architect round 3 L1).
 
 ### D12 — Reconciliation in PAPER
 
@@ -585,6 +604,32 @@ strategy → risk → execution loop and fails if any provider reachable from
 the live decision path can inject `IExchangeClient`'s account-state
 methods. Only the two whitelisted providers above may have that reach.
 
+**Runtime guard, not only static graph (security round-3 H1).** Nest's
+`ModuleRef.get(IExchangeClient)`, `Reflector`, `useFactory(injector)`, and
+`forwardRef` resolve providers at runtime in a way the static-graph walk
+cannot see. A reviewer-time refactor that swaps a constructor inject for
+`moduleRef.get(IExchangeClient)` would silently bypass the test. Pair the
+static check with:
+
+1. **Capability-tagged proxy** on the two whitelisted methods
+   (`KeyPermissionAssertionService.fetchKeyPermissions`,
+   `PaperExchangeNullityProbe.fetchOpenOrders` /
+   `PaperExchangeNullityProbe.fetchPositions`). The proxy uses
+   `AsyncLocalStorage` to tag the call-stack origin at the whitelisted
+   entry point. Any call to ccxt account-state methods on the live key
+   without the matching tag in the active context throws
+   `UnauthorizedLiveAccountStateCallException`.
+
+2. **ESLint rule** banning the strings `ModuleRef.get(IExchangeClient)`,
+   `@Inject('IExchangeClient')`, and `injector.get(IExchangeClient)`
+   outside the whitelisted file set (`/auth/KeyPermissionAssertionService.ts`
+   and `/paper/PaperExchangeNullityProbe.ts`). CI gate, not just convention.
+
+R3.1 tests the runtime guard with a synthetic service that resolves
+`IExchangeClient` via `ModuleRef.get` and calls `fetchBalance` — assert
+the throw fires. The static-graph test stays as the first line of defence;
+the runtime guard is the second.
+
 ### D15 — `PaperFillSimulator` is **not** `BacktestRunnerService` reuse
 
 gbt-review H5 surfaced the most serious correctness issue: M7's
@@ -623,6 +668,14 @@ delegates to `FillSimulatorCore` via `StreamingFillAdapter`. The two
 adapters have different inputs and different scheduling, but identical
 `applyFill` semantics for the same snapshot.
 
+**SL/TP evaluation is event-driven, never timer-driven** (quant round-3 L2).
+The `StreamingFillAdapter` evaluates intra-bar SL/TP triggers on **tick
+arrival** from the live WS feed. A `setTimeout` against wall clock would
+drift relative to Binance's tick cadence under event-loop load, producing
+non-deterministic intra-bar timing. R3.1 asserts SL evaluation fires
+within one tick of the triggering price (not within one wall-clock
+interval).
+
 **Causality test (R3.1 mandatory)**: at time `t`, the streaming adapter
 cannot read tick / book-snapshot data with timestamp `> t`. The test
 asserts this by giving the adapter a clock-skewed market snapshot fixture
@@ -631,7 +684,17 @@ future-tick portion.
 
 **The M7 backtest is rerun against the extracted core** as the R0.5
 validation step — any divergence between pre-extraction and post-
-extraction backtest output is a blocker. ADR 0032 references M7's
+extraction backtest output is a blocker.
+
+**Equivalence is numerical, not byte-for-byte** (quant round-3 M5). v4
+said "byte-for-byte" — but Decimal serialization, map-iteration order,
+and floating-point summation order can produce non-byte-identical
+output for numerically equivalent results, leading to false-positive
+regression failures. The equivalence test asserts per-field numerical
+equality on `simulated_fill` rows with documented tolerance for fields
+where order-dependent serialization is unavoidable (`slippageComponents`
+sub-field ordering, JSON key ordering). The whitelist is in the test
+fixture, not hidden in the implementation. ADR 0032 references M7's
 backtest-equivalence test as a permanent regression guard.
 
 ### D16 — Paper-state source-of-truth (per datum)
@@ -671,7 +734,40 @@ mixing the source-of-truth chains.
 (append the closed-trade record if applicable) + `paper_state_audit`
 (HMAC-chained audit) in **one transaction**. A crash between writes leaves
 the engine state structurally consistent — not "consistent after later
-reconciliation."
+reconciliation." The audit row's signed payload **includes the
+post-allocation `seq`** (security round-3 M4) — implemented via a CTE /
+RETURNING-clause so the assigned `seq` value is bound into the HMAC
+within the same SQL statement. This prevents a crash-replay window where
+the chain tip and the row don't agree on `seq`.
+
+**Unrealised PnL is derived, not state (logic round-3 H2).** v4 had MTM
+mutating `paper_account_state.unrealised_pnl` on every coalesced WS tick
+(D5). Those mutations bypass the three-table atomic write — a tamper of
+`unrealised_pnl` (which drives the drawdown abort threshold) would be
+invisible to the audit chain.
+
+Decision: **`unrealised_pnl` is computed on demand**, never persisted.
+The `paper_account_state` table holds only state that is genuinely
+position-defining (entry price, size, side, leverage, opened-at,
+client_order_id, …). MTM evaluations for drawdown-abort and read-API
+projection compute:
+```
+unrealised_pnl = (mark_price - entry_price) × size × side_sign
+equity         = realised_pnl + sum(unrealised_pnl per open position) + funding_accrued
+peak_equity    = max over the soak window of equity readings, persisted in
+                 paper_account_snapshots (which IS audited)
+```
+
+`paper_account_snapshots` is a sibling of `account_snapshots` and is
+written at coarser cadence (suggest: every minute + on every position
+event), goes through the three-table atomic-write path, and is itself
+audit-chained. Drawdown abort reads from a derived `unrealised_pnl`
+plus the audited `peak_equity` snapshot — tampering either input
+(`mark_price` from WS or the audited snapshot) is detectable.
+
+This drops the MTM-throttle requirement for atomicity (the throttle in
+D5 still applies to evaluation cadence — but evaluation does not mutate
+audited state).
 
 W3.10 retention floor for paper tables (folded from gbt-review M3 +
 quant round 2 retention concerns):
@@ -702,24 +798,92 @@ These pull in opposite directions for the comparison test.
 
 - **Offline same-event strategy comparison** uses a **pre-registered
   Common Random Numbers (CRN) scheme** keyed by
-  `(event_id, simulator_component, pair_id)`. The CRN tape is computed
-  once before the soak from the bootstrap secret + soak start timestamp,
-  and pinned in an audit row. When the soak evaluator computes paired
-  bootstrap CIs on `E[v1] − E[v2]`, both strategies see the same simulator
-  rolls on the same events — variance reduction is real, simulator bias
-  cancels.
+  `(event_id, simulator_component, pair_id)`.
 
-- **Two evaluator outputs** in the soak-exit report:
-  1. **Paired CRN CI** on `E[v1] − E[v2]` — the primary criterion. Same
-     simulator rolls, paired differences, expected variance reduction.
-  2. **Independent-noise robustness CI** on the same difference, computed
-     from the live PAPER + shadow runs (which use independent rolls). A
-     "same winner" requirement across both rankings is the cross-check
-     against over-reliance on CRN.
+**Per-soak CRN root (round-3 highs — architect M4 + quant H1 + security M2).**
+The CRN root is **not** derived from the live bootstrap secret. W1.8 rotates
+the bootstrap secret during the soak; a CRN tape keyed on the live secret
+would silently change derivation mid-soak and break the offline evaluator's
+ability to recompute the tape. Instead:
 
-The CRN tape itself is just a deterministic derivation from the soak-start
-inputs; it is not a separate secret. Reproducibility: any auditor can
-recompute it.
+```
+soak_start_id     = uuid generated at soak start
+bootstrap_at_start = bootstrap_secret captured at soak start (immutable for the soak)
+crn_root          = HKDF(bootstrap_at_start, info='paper_crn v1', salt=soak_start_id)
+crn_tape[i]       = HMAC(crn_root, event_id_i || simulator_component_i || pair_id_i)
+```
+
+`bootstrap_at_start` is **never persisted in plaintext**; only its
+fingerprint (e.g. SHA-256 of the secret) goes into the audit row. The
+evaluator post-soak re-captures the secret value the operator names in the
+runbook and re-derives `crn_root`; mismatch with the stored fingerprint
+invalidates the soak.
+
+**Commit-reveal audit-row pattern (security M3).** At soak start, write a
+single audit row to `paper_state_audit` under a dedicated subkey
+(`paper_crn_audit v1` HKDF info string):
+
+```
+crn_commitment = HMAC(crn_root, soak_start_ts
+                              || bootstrap_at_start_fingerprint
+                              || symbol_universe_hash
+                              || pair_list_hash
+                              || PAPER_STARTING_EQUITY_USDT)
+```
+
+Only the commitment (a single HMAC) goes into the audit row pre-soak. The
+CRN tape itself is **not revealed mid-soak** — an operator with engine-role
+DB access cannot predict future paired rolls and time decisions out-of-band.
+The tape is materialised by the evaluator post-soak from `crn_root`; the
+commitment row binds it.
+
+**Tape storage (quant L3).** The full tape can be megabytes. Store a
+content hash (`SHA-256(tape_bytes)`) in the audit row and the tape itself in
+a separate `paper_crn_tape` blob table keyed by `soak_start_id`, written
+once post-soak by the evaluator (write-once, append-only, no overwrites).
+
+**Skip-case pairing (logic H1).** v1 and v2 generally produce different
+order intents on the same event: one trades, the other skips, or both skip.
+A `pair_id` keyed on `event_id` alone collapses to "same event → same roll"
+only when both strategies trade; otherwise CRN does not actually pair, and
+the variance-reduction claim is structurally false.
+
+Rule: per `(event_id, simulator_component)`, the CRN roll is consumed by
+**whichever version trades**. If both trade, they consume the same roll
+(true pairing). If both skip, the row is excluded from the paired sample
+entirely. If one trades and one skips, the roll is consumed only by the
+trader and the pair is excluded — the paired difference series only
+contains events where **both** versions traded.
+
+The `lowFidelity`-included and -excluded rankings (D17 §"Two evaluator
+outputs" + ADR 0019 criterion 12) operate on this filtered paired sample.
+
+**Two evaluator outputs + inconclusive truth table (quant M2).**
+The soak-exit report produces two CIs on `E[v1] − E[v2]`:
+
+1. **Paired CRN CI**: same simulator rolls on the same events; variance
+   reduction is real; simulator bias cancels.
+2. **Independent-noise robustness CI**: computed from the live PAPER + live
+   shadow runs (each version's actual decisions scored under independent
+   rolls). Wider, less powerful, but checks the CRN didn't smuggle in a
+   spurious winner.
+
+Truth table for the "active version beats shadow v2/v3" criterion:
+
+| Paired CRN CI | Independent-noise CI | Result |
+|--------------|---------------------|--------|
+| Decisive, v1 wins | Decisive, v1 wins | **Pass.** Same winner; CRN result corroborated. |
+| Decisive, v1 wins | Decisive, v2 wins | **Fail.** Contradictory; not safe to promote. |
+| Decisive, v1 wins | Inconclusive (straddles zero) | **Inconclusive.** Not a pass on CRN alone — the independent-noise cross-check is the whole point of dual-CI. |
+| Inconclusive | Decisive | **Inconclusive.** Same logic mirrored. |
+| Both inconclusive | — | **Inconclusive.** Extend or accept exploratory. |
+
+**Mid-soak rotation invariance.** Because `crn_root` is keyed on
+`bootstrap_at_start` (captured at soak start), W1.8 mid-soak rotation does
+**not** invalidate the CRN tape. The bootstrap secret rotates for ongoing
+HMAC chains (boot_mode_history, paper_state_audit) but the CRN derivation
+key is frozen. R3.1 includes a test for "soak-start CRN survives mid-soak
+bootstrap-secret rotation."
 
 ## TESTNET pre-M11b drill (complementary, required)
 
@@ -820,10 +984,12 @@ the duration of M11a. This changes how ADR 0019 criterion 12 and ADR 0029
     - `ε_lower = −0.15 R` (15% of per-trade risk; **looser on pessimistic
       bias** — pessimism is safe; the MDE calculations in the
       sample-size pre-flight must account for it).
-  - Secondary cap: `|ε| ≤ 50% of v1's backtested expectancy` on the same
-    window, applied **only if** v1's backtested expectancy on the
-    calibration window is positive and above a per-trade-risk-budget
-    floor. Otherwise the secondary cap is waived.
+  - The secondary cap (`|ε| ≤ 50% of v1's backtested expectancy`) is
+    **removed entirely** in v5 (quant round-3 M4). The asymmetric primary
+    band `[-0.15R, +0.05R]` in risk units is the load-bearing test; the
+    secondary cap still leaked circularity through the back door
+    (loose when simulator was upward-biased on backtest; waived when v1
+    backtest was near zero). Risk-unit-only tolerance is cleaner.
   - **Pass criterion:** the 90% CI on `residual_R` must lie within
     `[ε_lower, ε_upper]`. The interval can extend further negative
     (pessimistic) than positive (optimistic).
@@ -892,12 +1058,25 @@ rename + parameter addition.
   `PaperFillSimulator`, `PaperAccountStateService`,
   `PaperReconciliationAdapter`, `PaperExchangeNullityProbe`,
   `PaperFundingAccrualService`.
-- D1–D13 reproduced verbatim as the architectural decisions of the ADR.
+- D1–D17 reproduced verbatim as the architectural decisions of the ADR.
 - Compile-time split (D2) called out — `PaperExecutionClient` must not
   import the rate-limit module.
-- DB schema for `paper_account_state`, `paper_account_state_meta` (boot
-  seed + RNG cursor), `paper_state_audit` (HMAC-chained mutation audit),
-  `boot_mode_history` (D6).
+- DB schema for the full paper-sibling table set (per D16 + D17):
+  - `paper_account_state` (current position state, no derived MTM column),
+  - `paper_account_state_history` (closed-trade ledger),
+  - `paper_account_state_meta` (non-secret derived metadata only — seed
+    version label, HKDF info string version, simulator config hash,
+    `soak_start_id`, `bootstrap_at_start_fingerprint`; **no secret
+    material**, per D3 + D17),
+  - `paper_account_snapshots` (audited equity snapshots feeding the
+    drawdown abort path),
+  - `paper_simulator_idempotency` (D3),
+  - `paper_state_audit` (HMAC-chained mutation audit, per-purpose
+    subkey),
+  - `paper_crn_tape` (post-soak blob, content-hash-bound by the
+    commitment row in `paper_state_audit`, per D17),
+  - `boot_mode_history` (D6),
+  - `boot_mode_chain_rotations` (D7).
 - Cites M7's seed-locking ADR for the deterministic-PRNG rationale (D3).
 - Transition matrix (D7) reproduced.
 
@@ -1115,6 +1294,43 @@ QA mini-pass between R2d and R3 (final wave).
   `(event_id, order_intent_id, version_namespace)` returns the
   previously recorded `simulated_fill` verbatim; no second roll is
   performed.
+- **CRN survives mid-soak bootstrap rotation (D17)**: bootstrap secret
+  rotates via W1.8 during the soak; the CRN tape is still derivable
+  post-soak from the captured `bootstrap_at_start` value (named in the
+  runbook); offline evaluator's recomputed `crn_root` matches the
+  commitment row.
+- **CRN re-derivation attempt detected (D17)**: an attempt to rewrite
+  the commitment row with a fresh `soak_start_ts` produces a chain HMAC
+  mismatch; the soak is invalidated.
+- **CRN skip-case pairing (D17)**: paired difference series excludes
+  events where only one version traded; both-skip events excluded;
+  both-trade events include the same simulator roll for both versions.
+- **CRN inconclusive truth table (D17)**: when paired CRN CI is
+  decisive and independent-noise CI straddles zero, the criterion is
+  marked inconclusive (not pass-by-CRN-alone).
+- **D14 runtime guard**: a synthetic service resolving `IExchangeClient`
+  via `ModuleRef.get` and calling `fetchBalance` throws
+  `UnauthorizedLiveAccountStateCallException`. CI ESLint gate fails
+  if `ModuleRef.get(IExchangeClient)` appears outside the whitelist.
+- **D16 unrealised_pnl is derived**: the `paper_account_state` row has
+  no `unrealised_pnl` column; drawdown abort reads compute it from
+  `(position, mark_price)` at evaluation time; an attempt to "tamper"
+  it has nothing to write to.
+- **D7 LIVE→PAPER predicate sees real positions**: with simulated
+  open live positions on the prior LIVE key, the transition-time
+  `ExchangeAccountStateSource(prior_env_credentials)` returns them and
+  the transition is rejected.
+- **D6 audit HMAC includes assigned seq**: CTE / RETURNING test —
+  the HMAC computed against a row's pre-allocation payload (without
+  seq) does not match the persisted HMAC; only the post-allocation
+  payload reproduces it.
+- **D5 cold start**: peak_equity at t=0 equals
+  `PAPER_STARTING_EQUITY_USDT`, not the first MTM reading.
+- **D15 SL/TP event-driven**: replaying a tick stream against a fixed
+  position fires SL on the tick boundary, not on a wall-clock delay.
+- **D4 funding force-flushes throttle**: funding event coincident
+  with adverse mark inside an MTM throttle window triggers immediate
+  `apply_funding + recompute + evaluate_abort` (no 100 ms delay).
 
 ### Wave R4 — Reviewer round + scribe
 
@@ -1124,7 +1340,7 @@ devops if compose changes).
 **R4.2 — Scribe.** Merge this addendum into `M11a-local-soak.md` (replace
 W1.1 wording with the PAPER design; integrate D10 / lowFidelity / pre-soak
 sanity into §"Reduced evaluation gate" + §"Minimum trade count" + §W4.4).
-Delete this addendum file. **Preserve anchor IDs D1–D13** (logic round 2 L3)
+Delete this addendum file. **Preserve anchor IDs D1–D17** (logic round 2 L3)
 in the merged content so existing cross-references survive. Update
 `CLAUDE.md` status. Append a single work-log line referencing the merged
 commit.
@@ -1157,8 +1373,10 @@ commit.
 
 - **Scope creep.** R0–R3 add ~8 new engine modules + 1 ADR + 4 new tables
   + 1 ADR amendment + contract changes. Realistic effort: comparable to
-  or slightly larger than the original W1. R2 may need an R2a / R2b
-  split to honour the ≤5-file soft cap.
+  or slightly larger than the original W1. R2 is **mandatorily** split
+  four-way (R2a/R2b/R2c/R2d) per the QA cadence section above; ADR 0032
+  covers D1–D17; 7 new tables; FillSimulatorCore extraction (D15)
+  touches the M7 backtest path.
 - **PaperFillSimulator inherits M7's `lowFidelity` flag.** Mitigated by
   the lowFidelity-empty-subset downgrade + pre-soak sanity step + joint-
   test acknowledgement.
@@ -1177,7 +1395,7 @@ The PAPER mode is complete when:
 
 - `ExchangeEnvironmentEnum` is `{TESTNET, PAPER, LIVE}`.
 - ADR 0028 reflects the corrected understanding + PAPER allowlist (D8).
-- ADR 0032 locks PAPER mode architecture with D1–D13 inline.
+- ADR 0032 locks PAPER mode architecture with D1–D17 inline.
 - ADR 0014 phase-1 amended for `IBootStateSource` dispatch.
 - A PAPER boot:
   - rejects any key with capability flags beyond `enableReading` (CRITICAL
@@ -1188,11 +1406,14 @@ The PAPER mode is complete when:
     methods (sentinel test enforces);
   - simulates fills deterministically via `PaperFillSimulator` (HMAC seed
     schema, M7 config-hash-pinned);
-  - reconciles `PaperAccountStateService` against `IPositionRepository`
-    (drift = CRITICAL halt) + `PaperExchangeNullityProbe` asserts
-    `fetchOpenOrders` empty;
-  - applies live funding rates with correct side-sign + mark-to-market
-    notional + magnitude bound;
+  - reconciles **in-memory `PaperAccountStateService` against persisted
+    `paper_account_state` rows** (drift = CRITICAL halt — D12 + D16); 
+    `PaperExchangeNullityProbe` asserts **both** `fetchOpenOrders` AND
+    `fetchPositions` empty (engine-attributed, with capability preflight
+    + failure-class taxonomy per D13);
+  - applies live funding rates with correct side-sign convention +
+    mark-to-market notional; **magnitude bound is audited + alerted,
+    not enforced** (raw rate still applied — D4);
   - mark-to-markets unrealised PnL on every WS tick; drawdown abort fires
     intra-bar;
   - recovers from a SIGKILL mid-trade with byte-identical replay of the
