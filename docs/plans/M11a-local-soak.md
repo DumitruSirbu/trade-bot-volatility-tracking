@@ -244,8 +244,10 @@ postgres on `0.0.0.0`, contradicting the bind policy. W3 lands all of:
 - **W3.3 — Postgres bind.** `docker-compose.yml:15-16` — prefix with
   `127.0.0.1:` (or drop the host mapping entirely; engine reaches DB on the
   compose network).
-- **W3.4 — Adminer bind.** `docker-compose.yml:128-129` — same prefix; the
-  service is already behind a dev profile, this is defence in depth.
+- **W3.4 — Adminer bind (superseded).** Originally a loopback-bind hardening
+  task. Superseded by **W3.16 (adminer removal)** — binding a service we are
+  about to delete is dead work. Kept in the list as a numbered placeholder so
+  prior commits / cross-references do not shift.
 - **W3.5 — Engine network topology.** Two-network shape — flagged independently
   by architect + devops + security as a "soak won't boot" bug if implemented
   as a single `internal: true` network:
@@ -280,6 +282,27 @@ postgres on `0.0.0.0`, contradicting the bind policy. W3 lands all of:
   `environment:` block inlining a secret; convert all secret-bearing values to
   `env_file: [.env]` so `docker inspect` / `docker compose config` cannot
   print them.
+- **W3.16 — Remove adminer service entirely.** Delete the `adminer` service
+  from `docker-compose.yml:124-130` (currently behind `profile: dev`). Even
+  profile-gated, adminer is a real attack-surface item under a multi-week
+  soak:
+  - it holds full Postgres super-credentials in its env, so anyone reaching
+    its bind (`docker` group, root, tailnet ACL slip, accidental `0.0.0.0`)
+    has unaudited read/write to `decisions`, `positions`, `audit_events`,
+    `revoked_jti` — bypassing every M9 audit guard;
+  - it is a single-file PHP login form with file uploads and a non-trivial
+    CVE history; a stale image during the soak is exposure;
+  - profile gating is honour-system — one accidental
+    `docker compose --profile dev up` and it stays running until manually
+    torn down.
+
+  Operator DB access is unaffected: connect any local tool (`psql`, DBeaver,
+  TablePlus, DataGrip) to `127.0.0.1:5432` after the W3.3 loopback bind, or
+  `docker compose exec postgres psql -U …`. Add this line to W3.15
+  `RUNBOOK.md` as the documented inspection procedure.
+  - *Output:* `adminer` service removed from compose; no `dev` profile left
+    referring to it; runbook updated; smoke-test confirms `docker compose ps`
+    shows no `adminer` container under any profile.
 
 ### Backups
 
