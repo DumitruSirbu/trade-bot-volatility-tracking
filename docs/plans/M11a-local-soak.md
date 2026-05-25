@@ -78,6 +78,49 @@ shape cannot express demo trading and cannot enforce the demo→live invariant.
   but never elevated to shared package; needed for the abort-threshold logic in
   W4. Add the event to shared.
   - *Output:* the soak runbook can listen for this event by typed name.
+- **W0.5 — Shadow-decisions contract.** W4.2 routes v0/v2/v3 over the same
+  `event_id` tape that v1 sees but never executes them. The recording shape
+  must land in W0 so W4 has nothing left to design. Pick **one** in the plan
+  now (rejecting the other two with one line of rationale):
+  1. **New `shadow_decisions` table.** Owned by the decisions module, columns
+     mirror `decisions` plus `shadow_version`, `virtual_slot_state_snapshot`,
+     `simulated_fill` (jsonb, see W0.6). **Recommended** — keeps the
+     high-volume `decisions` table free of nullable shadow-only columns and
+     avoids retention-policy collisions with real decisions.
+  2. Add `shadow_version` + `executed` to `decisions`. Rejected: pollutes the
+     hot table and forces every existing query to filter on `executed=true`.
+  3. Sidecar JSONL log file. Rejected: untyped, not queryable from the read
+     API, fails the "criteria must be measurable from recorded data" rule.
+  - *Output:* migration + repository + entity for `shadow_decisions` landed in
+    W0; downstream waves consume the typed contract.
+- **W0.6 — Shadow counterfactual + fill-simulator contract.** Two independent
+  reviewers flagged that shadow comparison is statistically unsound without
+  these two pieces. Define both in W0 so W4.2 is fully specified:
+  1. **Independent virtual slot ledgers per shadow version.** Each shadow
+     version maintains its own `IVirtualPositionLedger` honouring the same
+     restricted-profile gates (`max_open_positions: 1`, `halt_after_consecutive_losses: 2`,
+     `max_trades_per_day: 3`, exhaustion-confirmation, market-stress skip).
+     A shadow version is **not** filtered by v1's slot state — it is filtered
+     by its **own** ledger evaluated against the same event tape. This is the
+     counterfactual: "what would version X have decided with its own state at
+     this event."
+  2. **Shadow decisions are scored by replaying through the M7
+     `BacktestRunnerService` fill simulator** (tier slippage + latency +
+     missed-fill + intra-bar stops) before any comparison metric is computed.
+     Raw "if it had filled at decision price" PnL is **forbidden** as a
+     comparison input — it ignores adverse selection, partial fills, and
+     spread, and would trivially beat v1's realised PnL by construction. An
+     ADR captures the rule.
+  - *Output:* `IVirtualPositionLedger` interface in shared, ADR locking the
+    counterfactual + fill-simulator pipeline; W4.2 references both by name.
+- **W0.7 — `risk_state.updated_at` server-side timestamp migration.** W2.4
+  consumes a true server-side `updated_at` (`DEFAULT now() ON UPDATE`); verify
+  the column shape today, and if it is derived (TypeORM `@UpdateDateColumn`
+  client-side) rather than server-set, the migration belongs here in W0, not
+  in the W2 consumer wave. Skip this task entirely if the column is already
+  server-side; document the verification either way.
+  - *Output:* the W2 consumer fix lands against a contract that already
+    enforces newer-wins at the database, not at the application layer.
 
 ## W1 — Exchange & key safety + auth rotation
 
@@ -203,15 +246,34 @@ postgres on `0.0.0.0`, contradicting the bind policy. W3 lands all of:
   compose network).
 - **W3.4 — Adminer bind.** `docker-compose.yml:128-129` — same prefix; the
   service is already behind a dev profile, this is defence in depth.
-- **W3.5 — Engine network isolation.** Move the engine + postgres + redis onto
-  a dedicated user-defined docker network with `internal: true`; expose only
-  the dashboard's nginx on the host loopback. Daemon-level `icc=false` is a
-  host-hardening item (W3.10), not a compose change.
-- **W3.6 — `stop_grace_period: 30s`** on the engine service so SIGTERM has time
-  to close WS, cancel in-flight orders, and flush `FillAccumulator`. Verify
-  NestJS `enableShutdownHooks` is on; install a SIGTERM handler that zeroes
-  the API-secret buffer and disables core dumps (`ulimit -c 0` in the
-  entrypoint script).
+- **W3.5 — Engine network topology.** Two-network shape — flagged independently
+  by architect + devops + security as a "soak won't boot" bug if implemented
+  as a single `internal: true` network:
+  - `backend` network with `internal: true` — postgres + redis only. No
+    external egress; no other container can reach them.
+  - default bridge network (`internal: false`) — engine + dashboard. Engine
+    needs outbound TLS to `fapi.binance.com` and `api.telegram.org` plus
+    external DNS; `internal: true` would break trading.
+  - **Engine attaches to both networks**, postgres + redis attach only to
+    `backend`, dashboard attaches only to the bridge.
+  - Host loopback exposes only the dashboard's nginx (W3.2).
+  - Daemon-level `icc=false` is a host-hardening item (W3.12), not a compose
+    change.
+- **W3.6 — Graceful shutdown + core-dump suppression.** `stop_grace_period: 30s`
+  on the engine so SIGTERM has time to close WS, cancel in-flight orders, and
+  flush `FillAccumulator`. Verify NestJS `enableShutdownHooks` is on. Add a
+  small `docker-entrypoint.sh` that runs `ulimit -c 0` then `exec node
+  dist/main.js`; update the Dockerfile to use it as `ENTRYPOINT`. Optionally
+  call `prctl(PR_SET_DUMPABLE, 0)` via a tiny native shim or process-level
+  setting for defence in depth.
+
+  **Not in scope:** in-process API-secret zeroing. JavaScript strings are
+  immutable and V8 retains copies in interning + the compiled-code cache; a
+  `Buffer.fill(0)` on a value derived from a string only wipes a downstream
+  copy, not the originals. The combination of `ulimit -c 0`, encrypted swap
+  (W3.12), and `PR_SET_DUMPABLE=0` is the real protection. Document
+  explicitly that in-process secret scrubbing is **not** a goal so the
+  implementer does not ship security theatre.
 - **W3.7 — `start_period: 60s`** on the engine healthcheck so the M6 10-phase
   crash-recovery cold start does not flap.
 - **W3.8 — `env_file:` only.** Audit `docker-compose.yml` for any
@@ -221,17 +283,34 @@ postgres on `0.0.0.0`, contradicting the bind policy. W3 lands all of:
 
 ### Backups
 
-- **W3.9 — Backup + restore sidecars.** Add two compose profiles:
-  - `profiles: [backup]` — `postgres:18.4-alpine` running
+- **W3.9 — Backup + restore sidecars.** Add two compose profiles. Note that
+  `postgres:18.4-alpine` has neither `age` nor `rclone` — bake a small custom
+  image (`FROM postgres:18.4-alpine; RUN apk add --no-cache age rclone`) and
+  pin it in the compose file.
+  - `profiles: [backup]` — runs
     `pg_dump -h postgres … | gzip | age -r <pubkey> | rclone rcat b2:bucket/path`.
-    Client-side encrypted with `age`; **age private key lives on a separate
-    device**, never the soak host. Driven by host-cron
-    `0 3 * * * docker compose --profile backup run --rm pgbackup`.
-  - `profiles: [restore-test]` — spins a throwaway postgres + pg_restore from
-    the latest dump and asserts row counts on `decisions`, `positions`,
+    Driven by host-cron `0 3 * * * docker compose --profile backup run --rm pgbackup`.
+  - `profiles: [restore-test]` — spins a throwaway postgres + `pg_restore`
+    from the latest dump and asserts row counts on `decisions`, `positions`,
     `audit_events`. Host-cron weekly.
-  - *Output:* documented backup + restore procedure; last successful restore
-    timestamp recorded in `RUNBOOK.md`.
+
+  **`age` key custody (mandatory):**
+  - **Public key committed in-tree** at `infra/backup/age-recipient.pub` so
+    the recipient baked into the compose profile is tamper-evident under
+    `git log` rather than hidden inside a gitignored file an attacker with
+    `.env` write access could silently rotate.
+  - **Private key on two independent hardware devices**, one offsite. A
+    YubiKey + an offline encrypted USB on a separate physical site is the
+    documented baseline. Loss of both is loss of the backups; document the
+    recovery procedure (rotate to a new pubkey + re-encrypt the most recent
+    on-host dump before the old pubkey is forgotten).
+  - **Quarterly decrypt-drill** added to W4.3: pull the latest off-host
+    dump, decrypt with the primary private key, restore into a throwaway
+    container, assert row counts. A drill that has never restored from the
+    *offsite* copy is not a tested backup.
+  - *Output:* documented backup + restore procedure; key-custody section in
+    `RUNBOOK.md`; last successful on-host + offsite restore timestamps
+    recorded.
 
 ### Disk + retention
 
@@ -324,11 +403,33 @@ a code gap.
   no-trade by definition, so the M8 paired-bootstrap CI has no v0 outcome
   series to resample against v1. To produce a meaningful comparison without
   routing v2/v3 to the exchange, run them in **shadow mode** over the same
-  `event_id` tape that v1 sees — strategies emit decisions, the orchestrator
-  records them with `executed: false`, and the soak-evaluation tool below
-  reads them like a backtest.
-  - *Output:* a shared `decisions.shadow_version` column or analogous
-    mechanism; W0.3 / W0.4 may absorb the contract change.
+  `event_id` tape v1 sees — strategies emit decisions, the orchestrator
+  records them into the `shadow_decisions` table from **W0.5**, and the
+  soak-evaluation tool reads them like a backtest.
+
+  Two contracts from W0 are load-bearing here; the comparison metric is
+  invalid without both:
+  1. **Independent virtual slot ledgers per shadow version** (W0.6.1). Each
+     shadow version is gated by its **own** `IVirtualPositionLedger`, not by
+     v1's slot state. A shadow version decides on every event using its own
+     restricted-profile gates; this is the only counterfactual that produces
+     a fair comparison.
+  2. **Shadow decisions are scored by replaying through the M7
+     `BacktestRunnerService` fill simulator** (W0.6.2). Raw "filled at
+     decision price" PnL is forbidden — it ignores adverse selection,
+     partial fills, latency, and spread that v1 actually pays, and would
+     trivially beat v1 by construction.
+
+  The "active version beats shadow v2/v3" soak exit criterion (below) is
+  **suspended** if either W0.6 contract is missing at soak-start; the soak
+  still runs but the comparison is downgraded to "expectancy CI excludes
+  zero on v1 alone" until both ledgers + fill-simulator pipeline are in
+  place.
+  - *Output:* `shadow_decisions` rows for each non-executed version over
+    the soak window, each carrying a simulated-fill record from the M7
+    fill simulator; the soak-evaluation tool produces per-version
+    expectancy + per-regime metrics + paired-bootstrap CIs on the
+    differences.
 
 - **W4.3 — Crash-recovery drill — recurring.** Three scenarios, executed once
   before soak start **and** monthly during the soak, **and** after any auth
