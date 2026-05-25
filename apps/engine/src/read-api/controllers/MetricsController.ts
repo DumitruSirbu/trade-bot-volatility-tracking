@@ -1,11 +1,4 @@
-import {
-    AuthScopeEnum,
-    IAccountEquityView,
-    IDecisionView,
-    IPaginated,
-    IPerformanceByVersionView,
-    IRiskStateView,
-} from '@bot/shared';
+import { AuthScopeEnum, IAccountEquityView, IDecisionView, IPaginated, IPerformanceByVersionView, IRiskStateView } from '@bot/shared';
 import { Controller, Get, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 
 import { AuthGuard, RequiredScopes } from '../../auth/AuthGuard';
@@ -16,12 +9,7 @@ import { RiskStateRepository } from '../../risk/repository/RiskStateRepository';
 import { DecisionRepository } from '../../strategy/repository/DecisionRepository';
 import { StrategyVersionRepository } from '../../strategy/repository/StrategyVersionRepository';
 import { NoStoreCacheInterceptor } from '../interceptor/NoStoreCacheInterceptor';
-import {
-    mapAccountEquity,
-    mapDecision,
-    mapPerformanceByVersion,
-    mapRiskState,
-} from '../mappers/readApiMappers';
+import { mapAccountEquity, mapDecision, mapPerformanceByVersion, mapRiskState } from '../mappers/readApiMappers';
 import { CursorCodec } from '../pagination/CursorCodec';
 
 // M9 W4 (ADR 0022 §2.2). Aggregated read API endpoints — decisions, account
@@ -68,9 +56,7 @@ export class MetricsController {
 
         const items = rows.map(mapDecision);
         const last = rows.length === 0 ? null : rows[rows.length - 1];
-        const nextCursor = last === null || rows.length < pageSize
-            ? null
-            : this.cursors.encode({ id: last.id, ts: last.ts });
+        const nextCursor = last === null || rows.length < pageSize ? null : this.cursors.encode({ id: last.id, ts: last.ts });
 
         return { items, nextCursor, pageSize };
     }

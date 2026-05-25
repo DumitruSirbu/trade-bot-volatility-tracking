@@ -1,5 +1,20 @@
 import { AuthScopeEnum, HaltSourceEnum, IHaltAuditEntry, IKillSwitchState, IPaginated } from '@bot/shared';
-import { BadRequestException, Body, Controller, Get, HttpCode, HttpException, Inject, Logger, Optional, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import {
+    BadRequestException,
+    Body,
+    Controller,
+    Get,
+    HttpCode,
+    HttpException,
+    Inject,
+    Logger,
+    Optional,
+    Post,
+    Query,
+    Req,
+    Res,
+    UseGuards,
+} from '@nestjs/common';
 import { Request, Response } from 'express';
 
 import { AuthGuard, RequiredScopes } from '../auth/AuthGuard';
@@ -70,8 +85,8 @@ export class HaltController {
     ) {
         if (this.appConfig === undefined) {
             this.logger.warn(
-                'AppConfigService not resolved; `flatten` operator default collapses to false. '
-                + 'Acceptable in test harnesses — must NOT occur in production wiring.',
+                'AppConfigService not resolved; `flatten` operator default collapses to false. ' +
+                    'Acceptable in test harnesses — must NOT occur in production wiring.',
             );
         }
     }
@@ -298,4 +313,3 @@ function parsePageSize(raw: string | undefined): number | null {
 
     return parsed;
 }
-

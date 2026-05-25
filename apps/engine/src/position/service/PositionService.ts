@@ -374,5 +374,4 @@ export class PositionService {
 
         return { fillPnl, feesPaid, fundingPaid, realizedPnl, closingFills, hasClosingFills: closingFills.length > 0 };
     }
-
 }

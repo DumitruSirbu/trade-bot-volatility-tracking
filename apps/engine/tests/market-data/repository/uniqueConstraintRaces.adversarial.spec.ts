@@ -84,10 +84,7 @@ describe('Unique-constraint race adversarial (requires Postgres)', () => {
 
             // At most one may reject — and only due to a transient DB error, not a
             // constraint violation that leaks through as an unhandled exception.
-            const openRows = await dataSource.query(
-                `SELECT * FROM universe_membership WHERE symbol = $1 AND left_at IS NULL`,
-                [SYM_UNIVERSE],
-            );
+            const openRows = await dataSource.query(`SELECT * FROM universe_membership WHERE symbol = $1 AND left_at IS NULL`, [SYM_UNIVERSE]);
 
             // ADR 0002 §point-in-time universe: exactly one open row must exist.
             expect(openRows).toHaveLength(1);
@@ -109,10 +106,7 @@ describe('Unique-constraint race adversarial (requires Postgres)', () => {
                 universeMembershipRepo.openMembership(SYM_UNIVERSE, CoinTierEnum.TIER_1, ENTERED_AT),
             ]);
 
-            const openRows = await dataSource.query(
-                `SELECT * FROM universe_membership WHERE symbol = $1 AND left_at IS NULL`,
-                [SYM_UNIVERSE],
-            );
+            const openRows = await dataSource.query(`SELECT * FROM universe_membership WHERE symbol = $1 AND left_at IS NULL`, [SYM_UNIVERSE]);
 
             expect(openRows).toHaveLength(1);
         });
@@ -124,10 +118,7 @@ describe('Unique-constraint race adversarial (requires Postgres)', () => {
                 universeMembershipRepo.openMembership(SYM_UNIVERSE, CoinTierEnum.TIER_2, ENTERED_AT),
             ]);
 
-            const openRows = await dataSource.query(
-                `SELECT * FROM universe_membership WHERE symbol = $1 AND left_at IS NULL`,
-                [SYM_UNIVERSE],
-            );
+            const openRows = await dataSource.query(`SELECT * FROM universe_membership WHERE symbol = $1 AND left_at IS NULL`, [SYM_UNIVERSE]);
 
             // ADR 0002 §point-in-time universe: regardless of which tier wins, only
             // one open row must exist.
@@ -157,29 +148,23 @@ describe('Unique-constraint race adversarial (requires Postgres)', () => {
         });
 
         it('two simultaneous upserts for the same key resolve to exactly ONE row (no duplicate)', async () => {
-            await Promise.all([
-                candleRepo.upsertClosed(buildCandle('100.50')),
-                candleRepo.upsertClosed(buildCandle('100.50')),
-            ]);
+            await Promise.all([candleRepo.upsertClosed(buildCandle('100.50')), candleRepo.upsertClosed(buildCandle('100.50'))]);
 
-            const rows = await dataSource.query(
-                `SELECT * FROM candles WHERE symbol = $1 AND interval = '5m' AND open_time = $2`,
-                [SYM_CANDLE, CANDLE_OPEN_TIME],
-            );
+            const rows = await dataSource.query(`SELECT * FROM candles WHERE symbol = $1 AND interval = '5m' AND open_time = $2`, [
+                SYM_CANDLE,
+                CANDLE_OPEN_TIME,
+            ]);
 
             expect(rows).toHaveLength(1);
         });
 
         it('concurrent upserts with different close prices resolve to exactly ONE row (last writer wins, no split-brain)', async () => {
-            await Promise.allSettled([
-                candleRepo.upsertClosed(buildCandle('100.50')),
-                candleRepo.upsertClosed(buildCandle('101.75')),
-            ]);
+            await Promise.allSettled([candleRepo.upsertClosed(buildCandle('100.50')), candleRepo.upsertClosed(buildCandle('101.75'))]);
 
-            const rows = await dataSource.query(
-                `SELECT * FROM candles WHERE symbol = $1 AND interval = '5m' AND open_time = $2`,
-                [SYM_CANDLE, CANDLE_OPEN_TIME],
-            );
+            const rows = await dataSource.query(`SELECT * FROM candles WHERE symbol = $1 AND interval = '5m' AND open_time = $2`, [
+                SYM_CANDLE,
+                CANDLE_OPEN_TIME,
+            ]);
 
             // ADR 0002 §candles: a re-emitted closed bar updates in place — one row only.
             expect(rows).toHaveLength(1);
@@ -210,10 +195,7 @@ describe('Unique-constraint race adversarial (requires Postgres)', () => {
                 }),
             ]);
 
-            const rows = await dataSource.query(
-                `SELECT * FROM funding_rates WHERE symbol = $1 AND funding_time = $2`,
-                [SYM_FUNDING, SETTLEMENT_TIME],
-            );
+            const rows = await dataSource.query(`SELECT * FROM funding_rates WHERE symbol = $1 AND funding_time = $2`, [SYM_FUNDING, SETTLEMENT_TIME]);
 
             expect(rows).toHaveLength(1);
         });
@@ -225,10 +207,7 @@ describe('Unique-constraint race adversarial (requires Postgres)', () => {
                 fundingRateRepo.recordObservation({ symbol: SYM_FUNDING, fundingTime: SETTLEMENT_TIME, rate: parseMoney('0.00012') }),
             ]);
 
-            const rows = await dataSource.query(
-                `SELECT * FROM funding_rates WHERE symbol = $1 AND funding_time = $2`,
-                [SYM_FUNDING, SETTLEMENT_TIME],
-            );
+            const rows = await dataSource.query(`SELECT * FROM funding_rates WHERE symbol = $1 AND funding_time = $2`, [SYM_FUNDING, SETTLEMENT_TIME]);
 
             // ADR 0002 §funding rates: same 8-hour event is never double-recorded.
             expect(rows).toHaveLength(1);

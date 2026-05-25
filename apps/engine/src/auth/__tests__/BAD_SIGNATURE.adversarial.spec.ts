@@ -1,21 +1,14 @@
 /**
  * Adversarial tests for BAD_SIGNATURE split (M11a W1.5).
  *
- * The shared enum BAD_SIGNATURE has landed. The engine surfaces the engine-side
- * discriminator 'BAD_SIGNATURE' via a non-enumerable property on the failure
- * object (getEngineReason). Tests verify: signature failure tags BAD_SIGNATURE,
- * expired token does NOT tag BAD_SIGNATURE, missing token does NOT tag
- * BAD_SIGNATURE.
- *
- * NOTE: AuthFailureReasonEnum.BAD_SIGNATURE exists in the shared package
- * (M11a W1.5, commit e14b098) and the engine now promotes it onto the wire.
- * Tampered signatures surface as BAD_SIGNATURE on the wire; EXPIRED / MALFORMED
- * (missing, two-segment, wrong-alg) reasons keep their previous wire values.
+ * `AuthFailureReasonEnum.BAD_SIGNATURE` rides on the wire enum directly. Tests
+ * verify: signature failure surfaces as BAD_SIGNATURE on the wire; EXPIRED /
+ * MALFORMED (missing, two-segment, wrong-alg) keep their previous wire values.
  */
 
 import { AuthFailureReasonEnum } from '@bot/shared';
 
-import { AuthTokenService, getEngineReason } from '../AuthModule';
+import { AuthTokenService } from '../AuthModule';
 import { DerivedKeyService } from '../DerivedKeyService';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -59,12 +52,10 @@ describe('BAD_SIGNATURE split — adversarial (M11a W1.5)', () => {
 
             // CHECK — wire reason is BAD_SIGNATURE now that the shared enum member exists
             expect((result as { error: string; reason: string }).error).toBe('AUTH_FAILED');
-            expect((result as { reason: AuthFailureReasonEnum }).reason).toBe(
-                AuthFailureReasonEnum.BAD_SIGNATURE,
-            );
+            expect((result as { reason: AuthFailureReasonEnum }).reason).toBe(AuthFailureReasonEnum.BAD_SIGNATURE);
         });
 
-        it('getEngineReason returns BAD_SIGNATURE for a tampered token', () => {
+        it('verify returns AUTH_FAILED error tag for a tampered token', () => {
             // BUILD
             const service = buildTokenService();
             const token = issueToken(service);
@@ -74,13 +65,13 @@ describe('BAD_SIGNATURE split — adversarial (M11a W1.5)', () => {
             const result = service.verify(tampered, new Date());
 
             // CHECK
-            const engineReason = getEngineReason(result as Parameters<typeof getEngineReason>[0]);
-            expect(engineReason).toBe('BAD_SIGNATURE');
+            expect((result as { error: string }).error).toBe('AUTH_FAILED');
+            expect((result as { reason: AuthFailureReasonEnum }).reason).toBe(AuthFailureReasonEnum.BAD_SIGNATURE);
         });
     });
 
-    describe('expired token — does NOT tag BAD_SIGNATURE', () => {
-        it('returns EXPIRED reason and no BAD_SIGNATURE engine discriminator', () => {
+    describe('expired token — wire reason is EXPIRED, not BAD_SIGNATURE', () => {
+        it('returns EXPIRED reason', () => {
             // BUILD
             const service = buildTokenService();
             const pastNow = new Date();
@@ -92,15 +83,13 @@ describe('BAD_SIGNATURE split — adversarial (M11a W1.5)', () => {
             const result = service.verify(token, futureDate);
 
             // CHECK
-            expect((result as { reason: AuthFailureReasonEnum }).reason).toBe(
-                AuthFailureReasonEnum.EXPIRED,
-            );
-            expect(getEngineReason(result as Parameters<typeof getEngineReason>[0])).toBeNull();
+            expect((result as { reason: AuthFailureReasonEnum }).reason).toBe(AuthFailureReasonEnum.EXPIRED);
+            expect((result as { reason: AuthFailureReasonEnum }).reason).not.toBe(AuthFailureReasonEnum.BAD_SIGNATURE);
         });
     });
 
     describe('missing / malformed token', () => {
-        it('empty string returns MALFORMED without BAD_SIGNATURE tag', () => {
+        it('empty string returns MALFORMED (not BAD_SIGNATURE)', () => {
             // BUILD
             const service = buildTokenService();
 
@@ -108,13 +97,10 @@ describe('BAD_SIGNATURE split — adversarial (M11a W1.5)', () => {
             const result = service.verify('', new Date());
 
             // CHECK
-            expect((result as { reason: AuthFailureReasonEnum }).reason).toBe(
-                AuthFailureReasonEnum.MALFORMED,
-            );
-            expect(getEngineReason(result as Parameters<typeof getEngineReason>[0])).toBeNull();
+            expect((result as { reason: AuthFailureReasonEnum }).reason).toBe(AuthFailureReasonEnum.MALFORMED);
         });
 
-        it('token missing signature segment returns MALFORMED without BAD_SIGNATURE tag', () => {
+        it('token missing signature segment returns MALFORMED (not BAD_SIGNATURE)', () => {
             // BUILD
             const service = buildTokenService();
 
@@ -122,13 +108,10 @@ describe('BAD_SIGNATURE split — adversarial (M11a W1.5)', () => {
             const result = service.verify('header.payload', new Date());
 
             // CHECK
-            expect((result as { reason: AuthFailureReasonEnum }).reason).toBe(
-                AuthFailureReasonEnum.MALFORMED,
-            );
-            expect(getEngineReason(result as Parameters<typeof getEngineReason>[0])).toBeNull();
+            expect((result as { reason: AuthFailureReasonEnum }).reason).toBe(AuthFailureReasonEnum.MALFORMED);
         });
 
-        it('token with wrong alg header returns MALFORMED without BAD_SIGNATURE tag', () => {
+        it('token with wrong alg header returns MALFORMED (not BAD_SIGNATURE)', () => {
             // BUILD
             const service = buildTokenService();
             // RS256 header instead of HS256
@@ -138,10 +121,7 @@ describe('BAD_SIGNATURE split — adversarial (M11a W1.5)', () => {
             const result = service.verify(fakeToken, new Date());
 
             // CHECK
-            expect((result as { reason: AuthFailureReasonEnum }).reason).toBe(
-                AuthFailureReasonEnum.MALFORMED,
-            );
-            expect(getEngineReason(result as Parameters<typeof getEngineReason>[0])).toBeNull();
+            expect((result as { reason: AuthFailureReasonEnum }).reason).toBe(AuthFailureReasonEnum.MALFORMED);
         });
     });
 

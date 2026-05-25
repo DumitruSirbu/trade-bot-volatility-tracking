@@ -19,7 +19,13 @@ import { createHash } from 'node:crypto';
 import { IAlertSink } from '../../src/alert/sink/AlertSinkModule';
 import { AuthController, LoginValidationFilter } from '../../src/auth/AuthController';
 import { AuthTokenService, IAuthSecretProvider } from '../../src/auth/AuthModule';
-import { AUTH_LOGIN_SUBJECT, LOGIN_GLOBAL_MAX_ATTEMPTS, LOGIN_PER_IP_BURST_MAX, LOGIN_PER_IP_SUSTAINED_MAX, LOGIN_SECRET_MAX_LEN } from '../../src/auth/const/authConsts';
+import {
+    AUTH_LOGIN_SUBJECT,
+    LOGIN_GLOBAL_MAX_ATTEMPTS,
+    LOGIN_PER_IP_BURST_MAX,
+    LOGIN_PER_IP_SUSTAINED_MAX,
+    LOGIN_SECRET_MAX_LEN,
+} from '../../src/auth/const/authConsts';
 import { LoginRequestDto } from '../../src/auth/dto/LoginRequestDto';
 import { LoginRateLimiter } from '../../src/auth/LoginRateLimiter';
 import { IClock } from '../../src/common/clock/Clock';
@@ -181,11 +187,7 @@ function buildController(opts?: { loginScopes?: AuthScopeEnum[] }): IBuiltContro
 // + body if the pipe rejected (filter wrote audit + returned canonical 401);
 // returns null if the pipe admitted, in which case the caller is expected
 // to invoke controller.login(...) directly.
-async function runValidationPipeline(
-    rawBody: unknown,
-    ctx: IBuiltController,
-    req: Request,
-): Promise<{ status: number; body: IAuthFailure } | null> {
+async function runValidationPipeline(rawBody: unknown, ctx: IBuiltController, req: Request): Promise<{ status: number; body: IAuthFailure } | null> {
     const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
 
     try {
@@ -193,7 +195,6 @@ async function runValidationPipeline(
 
         return null;
     } catch (cause) {
-
         if (!(cause instanceof BadRequestException)) {
             throw cause;
         }
@@ -622,9 +623,7 @@ describe('AuthController.login (M10 W0.5 / ADR 0027)', () => {
             const warnSpy = jest.spyOn((ctx.controller as unknown as { logger: { warn: (msg: string) => void } }).logger, 'warn');
 
             const { res } = buildRes();
-            await ctx.controller
-                .login({ secret: 'wrong-secret-value-x' }, buildReq({ trustProxyIp: '203.0.113.42' }), res)
-                .catch(() => undefined);
+            await ctx.controller.login({ secret: 'wrong-secret-value-x' }, buildReq({ trustProxyIp: '203.0.113.42' }), res).catch(() => undefined);
 
             const denied = warnSpy.mock.calls.find(([msg]: [string]) => msg.startsWith('auth.login.denied'));
             expect(denied).toBeDefined();

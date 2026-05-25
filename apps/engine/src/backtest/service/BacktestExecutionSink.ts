@@ -40,11 +40,7 @@ export class BacktestExecutionSink {
     // and moves the position from openPositions to completedTrades. Idempotent if called
     // for an unknown positionId (the accumulator is already gone) — a duplicate close
     // should be a no-op rather than a crash.
-    applyCloseFill(
-        fill: IBacktestFill,
-        grossPnlUsdt: MoneyValue,
-        exitReason: IBacktestTradeResult['exitReason'],
-    ): void {
+    applyCloseFill(fill: IBacktestFill, grossPnlUsdt: MoneyValue, exitReason: IBacktestTradeResult['exitReason']): void {
         const position = this.findPositionForFill(fill);
         if (position === null) {
             return;
@@ -85,10 +81,7 @@ export class BacktestExecutionSink {
     // `fundingUsdt` is signed: positive = received (adds to PnL), negative = paid
     // (subtracts). FundingReplayLoader.computeCashflow already returns correctly signed
     // values per ADR 0012.
-    private computeNetPnl(
-        grossPnlUsdt: MoneyValue,
-        snapshot: { feesUsdt: MoneyValue; fundingUsdt: MoneyValue },
-    ): MoneyValue {
+    private computeNetPnl(grossPnlUsdt: MoneyValue, snapshot: { feesUsdt: MoneyValue; fundingUsdt: MoneyValue }): MoneyValue {
         return grossPnlUsdt.minus(snapshot.feesUsdt).plus(snapshot.fundingUsdt);
     }
 
@@ -101,9 +94,7 @@ export class BacktestExecutionSink {
         exitReason: IBacktestTradeResult['exitReason'],
     ): IBacktestTradeResult {
         const entryNotional = new Money(position.entryNotionalUsdt);
-        const returnPct = entryNotional.isZero()
-            ? '0.00'
-            : netPnlUsdt.dividedBy(entryNotional).times(100).toFixed(2);
+        const returnPct = entryNotional.isZero() ? '0.00' : netPnlUsdt.dividedBy(entryNotional).times(100).toFixed(2);
 
         // M8 W5b (ADR 0018 §2.1): the post-clamp risk budget the position carried —
         // |entryPrice - stopLossPrice| × qty, read off the position at close. This is

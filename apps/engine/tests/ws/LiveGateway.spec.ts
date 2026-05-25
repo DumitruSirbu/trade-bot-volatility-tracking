@@ -1,12 +1,4 @@
-import {
-    AuthFailureReasonEnum,
-    AuthScopeEnum,
-    IAuthSubject,
-    PositionSideEnum,
-    PositionStateEnum,
-    ProtectiveOrderTypeEnum,
-    WsRoomEnum,
-} from '@bot/shared';
+import { AuthFailureReasonEnum, AuthScopeEnum, IAuthSubject, PositionSideEnum, PositionStateEnum, ProtectiveOrderTypeEnum, WsRoomEnum } from '@bot/shared';
 
 import { Money } from '../../src/common/utils/money';
 import { LiveGateway } from '../../src/ws/LiveGateway';
@@ -152,11 +144,12 @@ function fakePosition(id: number, overrides: Partial<PositionEntity> = {}): Posi
     return base as PositionEntity;
 }
 
-function buildGateway(opts: {
-    revoked?: StubRevokedRepo;
-    positions?: StubPositionRepository;
-    clock?: () => number;
-}): { gateway: LiveGateway; server: FakeServer; namespace: FakeNamespace; adapter: WsAuthAdapter } {
+function buildGateway(opts: { revoked?: StubRevokedRepo; positions?: StubPositionRepository; clock?: () => number }): {
+    gateway: LiveGateway;
+    server: FakeServer;
+    namespace: FakeNamespace;
+    adapter: WsAuthAdapter;
+} {
     const revoked = opts.revoked ?? new StubRevokedRepo();
     const positions = opts.positions ?? new StubPositionRepository();
     const clock = opts.clock ?? ((): number => Date.now());
@@ -172,9 +165,7 @@ function buildGateway(opts: {
             }
 
             const [sub, scopesCsv, expSec] = raw.split('|');
-            const scopes = scopesCsv.split(',').filter((s): s is AuthScopeEnum =>
-                (Object.values(AuthScopeEnum) as string[]).includes(s),
-            );
+            const scopes = scopesCsv.split(',').filter((s): s is AuthScopeEnum => (Object.values(AuthScopeEnum) as string[]).includes(s));
 
             return {
                 sub,
@@ -206,11 +197,7 @@ function buildGateway(opts: {
     return { gateway, server, namespace, adapter };
 }
 
-async function connect(
-    gateway: LiveGateway,
-    namespace: FakeNamespace,
-    socket: FakeSocket,
-): Promise<void> {
+async function connect(gateway: LiveGateway, namespace: FakeNamespace, socket: FakeSocket): Promise<void> {
     namespace.sockets.set(socket.id, socket);
     await gateway.handleConnection(socket as unknown as Parameters<LiveGateway['handleConnection']>[0]);
 }

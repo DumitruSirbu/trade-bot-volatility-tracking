@@ -128,8 +128,8 @@ describe('KeyPermissionAssertionService — adversarial', () => {
             await service.runAssertion(Date.now());
 
             // CHECK — only the boot-alert fires (env fingerprint); NO failure alert
-            const criticalCalls = (alerts.publish as jest.Mock).mock.calls.filter(
-                ([payload]: [{ title: string }]) => payload.title?.includes('ASSERTION FAILED'),
+            const criticalCalls = (alerts.publish as jest.Mock).mock.calls.filter(([payload]: [{ title: string }]) =>
+                payload.title?.includes('ASSERTION FAILED'),
             );
             expect(criticalCalls).toHaveLength(0);
         });
@@ -140,18 +140,14 @@ describe('KeyPermissionAssertionService — adversarial', () => {
     describe('DEMO env — acceptable snapshot passes without failure', () => {
         it('resolves without writing FAILED audit row when snapshot is acceptable', async () => {
             // BUILD
-            const { service, auditRepo } = buildMocks(
-                ExchangeEnvironmentEnum.DEMO,
-                buildAcceptableSnapshot(),
-            );
+            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.DEMO, buildAcceptableSnapshot());
 
             // OPERATE
             await service.runAssertion(Date.now());
 
             // CHECK
             const failedCalls = (auditRepo.appendKeyPermissionAudit as jest.Mock).mock.calls.filter(
-                ([params]: [{ action: HaltAuditActionEnum }]) =>
-                    params.action === HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_FAILED,
+                ([params]: [{ action: HaltAuditActionEnum }]) => params.action === HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_FAILED,
             );
             expect(failedCalls).toHaveLength(0);
         });

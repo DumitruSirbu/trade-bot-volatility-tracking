@@ -79,7 +79,11 @@ function makeService(
         plan: jest.fn().mockReturnValue(defaultPlan),
     } as unknown as OrderPolicyRouter;
 
-    const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
+    const localProtectiveMonitor = new LocalProtectiveMonitor(
+        { findById: jest.fn().mockResolvedValue(null) } as never,
+        { evaluate: jest.fn() } as never,
+        new EventEmitter2(),
+    );
     const haltFlag = new HaltFlagService();
 
     const exchangeClient = {
@@ -426,7 +430,11 @@ describe('ExecutionService — POST_ONLY_MAKER awaitPolicyTimeout: cancel + clas
         // Build service manually so we can control the book (no would-cross for SHORT)
         const appConfig = { isExecutionLive: true } as AppConfigService;
         const policyRouter = { plan: jest.fn().mockReturnValue(makerPlan) } as unknown as OrderPolicyRouter;
-        const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
+        const localProtectiveMonitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
         const haltFlag = new HaltFlagService();
         // bestBid=29999, bestAsk=30001: SHORT wouldCross = limitPrice(30000) <= bestBid(29999) → false
         const exchangeClient = {
@@ -516,7 +524,11 @@ describe('ExecutionService — POST_ONLY_MAKER would-cross → CANCELLED, no res
 
         const appConfig = { isExecutionLive: true } as AppConfigService;
         const policyRouter = { plan: jest.fn().mockReturnValue(makerPlan) } as unknown as OrderPolicyRouter;
-        const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
+        const localProtectiveMonitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
         const haltFlag = new HaltFlagService();
 
         // For LONG would-cross: limitPrice (30000) >= bestAsk → return null from resolveLimitPrice
@@ -623,7 +635,11 @@ describe('ExecutionService — ADD path with weighted-average entry', () => {
                 reduceOnly: false,
             }),
         } as unknown as OrderPolicyRouter;
-        const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
+        const localProtectiveMonitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
         const haltFlag = new HaltFlagService();
         const exchangeClient = {
             watchOrderBook: jest.fn().mockResolvedValue({ bids: [{ price: '31000' }], asks: [{ price: '31001' }] }),
@@ -740,7 +756,11 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
 
         const appConfig = { isExecutionLive: true } as AppConfigService;
         const policyRouter = { plan: jest.fn().mockReturnValue(reducePlan) } as unknown as OrderPolicyRouter;
-        const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
+        const localProtectiveMonitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
         const haltFlag = new HaltFlagService();
         const exchangeClient = { watchOrderBook: jest.fn() } as unknown as import('../../../src/exchange/interface').IExchangeClient;
         const clientOrderIdFactory = new ClientOrderIdFactory();
@@ -852,7 +872,11 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
 
         const appConfig = { isExecutionLive: true } as AppConfigService;
         const policyRouter = { plan: jest.fn().mockReturnValue(reducePlan) } as unknown as OrderPolicyRouter;
-        const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
+        const localProtectiveMonitor = new LocalProtectiveMonitor(
+            { findById: jest.fn().mockResolvedValue(null) } as never,
+            { evaluate: jest.fn() } as never,
+            new EventEmitter2(),
+        );
         const haltFlag = new HaltFlagService();
         const exchangeClient = { watchOrderBook: jest.fn() } as unknown as import('../../../src/exchange/interface').IExchangeClient;
         const clientOrderIdFactory = new ClientOrderIdFactory();

@@ -226,12 +226,14 @@ export class PromotionGateService {
         }
 
         const result: Map<number, IRegimeMetrics> = new Map();
-        const entries: Array<[unknown, unknown]> = Array.isArray(value) ? (value as Array<[unknown, unknown]>) : Object.entries(value as Record<string, unknown>);
+        const entries: Array<[unknown, unknown]> = Array.isArray(value)
+            ? (value as Array<[unknown, unknown]>)
+            : Object.entries(value as Record<string, unknown>);
 
         for (const [versionKey, metricsRaw] of entries) {
             const buckets: Map<RegimeLabelEnum, IRegimeBucket> = new Map();
             const bucketEntries: Array<[unknown, unknown]> = Array.isArray((metricsRaw as { buckets?: unknown }).buckets)
-                ? ((metricsRaw as { buckets: Array<[unknown, unknown]> }).buckets)
+                ? (metricsRaw as { buckets: Array<[unknown, unknown]> }).buckets
                 : Object.entries((metricsRaw as { buckets?: Record<string, unknown> }).buckets ?? {});
 
             for (const [regime, bucket] of bucketEntries) {
@@ -246,7 +248,13 @@ export class PromotionGateService {
 
     // Wraps each criterion check; a thrown error inside a checker is reported as
     // a 'block' failure so a buggy criterion never silently flips to 'pass'.
-    private runCriterion(passed: number[], failed: IPromotionCriterionFailure[], index: number, name: string, check: () => IPromotionCriterionFailure | null): void {
+    private runCriterion(
+        passed: number[],
+        failed: IPromotionCriterionFailure[],
+        index: number,
+        name: string,
+        check: () => IPromotionCriterionFailure | null,
+    ): void {
         const failure = this.safeCheck(index, name, check);
 
         if (failure === null) {
@@ -280,7 +288,10 @@ export class PromotionGateService {
         return 'inconclusive';
     }
 
-    private deriveInconclusiveReason(failed: readonly IPromotionCriterionFailure[], decision: IPromotionGateOutcome['decision']): PromotionInconclusiveReason | undefined {
+    private deriveInconclusiveReason(
+        failed: readonly IPromotionCriterionFailure[],
+        decision: IPromotionGateOutcome['decision'],
+    ): PromotionInconclusiveReason | undefined {
         if (decision !== 'inconclusive') {
             return undefined;
         }
@@ -311,7 +322,13 @@ export class PromotionGateService {
             const netPnl = new Money(cell.report.netPnlUsdt);
 
             if (!netPnl.greaterThan(0)) {
-                return { index: 1, name: 'oos_positive_expectancy', threshold: '>0 every OOS fold', observed: `fold ${cell.foldIndex}: netPnl=${netPnl.toFixed()}`, severity: 'block' };
+                return {
+                    index: 1,
+                    name: 'oos_positive_expectancy',
+                    threshold: '>0 every OOS fold',
+                    observed: `fold ${cell.foldIndex}: netPnl=${netPnl.toFixed()}`,
+                    severity: 'block',
+                };
             }
         }
 
@@ -327,7 +344,13 @@ export class PromotionGateService {
             const pf = parseProfitFactor(cell.report.profitFactor);
 
             if (pf < MIN_PROFIT_FACTOR) {
-                return { index: 2, name: 'oos_profit_factor', threshold: `>= ${MIN_PROFIT_FACTOR}`, observed: `fold ${cell.foldIndex}: pf=${cell.report.profitFactor}`, severity: 'block' };
+                return {
+                    index: 2,
+                    name: 'oos_profit_factor',
+                    threshold: `>= ${MIN_PROFIT_FACTOR}`,
+                    observed: `fold ${cell.foldIndex}: pf=${cell.report.profitFactor}`,
+                    severity: 'block',
+                };
             }
         }
 
@@ -351,7 +374,13 @@ export class PromotionGateService {
         }
 
         if (worst.greaterThan(MAX_DD_TOLERANCE_PCT)) {
-            return { index: 3, name: 'max_drawdown', threshold: `<= ${MAX_DD_TOLERANCE_PCT}%`, observed: `fold ${worstFold}: dd=${worst.toFixed()}%`, severity: 'block' };
+            return {
+                index: 3,
+                name: 'max_drawdown',
+                threshold: `<= ${MAX_DD_TOLERANCE_PCT}%`,
+                observed: `fold ${worstFold}: dd=${worst.toFixed()}%`,
+                severity: 'block',
+            };
         }
 
         return null;
@@ -383,7 +412,13 @@ export class PromotionGateService {
         const absWorst = worst.abs();
 
         if (absWorst.greaterThan(WORST_DAY_LOSS_TOLERANCE_PCT)) {
-            return { index: 4, name: 'worst_day_loss', threshold: `<= ${WORST_DAY_LOSS_TOLERANCE_PCT}% (abs)`, observed: `fold ${worstFold}: worst day=${worst.toFixed()}%`, severity: 'block' };
+            return {
+                index: 4,
+                name: 'worst_day_loss',
+                threshold: `<= ${WORST_DAY_LOSS_TOLERANCE_PCT}% (abs)`,
+                observed: `fold ${worstFold}: worst day=${worst.toFixed()}%`,
+                severity: 'block',
+            };
         }
 
         return null;
@@ -391,28 +426,56 @@ export class PromotionGateService {
 
     // --- Criterion 5: statistical significance vs current active. ------------
 
-    private checkStatisticalSignificance(report: IComparisonReport, versionId: number, baseline: StrategyVersionEntity | null): IPromotionCriterionFailure | null {
+    private checkStatisticalSignificance(
+        report: IComparisonReport,
+        versionId: number,
+        baseline: StrategyVersionEntity | null,
+    ): IPromotionCriterionFailure | null {
         if (baseline === null) {
             // No incumbent — the statistical test has no peer. We treat this as
             // 'inconclusive' rather than auto-pass so an empty-history promotion
             // is impossible without a real comparison.
-            return { index: 5, name: 'statistical_significance', threshold: 'paired bootstrap CI excludes zero', observed: 'no active baseline to compare against', severity: 'inconclusive' };
+            return {
+                index: 5,
+                name: 'statistical_significance',
+                threshold: 'paired bootstrap CI excludes zero',
+                observed: 'no active baseline to compare against',
+                severity: 'inconclusive',
+            };
         }
 
         const pair = findPairwiseResult(report.pairwiseStats, versionId, baseline.id);
 
         if (pair === null) {
-            return { index: 5, name: 'statistical_significance', threshold: 'paired bootstrap CI excludes zero', observed: 'pairwise stats missing for (candidate, baseline)', severity: 'inconclusive' };
+            return {
+                index: 5,
+                name: 'statistical_significance',
+                threshold: 'paired bootstrap CI excludes zero',
+                observed: 'pairwise stats missing for (candidate, baseline)',
+                severity: 'inconclusive',
+            };
         }
 
         if (pair.outcome === 'inconclusive') {
-            return { index: 5, name: 'statistical_significance', threshold: 'paired bootstrap CI excludes zero', observed: `inconclusive: ${pair.reason}`, severity: 'inconclusive' };
+            return {
+                index: 5,
+                name: 'statistical_significance',
+                threshold: 'paired bootstrap CI excludes zero',
+                observed: `inconclusive: ${pair.reason}`,
+                severity: 'inconclusive',
+            };
         }
 
         const candidateWins = (pair.versionA === versionId && pair.winner === 'A') || (pair.versionB === versionId && pair.winner === 'B');
 
         if (!candidateWins) {
-            return { index: 5, name: 'statistical_significance', threshold: `winner=candidate (id=${versionId})`, observed: `winner=${pair.winner}, CI=[${pair.ci95Low}, ${pair.ci95High}]`, severity: 'inconclusive' };
+            return {
+                index: 5,
+                name: 'statistical_significance',
+                threshold: `winner=candidate (id=${versionId})`,
+                observed: `winner=${pair.winner}, CI=[${pair.ci95Low}, ${pair.ci95High}]`,
+                severity: 'inconclusive',
+            };
         }
 
         return null;
@@ -431,15 +494,33 @@ export class PromotionGateService {
         const counters = pickSampleCounters(report, candidate);
 
         if (counters.trades < MIN_TOTAL_TRADES) {
-            return { index: 6, name: 'sample_sufficiency', threshold: `trades >= ${MIN_TOTAL_TRADES}`, observed: `trades=${counters.trades}`, severity: 'inconclusive' };
+            return {
+                index: 6,
+                name: 'sample_sufficiency',
+                threshold: `trades >= ${MIN_TOTAL_TRADES}`,
+                observed: `trades=${counters.trades}`,
+                severity: 'inconclusive',
+            };
         }
 
         if (counters.regimeTrades < MIN_REGIME_TRADES) {
-            return { index: 6, name: 'sample_sufficiency', threshold: `regime trades >= ${MIN_REGIME_TRADES}`, observed: `regime trades=${counters.regimeTrades}`, severity: 'inconclusive' };
+            return {
+                index: 6,
+                name: 'sample_sufficiency',
+                threshold: `regime trades >= ${MIN_REGIME_TRADES}`,
+                observed: `regime trades=${counters.regimeTrades}`,
+                severity: 'inconclusive',
+            };
         }
 
         if (counters.shadowDays < MIN_SHADOW_DAYS) {
-            return { index: 6, name: 'sample_sufficiency', threshold: `shadow days >= ${MIN_SHADOW_DAYS}`, observed: `shadow days=${counters.shadowDays}`, severity: 'inconclusive' };
+            return {
+                index: 6,
+                name: 'sample_sufficiency',
+                threshold: `shadow days >= ${MIN_SHADOW_DAYS}`,
+                observed: `shadow days=${counters.shadowDays}`,
+                severity: 'inconclusive',
+            };
         }
 
         return null;
@@ -475,7 +556,13 @@ export class PromotionGateService {
         const remaining = sorted.slice(trimCount);
 
         if (remaining.length === 0) {
-            return { index: 8, name: 'robustness_drop_best', threshold: 'criteria 1+2 hold after drop-best-5%', observed: `trim removed all trades (n=${sorted.length})`, severity: 'block' };
+            return {
+                index: 8,
+                name: 'robustness_drop_best',
+                threshold: 'criteria 1+2 hold after drop-best-5%',
+                observed: `trim removed all trades (n=${sorted.length})`,
+                severity: 'block',
+            };
         }
 
         let sumPnl = new Money(0);
@@ -494,7 +581,13 @@ export class PromotionGateService {
         }
 
         if (!sumPnl.greaterThan(0)) {
-            return { index: 8, name: 'robustness_drop_best', threshold: 'criterion 1 (expectancy>0) after drop-best-5%', observed: `sumPnl=${sumPnl.toFixed()}`, severity: 'block' };
+            return {
+                index: 8,
+                name: 'robustness_drop_best',
+                threshold: 'criterion 1 (expectancy>0) after drop-best-5%',
+                observed: `sumPnl=${sumPnl.toFixed()}`,
+                severity: 'block',
+            };
         }
 
         if (grossLoss.isZero()) {
@@ -504,7 +597,13 @@ export class PromotionGateService {
         const pf = grossWin.dividedBy(grossLoss);
 
         if (pf.lessThan(MIN_PROFIT_FACTOR)) {
-            return { index: 8, name: 'robustness_drop_best', threshold: `criterion 2 (pf>=${MIN_PROFIT_FACTOR}) after drop-best-5%`, observed: `pf=${pf.toFixed()}`, severity: 'block' };
+            return {
+                index: 8,
+                name: 'robustness_drop_best',
+                threshold: `criterion 2 (pf>=${MIN_PROFIT_FACTOR}) after drop-best-5%`,
+                observed: `pf=${pf.toFixed()}`,
+                severity: 'block',
+            };
         }
 
         return null;
@@ -546,30 +645,58 @@ export class PromotionGateService {
 
     // --- Criterion 11: regime targeting. -------------------------------------
 
-    private checkRegimeTargeting(report: IComparisonReport, candidate: StrategyVersionEntity, baseline: StrategyVersionEntity | null): IPromotionCriterionFailure | null {
+    private checkRegimeTargeting(
+        report: IComparisonReport,
+        candidate: StrategyVersionEntity,
+        baseline: StrategyVersionEntity | null,
+    ): IPromotionCriterionFailure | null {
         const targetRegimes = REGIME_TARGETS_BY_DIRECTION[candidate.direction as StrategyDirectionEnum];
 
         if (targetRegimes === undefined || targetRegimes.length === 0) {
-            return { index: 11, name: 'regime_targeting', threshold: 'direction has a regime-target map', observed: `direction=${candidate.direction}`, severity: 'block' };
+            return {
+                index: 11,
+                name: 'regime_targeting',
+                threshold: 'direction has a regime-target map',
+                observed: `direction=${candidate.direction}`,
+                severity: 'block',
+            };
         }
 
         if (baseline === null) {
             // No baseline — same logic as criterion 5: we cannot demonstrate the
             // candidate beats anything in its target regimes.
-            return { index: 11, name: 'regime_targeting', threshold: 'beats active baseline on target regimes', observed: 'no active baseline', severity: 'block' };
+            return {
+                index: 11,
+                name: 'regime_targeting',
+                threshold: 'beats active baseline on target regimes',
+                observed: 'no active baseline',
+                severity: 'block',
+            };
         }
 
         const breakdown = report.regimeBreakdown;
 
         if (breakdown === null) {
-            return { index: 11, name: 'regime_targeting', threshold: 'beats active baseline on target regimes', observed: 'regime breakdown missing on report', severity: 'block' };
+            return {
+                index: 11,
+                name: 'regime_targeting',
+                threshold: 'beats active baseline on target regimes',
+                observed: 'regime breakdown missing on report',
+                severity: 'block',
+            };
         }
 
         const candidateMetrics = breakdown.get(candidate.id);
         const baselineMetrics = breakdown.get(baseline.id);
 
         if (candidateMetrics === undefined || baselineMetrics === undefined) {
-            return { index: 11, name: 'regime_targeting', threshold: 'beats active baseline on target regimes', observed: 'regime metrics missing for candidate or baseline', severity: 'block' };
+            return {
+                index: 11,
+                name: 'regime_targeting',
+                threshold: 'beats active baseline on target regimes',
+                observed: 'regime metrics missing for candidate or baseline',
+                severity: 'block',
+            };
         }
 
         for (const regime of targetRegimes) {
@@ -604,7 +731,13 @@ export class PromotionGateService {
         const highFidelity = trades.filter((trade) => trade.lowFidelity !== true);
 
         if (highFidelity.length === 0 && trades.length > 0) {
-            return { index: 12, name: 'low_fidelity_dependence', threshold: 'criteria 1+2 hold with lowFidelity trades excluded', observed: 'all OOS trades are lowFidelity', severity: 'block' };
+            return {
+                index: 12,
+                name: 'low_fidelity_dependence',
+                threshold: 'criteria 1+2 hold with lowFidelity trades excluded',
+                observed: 'all OOS trades are lowFidelity',
+                severity: 'block',
+            };
         }
 
         let sumPnl = new Money(0);
@@ -623,7 +756,13 @@ export class PromotionGateService {
         }
 
         if (!sumPnl.greaterThan(0)) {
-            return { index: 12, name: 'low_fidelity_dependence', threshold: 'expectancy>0 excluding lowFidelity', observed: `sumPnl=${sumPnl.toFixed()}`, severity: 'block' };
+            return {
+                index: 12,
+                name: 'low_fidelity_dependence',
+                threshold: 'expectancy>0 excluding lowFidelity',
+                observed: `sumPnl=${sumPnl.toFixed()}`,
+                severity: 'block',
+            };
         }
 
         if (grossLoss.isZero()) {
@@ -633,7 +772,13 @@ export class PromotionGateService {
         const pf = grossWin.dividedBy(grossLoss);
 
         if (pf.lessThan(MIN_PROFIT_FACTOR)) {
-            return { index: 12, name: 'low_fidelity_dependence', threshold: `pf >= ${MIN_PROFIT_FACTOR} excluding lowFidelity`, observed: `pf=${pf.toFixed()}`, severity: 'block' };
+            return {
+                index: 12,
+                name: 'low_fidelity_dependence',
+                threshold: `pf >= ${MIN_PROFIT_FACTOR} excluding lowFidelity`,
+                observed: `pf=${pf.toFixed()}`,
+                severity: 'block',
+            };
         }
 
         return null;
@@ -831,4 +976,3 @@ function isoWeekKey(ms: number): string {
 
     return `${target.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
 }
-

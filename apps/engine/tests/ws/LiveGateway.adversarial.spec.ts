@@ -1,9 +1,4 @@
-import {
-    AuthFailureReasonEnum,
-    AuthScopeEnum,
-    IAuthSubject,
-    WsRoomEnum,
-} from '@bot/shared';
+import { AuthFailureReasonEnum, AuthScopeEnum, IAuthSubject, WsRoomEnum } from '@bot/shared';
 
 import { LiveGateway } from '../../src/ws/LiveGateway';
 import {
@@ -97,7 +92,9 @@ class StubRevokedRepo implements IRevokedJtiRepositoryPort {
         return this.revokedSet.has(jti);
     }
 
-    async revoke(): Promise<void> { /* not exercised */ }
+    async revoke(): Promise<void> {
+        /* not exercised */
+    }
 
     async pruneOlderThan(_cutoff: Date): Promise<number> {
         return 0;
@@ -127,11 +124,7 @@ function buildGateway(opts: { clock?: () => number; revoked?: StubRevokedRepo } 
             }
 
             const [sub, scopesCsv, expSec] = raw.split('|');
-            const scopes = scopesCsv
-                .split(',')
-                .filter((s): s is AuthScopeEnum =>
-                    (Object.values(AuthScopeEnum) as string[]).includes(s),
-                );
+            const scopes = scopesCsv.split(',').filter((s): s is AuthScopeEnum => (Object.values(AuthScopeEnum) as string[]).includes(s));
 
             return {
                 sub,
@@ -160,11 +153,7 @@ function buildGateway(opts: { clock?: () => number; revoked?: StubRevokedRepo } 
     return { gateway, server, namespace, adapter };
 }
 
-async function connect(
-    gateway: LiveGateway,
-    namespace: FakeNamespace,
-    socket: FakeSocket,
-): Promise<void> {
+async function connect(gateway: LiveGateway, namespace: FakeNamespace, socket: FakeSocket): Promise<void> {
     namespace.sockets.set(socket.id, socket);
     await gateway.handleConnection(socket as unknown as Parameters<LiveGateway['handleConnection']>[0]);
 }
@@ -292,7 +281,9 @@ describe('PerSocketQueue adversarial — slow-client timeout boundary', () => {
             {
                 socketId: 'q-slow-safe',
                 emit: () => undefined,
-                disconnect: () => { disconnected = true; },
+                disconnect: () => {
+                    disconnected = true;
+                },
             },
             () => now,
         );
@@ -319,7 +310,9 @@ describe('PerSocketQueue adversarial — slow-client timeout boundary', () => {
             {
                 socketId: 'q-slow-evict',
                 emit: () => undefined,
-                disconnect: () => { disconnected = true; },
+                disconnect: () => {
+                    disconnected = true;
+                },
             },
             () => now,
         );

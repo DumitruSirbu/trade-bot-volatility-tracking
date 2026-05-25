@@ -88,7 +88,8 @@ function isLegalArrow(from: PositionStateEnum, to: PositionStateEnum): boolean {
     return LEGAL_ARROWS.some((edge) => edge.from === from && edge.to === to);
 }
 
-describe('PositionService.transition — legal transitions (ADR 0009 §3)', () => { // statusAliasFor removed in M7 W0c
+describe('PositionService.transition — legal transitions (ADR 0009 §3)', () => {
+    // statusAliasFor removed in M7 W0c
     it.each(LEGAL_ARROWS)('persists $from -> $to with correct state, emits event', async ({ from, to }) => {
         // BUILD
         const position = buildPosition({ state: from });

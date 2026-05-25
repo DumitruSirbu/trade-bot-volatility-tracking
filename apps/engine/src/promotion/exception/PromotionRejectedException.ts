@@ -12,6 +12,9 @@ import { IPromotionGateOutcome } from '../interface/IPromotionGateOutcome';
 // flag.
 export class PromotionRejectedException extends DomainException {
     constructor(readonly outcome: IPromotionGateOutcome) {
-        super('PROMOTION_REJECTED', `Promotion rejected for version ${outcome.versionId}: decision=${outcome.decision}, failedCriteria=${outcome.failedCriteria.map((failure) => failure.index).join(',')}`);
+        super(
+            'PROMOTION_REJECTED',
+            `Promotion rejected for version ${outcome.versionId}: decision=${outcome.decision}, failedCriteria=${outcome.failedCriteria.map((failure) => failure.index).join(',')}`,
+        );
     }
 }

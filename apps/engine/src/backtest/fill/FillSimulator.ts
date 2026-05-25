@@ -52,13 +52,7 @@ export class FillSimulator {
             return this.buildMissedFill(request, fillTsMs);
         }
 
-        const slippageResult = computeTierFillPrice(
-            request.limitPrice,
-            request.coinTier,
-            request.side,
-            request.intent,
-            request.tierSlippageParams,
-        );
+        const slippageResult = computeTierFillPrice(request.limitPrice, request.coinTier, request.side, request.intent, request.tierSlippageParams);
         const feeUsdt = this.computeFee(slippageResult.fillPrice, request.qty, request.policy);
 
         return {
@@ -79,14 +73,7 @@ export class FillSimulator {
     private isOrderMissed(request: IFillRequest): boolean {
         const timeoutMs = this.resolveOrderTimeoutMs(request.policy);
 
-        return isMissedFill(
-            request.policy,
-            request.limitPrice,
-            request.side,
-            request.ticks,
-            request.signalBarOpenMs,
-            timeoutMs,
-        );
+        return isMissedFill(request.policy, request.limitPrice, request.side, request.ticks, request.signalBarOpenMs, timeoutMs);
     }
 
     private resolveOrderTimeoutMs(policy: string): number {

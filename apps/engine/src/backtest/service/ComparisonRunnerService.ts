@@ -62,7 +62,9 @@ export class ComparisonRunnerService {
         const folds = WalkForwardPlanner.plan(request.rangeFromMs, request.rangeToMs, request.splitPolicy);
 
         if (folds.length === 0) {
-            throw new Error(`ComparisonRunnerService: walk-forward planner returned zero folds for range [${request.rangeFromMs}, ${request.rangeToMs}); range is too short for policy`);
+            throw new Error(
+                `ComparisonRunnerService: walk-forward planner returned zero folds for range [${request.rangeFromMs}, ${request.rangeToMs}); range is too short for policy`,
+            );
         }
 
         const tape = await this.recordRangeTape(request);
@@ -234,13 +236,7 @@ export class ComparisonRunnerService {
     // would mis-quantize a fold window into the prior day; the runner itself walks bars
     // strictly inside `[fromMs, toMs)` so dropping to date strings is acceptable for M8 —
     // a future refinement may switch the runner to ms-bound config for sub-day folds).
-    private buildConfig(
-        request: IComparisonRunRequest,
-        strategyVersionId: number,
-        runLabel: string,
-        fromMs: number,
-        toMs: number,
-    ): IBacktestConfig {
+    private buildConfig(request: IComparisonRunRequest, strategyVersionId: number, runLabel: string, fromMs: number, toMs: number): IBacktestConfig {
         return {
             strategyVersionId,
             fromUtcDate: msToUtcDate(fromMs),
@@ -311,10 +307,7 @@ function buildOutcomeRecord(trade: IBacktestTradeResult | null): IPerVersionOutc
 // then fold through `computeRegimeBreakdown` to bucket and aggregate. Skips/missed events
 // contribute `r = 0` and count toward `tradeCount` but never as wins — matches the W5a
 // contract.
-function buildRegimeBreakdownByVersion(
-    eventOutcomes: readonly IComparisonEventOutcome[],
-    versionIds: readonly number[],
-): Map<number, IRegimeMetrics> {
+function buildRegimeBreakdownByVersion(eventOutcomes: readonly IComparisonEventOutcome[], versionIds: readonly number[]): Map<number, IRegimeMetrics> {
     const result: Map<number, IRegimeMetrics> = new Map();
 
     for (const versionId of versionIds) {
@@ -339,10 +332,7 @@ function buildRegimeBreakdownByVersion(
 // expected-shortfall numbers match what a risk reviewer reads off the same event tape.
 // A version with zero events in the tape is skipped — `computeTailRiskStats` throws on
 // an empty series by contract, so the map entry is omitted rather than synthesised.
-function buildTailRiskByVersion(
-    eventOutcomes: readonly IComparisonEventOutcome[],
-    versionIds: readonly number[],
-): Map<number, ITailRiskStats> {
+function buildTailRiskByVersion(eventOutcomes: readonly IComparisonEventOutcome[], versionIds: readonly number[]): Map<number, ITailRiskStats> {
     const result: Map<number, ITailRiskStats> = new Map();
 
     if (eventOutcomes.length === 0) {

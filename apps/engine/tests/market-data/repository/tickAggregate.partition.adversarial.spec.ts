@@ -85,17 +85,17 @@ describe('tick_aggregates partition boundary — adversarial (requires Postgres)
             await tickAggRepo.recordSample(buildSample(midnightTs));
 
             // Verify the row landed in the correct partition via pg_class membership.
-            const rows = (await dataSource.query(
-                `SELECT tableoid::regclass::text AS partition FROM tick_aggregates WHERE symbol = $1 AND ts = $2`,
-                [ADV_SYMBOL, midnightTs],
-            )) as { partition: string }[];
+            const rows = (await dataSource.query(`SELECT tableoid::regclass::text AS partition FROM tick_aggregates WHERE symbol = $1 AND ts = $2`, [
+                ADV_SYMBOL,
+                midnightTs,
+            ])) as { partition: string }[];
 
             expect(rows).toHaveLength(1);
             // The partition name must match today's date, not yesterday's.
             expect(rows[0]!.partition).toBe(todayPartition);
         });
 
-        it('insert at 23:59:59.999 of yesterday routes to yesterday\'s partition', async () => {
+        it("insert at 23:59:59.999 of yesterday routes to yesterday's partition", async () => {
             const todayStartMs = utcDayStartMs(Date.now());
             const yesterdayStartMs = todayStartMs - MS_PER_DAY;
             const yesterdayLastMs = todayStartMs - 1; // 23:59:59.999
@@ -109,10 +109,10 @@ describe('tick_aggregates partition boundary — adversarial (requires Postgres)
             const ts = new Date(yesterdayLastMs);
             await tickAggRepo.recordSample(buildSample(ts));
 
-            const rows = (await dataSource.query(
-                `SELECT tableoid::regclass::text AS partition FROM tick_aggregates WHERE symbol = $1 AND ts = $2`,
-                [ADV_SYMBOL, ts],
-            )) as { partition: string }[];
+            const rows = (await dataSource.query(`SELECT tableoid::regclass::text AS partition FROM tick_aggregates WHERE symbol = $1 AND ts = $2`, [
+                ADV_SYMBOL,
+                ts,
+            ])) as { partition: string }[];
 
             expect(rows).toHaveLength(1);
             // Must be yesterday's partition, not today's.

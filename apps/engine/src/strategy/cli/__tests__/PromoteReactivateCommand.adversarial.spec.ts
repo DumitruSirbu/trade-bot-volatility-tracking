@@ -51,27 +51,19 @@ function buildArchivedVersion(id: number): StrategyVersionEntity {
 
 describe('parsePromoteArgs — adversarial', () => {
     it('throws when --version-id is not a positive integer', () => {
-        expect(() =>
-            parsePromoteArgs(['--version-id=0', '--report-id=5', '--note=test']),
-        ).toThrow(/positive integer/i);
+        expect(() => parsePromoteArgs(['--version-id=0', '--report-id=5', '--note=test'])).toThrow(/positive integer/i);
     });
 
     it('throws when --report-id is missing', () => {
-        expect(() =>
-            parsePromoteArgs(['--version-id=1', '--note=test']),
-        ).toThrow(/--report-id is required/i);
+        expect(() => parsePromoteArgs(['--version-id=1', '--note=test'])).toThrow(/--report-id is required/i);
     });
 
     it('throws when --note is empty', () => {
-        expect(() =>
-            parsePromoteArgs(['--version-id=1', '--report-id=2', '--note=']),
-        ).toThrow(/--note must be non-empty/i);
+        expect(() => parsePromoteArgs(['--version-id=1', '--report-id=2', '--note='])).toThrow(/--note must be non-empty/i);
     });
 
     it('throws when a flag uses key-only form without =value', () => {
-        expect(() =>
-            parsePromoteArgs(['--version-id', '--report-id=2', '--note=n']),
-        ).toThrow(/must use --key=value form/i);
+        expect(() => parsePromoteArgs(['--version-id', '--report-id=2', '--note=n'])).toThrow(/must use --key=value form/i);
     });
 });
 
@@ -109,21 +101,15 @@ describe('PromoteCommand.execute — adversarial', () => {
 
 describe('parseReactivateArgs — adversarial', () => {
     it('throws when --version-id is not a positive integer', () => {
-        expect(() =>
-            parseReactivateArgs(['--version-id=-5']),
-        ).toThrow(/positive integer/i);
+        expect(() => parseReactivateArgs(['--version-id=-5'])).toThrow(/positive integer/i);
     });
 
     it('throws when --version-id is missing', () => {
-        expect(() =>
-            parseReactivateArgs([]),
-        ).toThrow(/--version-id is required/i);
+        expect(() => parseReactivateArgs([])).toThrow(/--version-id is required/i);
     });
 
     it('throws when a positional argument appears instead of a flag', () => {
-        expect(() =>
-            parseReactivateArgs(['123']),
-        ).toThrow(/unexpected positional argument/i);
+        expect(() => parseReactivateArgs(['123'])).toThrow(/unexpected positional argument/i);
     });
 });
 

@@ -292,22 +292,14 @@ describe('S2 — Trigger formula determinism (ADR 0001 §shared-trigger-formula)
         // ADR 0001 §shared-trigger-formula: side derivation must be purely input-driven.
         const params = buildTriggerParams();
 
-        const above = evaluateTrigger(
-            { symbol: 'X', vwapDeviationSigma: 3.0, vwapDeviationPct: 2.5, volumeRatio: 3.0 },
-            params,
-        );
-        const below = evaluateTrigger(
-            { symbol: 'X', vwapDeviationSigma: -3.0, vwapDeviationPct: -2.5, volumeRatio: 3.0 },
-            params,
-        );
+        const above = evaluateTrigger({ symbol: 'X', vwapDeviationSigma: 3.0, vwapDeviationPct: 2.5, volumeRatio: 3.0 }, params);
+        const below = evaluateTrigger({ symbol: 'X', vwapDeviationSigma: -3.0, vwapDeviationPct: -2.5, volumeRatio: 3.0 }, params);
 
         expect(above.side).toBe(DeviationSideEnum.ABOVE);
         expect(below.side).toBe(DeviationSideEnum.BELOW);
 
         // Repeat — side must not flip
-        expect(evaluateTrigger({ symbol: 'X', vwapDeviationSigma: 3.0, vwapDeviationPct: 2.5, volumeRatio: 3.0 }, params).side).toBe(
-            DeviationSideEnum.ABOVE,
-        );
+        expect(evaluateTrigger({ symbol: 'X', vwapDeviationSigma: 3.0, vwapDeviationPct: 2.5, volumeRatio: 3.0 }, params).side).toBe(DeviationSideEnum.ABOVE);
     });
 
     it('different sigma inputs produce consistently different outcomes across repeated invocations', () => {

@@ -1,11 +1,4 @@
-import {
-    AlertSeverityEnum,
-    AlertTypeEnum,
-    HaltSourceEnum,
-    IAlertPayload,
-    IModelDivergenceEvent,
-    IRiskHaltEvent,
-} from '@bot/shared';
+import { AlertSeverityEnum, AlertTypeEnum, HaltSourceEnum, IAlertPayload, IModelDivergenceEvent, IRiskHaltEvent } from '@bot/shared';
 import Decimal from 'decimal.js';
 
 import { IAlertSink } from '../../src/alert/AlertModule';
@@ -169,7 +162,9 @@ describe('DailyPnlSummaryScheduler adversarial — UTC midnight boundary', () =>
 
     class FakeSink implements IAlertSink {
         readonly published: IAlertPayload[] = [];
-        async publish(p: IAlertPayload): Promise<void> { this.published.push(p); }
+        async publish(p: IAlertPayload): Promise<void> {
+            this.published.push(p);
+        }
     }
 
     it('runOnce at 23:59:59 UTC does NOT fire the daily summary for the current day', async () => {
@@ -309,7 +304,9 @@ describe('TelegramAlertSink adversarial — 429 retry_after', () => {
 describe('RiskListeners adversarial — re-engage and independence', () => {
     class RecordingSink implements IAlertSink {
         readonly published: IAlertPayload[] = [];
-        async publish(p: IAlertPayload): Promise<void> { this.published.push(p); }
+        async publish(p: IAlertPayload): Promise<void> {
+            this.published.push(p);
+        }
     }
 
     function buildListeners(now: () => Date) {
@@ -397,10 +394,7 @@ describe('RiskListeners adversarial — re-engage and independence', () => {
             sampleCount: 50,
         };
 
-        await Promise.all([
-            listeners.onRiskHalt(stressEvent),
-            listeners.onModelDivergence(divergenceEvent),
-        ]);
+        await Promise.all([listeners.onRiskHalt(stressEvent), listeners.onModelDivergence(divergenceEvent)]);
 
         expect(haltFlag.isHalted()).toBe(true);
         const types = sink.published.map((p) => p.type);

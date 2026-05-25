@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { MoreThan, Repository } from 'typeorm';
 
+import { LOGIN_PER_IP_SUSTAINED_WINDOW_MS } from '../const/authConsts';
 import { LoginRateLimitStateEntity } from '../entity/LoginRateLimitStateEntity';
 
 // M11a W1.9. Repository for `login_rate_limit_state`. The limiter uses this
@@ -25,7 +26,13 @@ export class LoginRateLimitStateRepository {
     constructor(@InjectRepository(LoginRateLimitStateEntity) private readonly repository: Repository<LoginRateLimitStateEntity>) {}
 
     async loadAll(): Promise<ILoginRateLimitRow[]> {
-        const rows = await this.repository.find();
+        // Only hydrate rows updated within the longest configured window
+        // (`LOGIN_PER_IP_SUSTAINED_WINDOW_MS`, currently 10 min). Older rows
+        // can only contain timestamps that are guaranteed to be pruned by the
+        // first enforce() pass anyway — loading them wastes memory and slows
+        // boot under a poisoned table.
+        const freshSince = new Date(Date.now() - LOGIN_PER_IP_SUSTAINED_WINDOW_MS);
+        const rows = await this.repository.find({ where: { updatedAt: MoreThan(freshSince) } });
 
         return rows.map((row) => ({
             sourceIp: row.sourceIp,

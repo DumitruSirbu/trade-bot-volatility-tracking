@@ -67,7 +67,11 @@ function makeWiredService(
         }),
     } as unknown as OrderPolicyRouter;
 
-    const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
+    const localProtectiveMonitor = new LocalProtectiveMonitor(
+        { findById: jest.fn().mockResolvedValue(null) } as never,
+        { evaluate: jest.fn() } as never,
+        new EventEmitter2(),
+    );
     const armSpy = jest.spyOn(localProtectiveMonitor, 'arm');
     const disarmSpy = jest.spyOn(localProtectiveMonitor, 'disarm');
 

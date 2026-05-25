@@ -26,13 +26,7 @@ import {
     MAX_SAME_DIRECTION_EXPOSURE_USDT,
     WEEKLY_LOSS_LIMIT_USDT,
 } from '../../risk/const/riskConsts';
-import {
-    IApprovedRiskDecision,
-    IOrderIntent,
-    IRiskDecision,
-    IRiskGateContext,
-    isApprovedOpening,
-} from '../../risk/interface';
+import { IApprovedRiskDecision, IOrderIntent, IRiskDecision, IRiskGateContext, isApprovedOpening } from '../../risk/interface';
 import { PositionSizer, ReservationLedger, RiskGateService } from '../../risk/service';
 import { buildMarketSnapshot } from '../../strategy/mapper';
 import { IOpenPositionState, IStrategy, ISignal } from '../../strategy/interface';
@@ -260,7 +254,12 @@ export class BacktestOrchestrator {
         return CorrelationModeEnum.IDIOSYNCRATIC;
     }
 
-    private buildGateContext(event: IVolatilityDetectedEvent, snapshot: ReturnType<typeof buildMarketSnapshot>, nowMs: number, ctx: IBacktestOrchestratorContext): IRiskGateContext {
+    private buildGateContext(
+        event: IVolatilityDetectedEvent,
+        snapshot: ReturnType<typeof buildMarketSnapshot>,
+        nowMs: number,
+        ctx: IBacktestOrchestratorContext,
+    ): IRiskGateContext {
         return {
             nowMs,
             utcDateString: ctx.utcDateString,
@@ -313,7 +312,12 @@ export class BacktestOrchestrator {
         return FILLED;
     }
 
-    private buildFillRequest(event: IVolatilityDetectedEvent, intent: IOrderIntent, decision: IApprovedRiskDecision, ctx: IBacktestOrchestratorContext): IFillRequest {
+    private buildFillRequest(
+        event: IVolatilityDetectedEvent,
+        intent: IOrderIntent,
+        decision: IApprovedRiskDecision,
+        ctx: IBacktestOrchestratorContext,
+    ): IFillRequest {
         // M8 W1: route through the (injected) live OrderPolicyRouter so backtest fee +
         // missed-fill-timeout semantics match live for every (action, direction, tier, flow)
         // combination. v3 (HYBRID) has no row in the matrix — the orchestrator resolves the
@@ -348,7 +352,13 @@ export class BacktestOrchestrator {
         };
     }
 
-    private buildPosition(event: IVolatilityDetectedEvent, signal: ISignal, decision: IApprovedRiskDecision, fill: ReturnType<FillSimulator['simulateFill']>, ctx: IBacktestOrchestratorContext): IBacktestPosition {
+    private buildPosition(
+        event: IVolatilityDetectedEvent,
+        signal: ISignal,
+        decision: IApprovedRiskDecision,
+        fill: ReturnType<FillSimulator['simulateFill']>,
+        ctx: IBacktestOrchestratorContext,
+    ): IBacktestPosition {
         if (signal.proposedExit === null) {
             // Defensive narrowing — checked before reaching here.
             throw new Error('buildPosition called with null proposedExit');

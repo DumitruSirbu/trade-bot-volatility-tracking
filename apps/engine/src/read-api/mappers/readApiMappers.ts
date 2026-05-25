@@ -50,9 +50,7 @@ export function mapOpenPosition(input: IOpenPositionMapInput): IOpenPositionView
     // a second I/O hop per position per request — out of scope for this wave).
     // ADR 0012 §4's canonical helper stays the source of truth for accounting;
     // this projection is consciously a display estimate.
-    const priceDelta = position.side === PositionSideEnum.LONG
-        ? effectiveMark.minus(position.entryPrice)
-        : position.entryPrice.minus(effectiveMark);
+    const priceDelta = position.side === PositionSideEnum.LONG ? effectiveMark.minus(position.entryPrice) : position.entryPrice.minus(effectiveMark);
     const unrealised = priceDelta.times(position.qty);
 
     return {
@@ -90,14 +88,10 @@ export function mapClosedPosition(position: PositionEntity): IClosedPositionView
         // ADR 0022 §2.3.1: never fabricate exitPrice/realizedPnl from entryPrice
         // or `0`. A null column means "not yet recorded" — the dashboard
         // surfaces "n/a" rather than a misleading sentinel.
-        exitPrice: position.exitPrice !== null && position.exitPrice !== undefined
-            ? formatMoneyString(position.exitPrice)
-            : null,
+        exitPrice: position.exitPrice !== null && position.exitPrice !== undefined ? formatMoneyString(position.exitPrice) : null,
         qty: formatMoneyString(position.qty),
         leverage: formatMoneyString(position.leverage),
-        realizedPnlUsd: position.realizedPnl !== null && position.realizedPnl !== undefined
-            ? formatMoneyString(position.realizedPnl)
-            : null,
+        realizedPnlUsd: position.realizedPnl !== null && position.realizedPnl !== undefined ? formatMoneyString(position.realizedPnl) : null,
         openedAt: position.openedAt.toISOString(),
         closedAt: (position.closedAt ?? position.openedAt).toISOString(),
         // M9 W4 NOTE: ExitReasonEnum is the persisted column; rows pre-M6 may have
@@ -238,11 +232,7 @@ export interface IPerformanceAggregateRow {
     readonly netPnlUsd: string;
 }
 
-export function mapPerformanceByVersion(
-    row: IPerformanceAggregateRow,
-    version: StrategyVersionEntity,
-    windowDays: number,
-): IPerformanceByVersionView {
+export function mapPerformanceByVersion(row: IPerformanceAggregateRow, version: StrategyVersionEntity, windowDays: number): IPerformanceByVersionView {
     // ADR 0022 §2.3.1: drawdown / sharpe / sortino / expectancyPerUnitRisk
     // require a per-version equity series that the live engine does not
     // compute; the M7 backtest reporter owns those numbers. Surface `null`
@@ -253,9 +243,7 @@ export function mapPerformanceByVersion(
     // observed in the window" from "0% win rate over a real sample". The prior
     // `'0.000000'` sentinel conflated the two and would silently rank an empty
     // version equal to a fully losing one in dashboard sort orders.
-    const winRate = row.tradeCount > 0
-        ? new Money(row.winCount).div(row.tradeCount).toFixed(6)
-        : null;
+    const winRate = row.tradeCount > 0 ? new Money(row.winCount).div(row.tradeCount).toFixed(6) : null;
 
     return {
         strategyVersionId: String(row.strategyVersionId),
@@ -397,13 +385,7 @@ export const DECISION_VIEW_KEYS: ReadonlyArray<keyof IDecisionView> = [
     'positionId',
 ];
 
-export const ACCOUNT_EQUITY_VIEW_KEYS: ReadonlyArray<keyof IAccountEquityView> = [
-    'equityUsd',
-    'marginUsed',
-    'freeMargin',
-    'openExposureUsd',
-    'asOf',
-];
+export const ACCOUNT_EQUITY_VIEW_KEYS: ReadonlyArray<keyof IAccountEquityView> = ['equityUsd', 'marginUsed', 'freeMargin', 'openExposureUsd', 'asOf'];
 
 export const RISK_STATE_VIEW_KEYS: ReadonlyArray<keyof IRiskStateView> = [
     'date',

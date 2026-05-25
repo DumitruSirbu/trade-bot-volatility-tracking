@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AlertSinkModule } from '../alert/sink/AlertSinkModule';
 import { CLOCK, SystemClock } from '../common/clock/Clock';
 import { AppConfigModule } from '../config/AppConfigModule';
+import { ControlModule } from '../control/ControlModule';
 import { EXCHANGE_CLIENT } from './interface';
 import { RATE_LIMIT_POLICY } from './interface/IRateLimitPolicy';
 import { CcxtBinanceExchangeClient, RateLimitPolicyService } from './service';
@@ -16,12 +17,11 @@ import { CcxtBinanceExchangeClient, RateLimitPolicyService } from './service';
 // funding pollers reach the limiter transitively through the client (every
 // ccxt method goes through `callExchange` which acquires + reconciles).
 @Module({
-    imports: [AppConfigModule, AlertSinkModule],
+    imports: [AppConfigModule, AlertSinkModule, ControlModule],
     providers: [
-        // Locally provided CLOCK so ExchangeModule does not import ControlModule
-        // (would introduce a cycle — ControlModule already imports
-        // AlertSinkModule + downstream consumers route through Exchange). Per
-        // M9 R1 #5 the CLOCK token is a port; multiple providers are fine.
+        // CLOCK is locally provided; ControlModule also exports CLOCK but
+        // Nest's DI scoping resolves the local provider first. Multiple
+        // providers for the same port token are intentional (M9 R1 #5).
         { provide: CLOCK, useClass: SystemClock },
         RateLimitPolicyService,
         {

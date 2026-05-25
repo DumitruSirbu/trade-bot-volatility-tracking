@@ -18,12 +18,7 @@ import { WalkForwardSplitModeEnum } from '../../../backtest/enum/WalkForwardSpli
 
 describe('parseCompareArgs', () => {
     it('parses required flags with default split policy and a label', () => {
-        const args = parseCompareArgs([
-            '--from=2025-01-01T00:00:00Z',
-            '--to=2025-04-01T00:00:00Z',
-            '--versions=1,2,3',
-            '--label=run-A',
-        ]);
+        const args = parseCompareArgs(['--from=2025-01-01T00:00:00Z', '--to=2025-04-01T00:00:00Z', '--versions=1,2,3', '--label=run-A']);
 
         expect(args.fromMs).toBe(Date.parse('2025-01-01T00:00:00Z'));
         expect(args.toMs).toBe(Date.parse('2025-04-01T00:00:00Z'));
@@ -38,11 +33,7 @@ describe('parseCompareArgs', () => {
     });
 
     it('synthesises a runLabel when --label is omitted', () => {
-        const args = parseCompareArgs([
-            '--from=2025-01-01T00:00:00Z',
-            '--to=2025-02-01T00:00:00Z',
-            '--versions=1',
-        ]);
+        const args = parseCompareArgs(['--from=2025-01-01T00:00:00Z', '--to=2025-02-01T00:00:00Z', '--versions=1']);
 
         expect(args.runLabel).toMatch(/^compare-\d+$/);
     });
@@ -52,21 +43,19 @@ describe('parseCompareArgs', () => {
     });
 
     it('rejects when --to <= --from', () => {
-        expect(() =>
-            parseCompareArgs(['--from=2025-04-01T00:00:00Z', '--to=2025-04-01T00:00:00Z', '--versions=1']),
-        ).toThrow(/--to .* must be after --from/);
+        expect(() => parseCompareArgs(['--from=2025-04-01T00:00:00Z', '--to=2025-04-01T00:00:00Z', '--versions=1'])).toThrow(/--to .* must be after --from/);
     });
 
     it('rejects malformed ISO 8601', () => {
-        expect(() =>
-            parseCompareArgs(['--from=not-a-date', '--to=2025-01-01T00:00:00Z', '--versions=1']),
-        ).toThrow(/--from 'not-a-date' is not a valid ISO-8601 timestamp/);
+        expect(() => parseCompareArgs(['--from=not-a-date', '--to=2025-01-01T00:00:00Z', '--versions=1'])).toThrow(
+            /--from 'not-a-date' is not a valid ISO-8601 timestamp/,
+        );
     });
 
     it('rejects unexpected positional arguments', () => {
-        expect(() =>
-            parseCompareArgs(['positional-bad', '--from=2025-01-01T00:00:00Z', '--to=2025-02-01T00:00:00Z', '--versions=1']),
-        ).toThrow(/unexpected positional argument/);
+        expect(() => parseCompareArgs(['positional-bad', '--from=2025-01-01T00:00:00Z', '--to=2025-02-01T00:00:00Z', '--versions=1'])).toThrow(
+            /unexpected positional argument/,
+        );
     });
 });
 
@@ -130,9 +119,9 @@ describe('parseSplitPolicy', () => {
     });
 
     it('rejects non-positive bars in custom JSON', () => {
-        expect(() =>
-            parseSplitPolicy('{"trainBars":0,"validationBars":50,"oosBars":50,"stepBars":50,"mode":"rolling"}'),
-        ).toThrow(/trainBars must be a positive integer/);
+        expect(() => parseSplitPolicy('{"trainBars":0,"validationBars":50,"oosBars":50,"stepBars":50,"mode":"rolling"}')).toThrow(
+            /trainBars must be a positive integer/,
+        );
     });
 });
 

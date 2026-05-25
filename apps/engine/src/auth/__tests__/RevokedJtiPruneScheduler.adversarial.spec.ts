@@ -53,12 +53,7 @@ function buildScheduler(
     appConfig: ReturnType<typeof buildAppConfig>,
     clock: ReturnType<typeof buildClock>,
 ): RevokedJtiPruneScheduler {
-    return new RevokedJtiPruneScheduler(
-        revoked as never,
-        alerts as never,
-        clock as never,
-        appConfig,
-    );
+    return new RevokedJtiPruneScheduler(revoked as never, alerts as never, clock as never, appConfig);
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────────

@@ -409,7 +409,12 @@ export class RiskGateService {
         return { today, openPositions };
     }
 
-    private async firstFailingCheck(intent: IOrderIntent, context: IRiskGateContext, state: ILoadedState, ledger: ReservationLedger): Promise<RejectReasonEnum | null> {
+    private async firstFailingCheck(
+        intent: IOrderIntent,
+        context: IRiskGateContext,
+        state: ILoadedState,
+        ledger: ReservationLedger,
+    ): Promise<RejectReasonEnum | null> {
         const haltReason = await this.firstFailingHaltCheck(context, state);
 
         if (haltReason !== null) {
@@ -550,7 +555,12 @@ export class RiskGateService {
         return null;
     }
 
-    private async checkStatefulLimits(intent: IOrderIntent, context: IRiskGateContext, state: ILoadedState, ledger: ReservationLedger): Promise<RejectReasonEnum | null> {
+    private async checkStatefulLimits(
+        intent: IOrderIntent,
+        context: IRiskGateContext,
+        state: ILoadedState,
+        ledger: ReservationLedger,
+    ): Promise<RejectReasonEnum | null> {
         if (await this.isCooldownActive(intent, context)) {
             return RejectReasonEnum.COOLDOWN_ACTIVE;
         }

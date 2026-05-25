@@ -20,11 +20,7 @@
  * Failure routing: per dev-qa-cycle.md §2.2 — any failure routes to architect, not developer.
  */
 
-import {
-    CoinTierEnum,
-    FlowTypeEnum,
-    RegimeLabelEnum,
-} from '@bot/shared';
+import { CoinTierEnum, FlowTypeEnum, RegimeLabelEnum } from '@bot/shared';
 
 import { Money } from '../../../common/utils/money';
 import { CANDLE_5M_INTERVAL_MS } from '../../../market-data/const/candleConsts';
@@ -63,8 +59,8 @@ function buildParams() {
         funding_rate_suppress_threshold: 0.01,
         candle_interval: '5m' as const,
         slippage_tier1_pct: 0.05,
-        slippage_tier2_pct: 0.10,
-        slippage_tier3_pct: 0.20,
+        slippage_tier2_pct: 0.1,
+        slippage_tier3_pct: 0.2,
         require_oi_available: false,
         oi_rising_skip: false,
         consecutive_loss_halt: 3,
@@ -79,16 +75,18 @@ function buildParams() {
     };
 }
 
-function buildConfig(overrides: Partial<{
-    strategyVersionId: number;
-    fromUtcDate: string;
-    toUtcDate: string;
-    allocatedCapitalUsdt: string;
-    latencyMs: number;
-    enableDepthAwareSlippage: boolean;
-    enableIntrabarStopSimulation: boolean;
-    runLabel: string;
-}> = {}) {
+function buildConfig(
+    overrides: Partial<{
+        strategyVersionId: number;
+        fromUtcDate: string;
+        toUtcDate: string;
+        allocatedCapitalUsdt: string;
+        latencyMs: number;
+        enableDepthAwareSlippage: boolean;
+        enableIntrabarStopSimulation: boolean;
+        runLabel: string;
+    }> = {},
+) {
     return {
         strategyVersionId: 1,
         fromUtcDate: '2024-01-01',
@@ -137,19 +135,21 @@ function buildBookSnapshotEntity(tsMs: number) {
 
 // Builds a minimal BacktestRunnerService with all dependencies mocked.
 // Override any dep by passing it in the deps map.
-function buildRunner(deps: Partial<{
-    strategyVersionRepository: any;
-    instrumentRepository: any;
-    candleLoader: any;
-    indicatorStateBuilder: any;
-    pointInTimeUniverse: any;
-    fundingReplayLoader: any;
-    openInterestRepository: any;
-    bookSnapshotRepository: any;
-    orchestrator: any;
-    metricsComputer: any;
-    strategyRegistry: any;
-}> = {}) {
+function buildRunner(
+    deps: Partial<{
+        strategyVersionRepository: any;
+        instrumentRepository: any;
+        candleLoader: any;
+        indicatorStateBuilder: any;
+        pointInTimeUniverse: any;
+        fundingReplayLoader: any;
+        openInterestRepository: any;
+        bookSnapshotRepository: any;
+        orchestrator: any;
+        metricsComputer: any;
+        strategyRegistry: any;
+    }> = {},
+) {
     const strategyRegistry = deps.strategyRegistry ?? {
         resolve: jest.fn().mockReturnValue({
             strategy: {
@@ -271,25 +271,19 @@ describe('BacktestRunnerService.run — validation', () => {
             },
         });
 
-        await expect(runner.run(buildConfig({ strategyVersionId: 999 }))).rejects.toThrow(
-            'strategy_versions.id=999 not found',
-        );
+        await expect(runner.run(buildConfig({ strategyVersionId: 999 }))).rejects.toThrow('strategy_versions.id=999 not found');
     });
 
     it('throws when toUtcDate is before fromUtcDate', async () => {
         const runner = buildRunner();
 
-        await expect(
-            runner.run(buildConfig({ fromUtcDate: '2024-01-31', toUtcDate: '2024-01-01' })),
-        ).rejects.toThrow();
+        await expect(runner.run(buildConfig({ fromUtcDate: '2024-01-31', toUtcDate: '2024-01-01' }))).rejects.toThrow();
     });
 
     it('throws when toUtcDate equals fromUtcDate (boundary)', async () => {
         const runner = buildRunner();
 
-        await expect(
-            runner.run(buildConfig({ fromUtcDate: '2024-01-15', toUtcDate: '2024-01-15' })),
-        ).rejects.toThrow();
+        await expect(runner.run(buildConfig({ fromUtcDate: '2024-01-15', toUtcDate: '2024-01-15' }))).rejects.toThrow();
     });
 });
 
@@ -394,7 +388,10 @@ describe('BacktestRunnerService.run — instrument seeding', () => {
 describe('BacktestRunnerService.run — universe membership', () => {
     it('dispatches no events when a symbol is absent from tier resolution on all bars', async () => {
         const processEvent = jest.fn().mockResolvedValue({
-            skipped: true, rejectedByGate: false, missedFill: false, filled: false,
+            skipped: true,
+            rejectedByGate: false,
+            missedFill: false,
+            filled: false,
         });
 
         const barOpenTimeMs = new Date('2024-01-15T00:00:00.000Z').getTime();
@@ -1517,14 +1514,30 @@ describe('BacktestRunnerService — force-close survivors at end-of-window (R1b 
             compute: jest.fn().mockImplementation((input: any) => {
                 capturedTrades = input.trades;
                 return {
-                    strategyVersionId: 1, strategyName: 'v1', strategyVersion: 1,
-                    fromUtcDate: '2024-01-01', toUtcDate: '2024-01-31', runLabel: 'test-run',
-                    trades: input.trades, equityCurve: [],
-                    maxDrawdownPct: '0', maxDrawdownDurationDays: 0,
-                    totalTrades: 0, winRate: '0', profitFactor: '0', sharpeRatio: '0',
-                    netPnlUsdt: '0', grossPnlUsdt: '0', feesUsdt: '0', fundingUsdt: '0', slippageCostUsdt: '0',
-                    avgReturnPct: '0', skippedTriggerCount: 0, rejectedByGateCount: 0,
-                    missedLimitFillCount: 0, lowFidelityTradeCount: 0,
+                    strategyVersionId: 1,
+                    strategyName: 'v1',
+                    strategyVersion: 1,
+                    fromUtcDate: '2024-01-01',
+                    toUtcDate: '2024-01-31',
+                    runLabel: 'test-run',
+                    trades: input.trades,
+                    equityCurve: [],
+                    maxDrawdownPct: '0',
+                    maxDrawdownDurationDays: 0,
+                    totalTrades: 0,
+                    winRate: '0',
+                    profitFactor: '0',
+                    sharpeRatio: '0',
+                    netPnlUsdt: '0',
+                    grossPnlUsdt: '0',
+                    feesUsdt: '0',
+                    fundingUsdt: '0',
+                    slippageCostUsdt: '0',
+                    avgReturnPct: '0',
+                    skippedTriggerCount: 0,
+                    rejectedByGateCount: 0,
+                    missedLimitFillCount: 0,
+                    lowFidelityTradeCount: 0,
                 };
             }),
         };

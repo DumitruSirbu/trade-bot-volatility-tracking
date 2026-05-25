@@ -7,16 +7,9 @@
  */
 
 import { RateLimitPolicyService } from '../RateLimitPolicyService';
-import {
-    ExchangeRateLimitExhaustedException,
-    SymbolRateLimitExhaustedException,
-} from '../../exception';
+import { ExchangeRateLimitExhaustedException, SymbolRateLimitExhaustedException } from '../../exception';
 import { IRateLimitHeaders, IRateLimitedCall } from '../../interface/IRateLimitPolicy';
-import {
-    ORDERS_10S_PUBLISHED_LIMIT,
-    RATE_LIMIT_SAFETY_MARGIN,
-    REQUEST_WEIGHT_1M_PUBLISHED_LIMIT,
-} from '../../const/rateLimitConsts';
+import { ORDERS_10S_PUBLISHED_LIMIT, RATE_LIMIT_SAFETY_MARGIN, REQUEST_WEIGHT_1M_PUBLISHED_LIMIT } from '../../const/rateLimitConsts';
 
 // ─── factory helpers ──────────────────────────────────────────────────────────
 
@@ -100,9 +93,7 @@ describe('RateLimitPolicyService — adversarial', () => {
             }
 
             // OPERATE — next order must fail-fast
-            await expect(service.acquire(buildOrderCall())).rejects.toThrow(
-                ExchangeRateLimitExhaustedException,
-            );
+            await expect(service.acquire(buildOrderCall())).rejects.toThrow(ExchangeRateLimitExhaustedException);
         });
 
         it('thrown exception carries the failing class name and non-negative remaining', async () => {
@@ -125,6 +116,45 @@ describe('RateLimitPolicyService — adversarial', () => {
             expect(caught).not.toBeNull();
             expect(caught?.failingClass).toMatch(/ORDERS_10S/);
             expect(caught?.remainingTokens).toBeGreaterThanOrEqual(0);
+        });
+    });
+
+    // ── Per-symbol exhaustion in await-mode waits/refills, not fail-fast ─────
+
+    describe('per-symbol bucket exhaustion in await mode', () => {
+        it('await-mode symbol-scoped call refills and succeeds before deadline', async () => {
+            // BUILD — drain BTC's per-symbol ORDERS_10S bucket in fail-fast mode first
+            const startMs = 5_000_000;
+            let currentMs = startMs;
+            const clock = { now: jest.fn<Date, []>(() => new Date(currentMs)) };
+            const alerts = { publish: jest.fn().mockResolvedValue(undefined) };
+            const service = new RateLimitPolicyService(clock as never, alerts as never);
+
+            const drainCall = buildOrderCall({ symbol: 'BTCUSDT', mode: 'fail-fast' });
+            let drained = 0;
+            for (let i = 0; i < ORDERS_10S_CAPACITY; i++) {
+                try {
+                    await service.acquire(drainCall);
+                    drained++;
+                } catch (err) {
+                    if (err instanceof SymbolRateLimitExhaustedException) {
+                        break;
+                    }
+                    throw err;
+                }
+            }
+
+            // CHECK — at least one fail-fast attempt was throttled at the
+            // per-symbol bucket. Now advance the clock past one ORDERS_10S
+            // window and confirm an await-mode order on the same symbol
+            // resolves (it would have wrongly fail-fasted under the previous
+            // throw-from-findInsufficientSymbolBucket bug).
+            expect(drained).toBeGreaterThan(0);
+
+            currentMs += 10_001;
+
+            const awaitCall = buildOrderCall({ symbol: 'BTCUSDT', mode: 'await', maxWaitMs: 60_000 });
+            await expect(service.acquire(awaitCall)).resolves.toBeUndefined();
         });
     });
 
@@ -259,9 +289,7 @@ describe('RateLimitPolicyService — adversarial', () => {
             service.reconcileFromHeaders(buildHeaders({ responseStatus: 429, retryAfterSec: 60 }));
 
             // CHECK — next acquire fails immediately (frozen)
-            await expect(service.acquire(buildOrderCall())).rejects.toThrow(
-                ExchangeRateLimitExhaustedException,
-            );
+            await expect(service.acquire(buildOrderCall())).rejects.toThrow(ExchangeRateLimitExhaustedException);
 
             const snap = service.snapshot();
             expect(snap.frozenUntilMs).not.toBeNull();
@@ -322,9 +350,7 @@ describe('RateLimitPolicyService — adversarial', () => {
             const { parseRateLimitHeaders } = require('../../utils/parseRateLimitHeaders');
 
             // OPERATE + CHECK
-            expect(() =>
-                parseRateLimitHeaders({ 'x-mbx-used-weight-1m': 'not-a-number' }, 200),
-            ).not.toThrow();
+            expect(() => parseRateLimitHeaders({ 'x-mbx-used-weight-1m': 'not-a-number' }, 200)).not.toThrow();
 
             const result = parseRateLimitHeaders({ 'x-mbx-used-weight-1m': 'not-a-number' }, 200);
             expect(result.usedWeight1m).toBeNull();

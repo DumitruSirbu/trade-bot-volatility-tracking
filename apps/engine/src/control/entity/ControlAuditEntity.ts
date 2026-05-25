@@ -14,7 +14,8 @@ export type ControlAuditActionDb =
     | 'LOGIN_FAILURE'
     | 'LOGIN_THROTTLED'
     | 'KEY_PERMISSION_ASSERTION_FAILED'
-    | 'KEY_PERMISSION_ASSERTION_SKIPPED';
+    | 'KEY_PERMISSION_ASSERTION_SKIPPED'
+    | 'RATE_LIMIT_HALT_AUTO_CLEARED';
 
 // M9 W3 (ADR 0021 §2.3). Persistence projection of `control_audit`. One row
 // per accepted halt/resume toggle — operator-driven (via /v1/control/halt) or

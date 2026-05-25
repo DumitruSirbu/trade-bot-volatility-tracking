@@ -121,10 +121,7 @@ class FakePositionRepository {
         return this.open;
     }
 
-    async findClosedPage(
-        cursor: { closedAt: Date; id: number } | null,
-        pageSize: number,
-    ): Promise<PositionEntity[]> {
+    async findClosedPage(cursor: { closedAt: Date; id: number } | null, pageSize: number): Promise<PositionEntity[]> {
         const sorted = [...this.closed].sort((left, right) => {
             const leftTs = (left.closedAt ?? left.openedAt).getTime();
             const rightTs = (right.closedAt ?? right.openedAt).getTime();
@@ -136,17 +133,18 @@ class FakePositionRepository {
             return right.id - left.id;
         });
 
-        const filtered = cursor === null
-            ? sorted
-            : sorted.filter((row) => {
-                const ts = (row.closedAt ?? row.openedAt).getTime();
+        const filtered =
+            cursor === null
+                ? sorted
+                : sorted.filter((row) => {
+                      const ts = (row.closedAt ?? row.openedAt).getTime();
 
-                if (ts < cursor.closedAt.getTime()) {
-                    return true;
-                }
+                      if (ts < cursor.closedAt.getTime()) {
+                          return true;
+                      }
 
-                return ts === cursor.closedAt.getTime() && row.id < cursor.id;
-            });
+                      return ts === cursor.closedAt.getTime() && row.id < cursor.id;
+                  });
 
         return filtered.slice(0, pageSize);
     }
@@ -163,11 +161,7 @@ class FakePositionRepository {
 class FakeDecisionRepository {
     rows: DecisionEntity[] = [];
 
-    async findPage(
-        cursor: { ts: Date; id: number } | null,
-        pageSize: number,
-        filters: { symbol?: string; flowType?: string },
-    ): Promise<DecisionEntity[]> {
+    async findPage(cursor: { ts: Date; id: number } | null, pageSize: number, filters: { symbol?: string; flowType?: string }): Promise<DecisionEntity[]> {
         let candidates = [...this.rows].sort((left, right) => {
             const diff = right.ts.getTime() - left.ts.getTime();
 
@@ -237,10 +231,7 @@ function buildHarness(): {
     const versions = new FakeStrategyVersionRepository();
     const cursors = new CursorCodec(new StubSecretProvider());
 
-    const positionsController = new PositionsController(
-        positions as unknown as PositionRepository,
-        cursors,
-    );
+    const positionsController = new PositionsController(positions as unknown as PositionRepository, cursors);
     const metricsController = new MetricsController(
         decisions as unknown as DecisionRepository,
         positions as unknown as PositionRepository,

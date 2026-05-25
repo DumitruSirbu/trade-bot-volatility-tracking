@@ -38,6 +38,12 @@ const OPAQUE_RUN_REGEX = new RegExp(`[A-Za-z0-9_+/=-]{${MIN_OPAQUE_RUN_LEN},}`, 
 // The whole `KEY=value` substring (up to the first whitespace) is redacted.
 const ENV_DUMP_REGEX = /\b([A-Z][A-Z0-9_]*(?:SECRET|KEY|TOKEN|PASSWORD|PASS))=\S+/g;
 
+// Telegram bot-token shape: `bot<digits>:<base64url-ish>{30+}`. Catches any
+// token-bearing payload even when the configured literal differs (e.g. a
+// stale env, a token from a copied log line). Conservative — `bot` prefix +
+// numeric id + colon is unique enough to avoid collateral redaction.
+const TELEGRAM_BOT_TOKEN_REGEX = /bot[0-9]+:[A-Za-z0-9_-]{30,}/g;
+
 export interface IRedactorOptions {
     // The runtime TELEGRAM_BOT_TOKEN value, redacted verbatim wherever it
     // appears. Optional because dev runs without a token.
@@ -76,6 +82,7 @@ export function redactString(input: string, tokenLiteral: string): string {
     }
 
     out = out.replace(ENV_DUMP_REGEX, (_match, key: string) => `${key}=${REDACTED}`);
+    out = out.replace(TELEGRAM_BOT_TOKEN_REGEX, REDACTED);
     out = out.replace(JWT_REGEX, REDACTED);
     out = out.replace(OPAQUE_RUN_REGEX, REDACTED);
 

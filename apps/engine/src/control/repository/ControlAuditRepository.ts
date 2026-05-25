@@ -78,6 +78,17 @@ export interface IAppendKeyPermissionAuditParams {
     previousState: 'RUNNING' | 'HALTED';
 }
 
+// M11a W1.4 (ADR 0030 §2.6.2). The rate-limit policy writes one of these when
+// the freeze window expires without a further 429/418; the row's `new_state`
+// is RUNNING and the previous state is HALTED (the engage row was already
+// written through `appendProgrammatic` with source=RATE_LIMIT). Actor is the
+// SYSTEM:RATE_LIMIT sentinel, source IP is null (no request boundary).
+export interface IAppendRateLimitAutoClearedParams {
+    occurredAt: Date;
+    reason: string;
+    correlationEventId: string | null;
+}
+
 @Injectable()
 export class ControlAuditRepository {
     // Repository is exposed read-only to the methods below; the @InjectRepository
@@ -186,6 +197,25 @@ export class ControlAuditRepository {
         return toAuditEntry(saved);
     }
 
+    async appendRateLimitAutoCleared(params: IAppendRateLimitAutoClearedParams): Promise<IHaltAuditEntry> {
+        const row = this.repository.create({
+            occurredAt: params.occurredAt,
+            actorSub: `${PROGRAMMATIC_ACTOR_PREFIX}${HaltSourceEnum.RATE_LIMIT}`,
+            actorJti: PROGRAMMATIC_JTI,
+            sourceIp: null,
+            action: 'RATE_LIMIT_HALT_AUTO_CLEARED',
+            reason: truncateReason(params.reason),
+            flattenRequested: false,
+            previousState: 'HALTED',
+            newState: 'RUNNING',
+            correlationEventId: params.correlationEventId,
+        });
+
+        const saved = await this.repository.save(row);
+
+        return toAuditEntry(saved);
+    }
+
     async findLatest(): Promise<IHaltAuditEntry | null> {
         const row = await this.repository.findOne({
             where: {},
@@ -286,6 +316,8 @@ function mapDbActionToEnum(action: ControlAuditActionDb): HaltAuditActionEnum {
             return HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_FAILED;
         case 'KEY_PERMISSION_ASSERTION_SKIPPED':
             return HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_SKIPPED;
+        case 'RATE_LIMIT_HALT_AUTO_CLEARED':
+            return HaltAuditActionEnum.RATE_LIMIT_HALT_AUTO_CLEARED;
     }
 }
 

@@ -100,7 +100,11 @@ function makeService(
     const plan = overrides.plan ?? buildReducePlan();
     const policyRouter = { plan: jest.fn().mockReturnValue(plan) } as unknown as OrderPolicyRouter;
 
-    const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
+    const localProtectiveMonitor = new LocalProtectiveMonitor(
+        { findById: jest.fn().mockResolvedValue(null) } as never,
+        { evaluate: jest.fn() } as never,
+        new EventEmitter2(),
+    );
     const haltFlag = new HaltFlagService();
 
     const exchangeClient = {

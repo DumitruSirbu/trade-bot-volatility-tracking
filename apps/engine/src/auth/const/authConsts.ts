@@ -62,3 +62,9 @@ export const LOGIN_GLOBAL_ALERT_COALESCE_MS = 60_000;
 // the login path. 1024 bytes comfortably exceeds any realistic bootstrap
 // secret (the env enforces a 32-byte minimum; humans rarely paste > 256).
 export const LOGIN_SECRET_MAX_LEN = 1024;
+
+// M11a W1.9 — synthetic source-ip used for the cross-IP global-ceiling row.
+// The global window has no real IP to key off, but the composite PK requires
+// non-null `source_ip`. Picked to be unambiguously non-routable so a future
+// operator inspection cannot mistake it for a real source.
+export const GLOBAL_ROW_SOURCE_IP = '__GLOBAL__';

@@ -95,8 +95,10 @@ function renderPromotedRow(row: StrategyVersionEntity): string {
 }
 
 function renderRejectionTable(outcome: IPromotionGateOutcome): string {
-    const header = '| # | criterion                       | severity     | threshold                                                | observed                                                 |';
-    const sep = '|---|---------------------------------|--------------|----------------------------------------------------------|----------------------------------------------------------|';
+    const header =
+        '| # | criterion                       | severity     | threshold                                                | observed                                                 |';
+    const sep =
+        '|---|---------------------------------|--------------|----------------------------------------------------------|----------------------------------------------------------|';
     const rows: string[] = [
         `Promotion rejected. versionId=${outcome.versionId} reportId=${outcome.reportId} decision=${outcome.decision}`,
         `Passed criteria: ${outcome.passedCriteria.join(', ') || '(none)'}`,
@@ -107,7 +109,9 @@ function renderRejectionTable(outcome: IPromotionGateOutcome): string {
     ].filter((line) => line !== '');
 
     for (const failure of outcome.failedCriteria) {
-        rows.push(`| ${pad(String(failure.index), 1)} | ${pad(failure.name, 31)} | ${pad(failure.severity, 12)} | ${pad(failure.threshold, 56)} | ${pad(failure.observed, 56)} |`);
+        rows.push(
+            `| ${pad(String(failure.index), 1)} | ${pad(failure.name, 31)} | ${pad(failure.severity, 12)} | ${pad(failure.threshold, 56)} | ${pad(failure.observed, 56)} |`,
+        );
     }
 
     return rows.join('\n');

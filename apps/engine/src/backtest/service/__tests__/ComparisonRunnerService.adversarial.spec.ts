@@ -99,10 +99,7 @@ function buildRequest(overrides: Partial<IComparisonRunRequest> = {}): IComparis
     };
 }
 
-function buildService(
-    tape: any[],
-    replayFactory: (versionId: number) => any = () => buildEmptyReport(1),
-): ComparisonRunnerService {
+function buildService(tape: any[], replayFactory: (versionId: number) => any = () => buildEmptyReport(1)): ComparisonRunnerService {
     const backtestRunner = {
         recordEventTape: jest.fn().mockResolvedValue(tape),
         replayTape: jest.fn().mockImplementation(async (config: any) => replayFactory(config.strategyVersionId)),
@@ -212,17 +209,13 @@ describe('ComparisonRunnerService — adversarial inputs', () => {
         it('throws when rangeToMs <= rangeFromMs', async () => {
             const service = buildService([]);
 
-            await expect(
-                service.runComparison(buildRequest({ rangeFromMs: 1000, rangeToMs: 1000 })),
-            ).rejects.toThrow();
+            await expect(service.runComparison(buildRequest({ rangeFromMs: 1000, rangeToMs: 1000 }))).rejects.toThrow();
         });
 
         it('throws when candidates array is empty', async () => {
             const service = buildService([]);
 
-            await expect(
-                service.runComparison(buildRequest({ candidates: [] })),
-            ).rejects.toThrow();
+            await expect(service.runComparison(buildRequest({ candidates: [] }))).rejects.toThrow();
         });
     });
 });

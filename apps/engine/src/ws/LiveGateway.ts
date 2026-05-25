@@ -1,14 +1,7 @@
 import { AuthFailureReasonEnum, AuthScopeEnum, IAuthSubject, WsRoomEnum } from '@bot/shared';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import {
-    OnGatewayConnection,
-    OnGatewayDisconnect,
-    OnGatewayInit,
-    SubscribeMessage,
-    WebSocketGateway,
-    WebSocketServer,
-} from '@nestjs/websockets';
+import { OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit, SubscribeMessage, WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
 
 import { AUTH_CORS_ALLOWLIST_ENV } from '../auth/const/authConsts';
 import { POSITION_OPENED_EVENT, POSITION_CLOSED_EVENT } from '../common/const';
@@ -353,9 +346,7 @@ export class LiveGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         // directly. Fall back to `.of(LIVE_NAMESPACE)` only if a test stub
         // exposes the root-Server shape.
         const namespaceLike =
-            typeof this.server.of === 'function'
-                ? this.server.of(LIVE_NAMESPACE)
-                : (this.server as unknown as { sockets: Map<string, ILiveSocket> });
+            typeof this.server.of === 'function' ? this.server.of(LIVE_NAMESPACE) : (this.server as unknown as { sockets: Map<string, ILiveSocket> });
 
         const sockets = namespaceLike.sockets as Map<string, ILiveSocket>;
 
@@ -402,7 +393,6 @@ export class LiveGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     getRuntimeForTest(socketId: string): ISocketRuntime | undefined {
         return this.runtimes.get(socketId);
     }
-
 }
 
 function readHandshakeToken(socket: ILiveSocket): string | undefined {

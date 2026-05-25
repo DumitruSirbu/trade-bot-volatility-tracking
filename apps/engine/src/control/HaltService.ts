@@ -248,6 +248,30 @@ export class HaltService {
     // RiskGateService itself). This is a pure in-memory state notation so the
     // read-API renders the right source — `lastTransitionAuditId` stays empty
     // because no audit row exists for this transition.
+    // M11a W1.4 (ADR 0030 §2.6.2). The rate-limit auto-clear path notifies
+    // HaltService that the in-process flag has transitioned from HALTED back
+    // to RUNNING without an operator-issued resume. Mirrors
+    // `notePragmaticTransition` — pure in-memory state notation; the durable
+    // audit row is written by `RateLimitHaltAdapter.autoClear` directly.
+    notePragmaticAutoClear(source: HaltSourceEnum, reason: string, occurredAtMs: number): void {
+        const synthetic: IHaltAuditEntry = {
+            id: '',
+            occurredAt: new Date(occurredAtMs).toISOString(),
+            actorSub: `SYSTEM:${source}`,
+            actorJti: '',
+            sourceIp: null,
+            action: HaltAuditActionEnum.RESUME,
+            reason,
+            flattenRequested: false,
+            previousState: 'halted',
+            newState: 'running',
+            correlationEventId: null,
+        };
+
+        this.lastTransition = synthetic;
+        this.lastSource = source;
+    }
+
     notePragmaticTransition(source: HaltSourceEnum, reason: string, occurredAtMs: number): void {
         const synthetic: IHaltAuditEntry = {
             id: '',

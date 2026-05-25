@@ -10,12 +10,14 @@ import { CLOCK, SystemClock } from '../common/clock/Clock';
 import { CursorCodec } from '../read-api/pagination/CursorCodec';
 import { LoginRateLimitStateEntity } from '../auth/entity/LoginRateLimitStateEntity';
 import { LoginRateLimitStateRepository } from '../auth/repository/LoginRateLimitStateRepository';
+import { RATE_LIMIT_HALT_PORT } from '../exchange/interface/IRateLimitHaltPort';
 import { ControlAuditEntity } from './entity/ControlAuditEntity';
 import { ControlAuditRepository } from './repository/ControlAuditRepository';
 import { HaltController } from './HaltController';
 import { FLATTEN_COORDINATOR, LoggingFlattenCoordinator } from './interface/IFlattenCoordinator';
 import { HaltRateLimiter } from './HaltRateLimiter';
 import { HaltService } from './HaltService';
+import { RateLimitHaltAdapter } from './RateLimitHaltAdapter';
 
 // M9 W3. Wires the kill-switch control plane:
 //
@@ -70,7 +72,12 @@ import { HaltService } from './HaltService';
         HaltService,
         { provide: CLOCK, useClass: SystemClock },
         { provide: FLATTEN_COORDINATOR, useClass: LoggingFlattenCoordinator },
+        // M11a W1.4 (ADR 0030 §2.6.2) — port impl consumed by ExchangeModule's
+        // RateLimitPolicyService. Exposed via the RATE_LIMIT_HALT_PORT token
+        // so the exchange module never imports control directly.
+        RateLimitHaltAdapter,
+        { provide: RATE_LIMIT_HALT_PORT, useExisting: RateLimitHaltAdapter },
     ],
-    exports: [HaltService, ControlAuditRepository, CLOCK],
+    exports: [HaltService, ControlAuditRepository, CLOCK, RATE_LIMIT_HALT_PORT],
 })
 export class ControlModule {}

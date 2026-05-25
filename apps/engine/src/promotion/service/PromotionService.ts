@@ -118,7 +118,9 @@ export class PromotionService {
 
                 const saved = await manager.save(StrategyVersionEntity, candidate);
 
-                this.logger.log(`promoted version=${versionId} name=${candidate.name} reportId=${reportId} archivedIncumbent=${incumbent?.id ?? 'none'} criteriaPassed=${outcome.passedCriteria.length}`);
+                this.logger.log(
+                    `promoted version=${versionId} name=${candidate.name} reportId=${reportId} archivedIncumbent=${incumbent?.id ?? 'none'} criteriaPassed=${outcome.passedCriteria.length}`,
+                );
 
                 return saved;
             });
@@ -237,13 +239,17 @@ export class PromotionService {
     // gate's hydrator.
     private async requireReportPromotesVersion(reportRow: ComparisonReportEntity, versionId: number): Promise<void> {
         if (!reportRow.versionIds.includes(versionId)) {
-            throw new PromotionStateException(`PromotionService: comparison report ${reportRow.id} does not include version ${versionId} (versionIds=[${reportRow.versionIds.join(',')}])`);
+            throw new PromotionStateException(
+                `PromotionService: comparison report ${reportRow.id} does not include version ${versionId} (versionIds=[${reportRow.versionIds.join(',')}])`,
+            );
         }
 
         const decision = await this.readPromotionDecision(reportRow, versionId);
 
         if (decision !== 'promote') {
-            throw new PromotionStateException(`PromotionService: comparison report ${reportRow.id} does not promote version ${versionId} (decision=${decision ?? 'missing'})`);
+            throw new PromotionStateException(
+                `PromotionService: comparison report ${reportRow.id} does not promote version ${versionId} (decision=${decision ?? 'missing'})`,
+            );
         }
     }
 

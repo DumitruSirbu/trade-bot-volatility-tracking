@@ -19,10 +19,7 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export class BacktestEquityCurve {
     constructor(private readonly startingCapitalUsdt: MoneyValue) {}
 
-    build(
-        completedTrades: readonly IBacktestTradeResult[],
-        unrealizedByDate: Map<string, MoneyValue>,
-    ): IBacktestEquityPoint[] {
+    build(completedTrades: readonly IBacktestTradeResult[], unrealizedByDate: Map<string, MoneyValue>): IBacktestEquityPoint[] {
         const dayKeys = this.collectDayKeys(completedTrades, unrealizedByDate);
         if (dayKeys.length === 0) {
             return [];
@@ -89,10 +86,7 @@ export class BacktestEquityCurve {
         };
     }
 
-    private collectDayKeys(
-        completedTrades: readonly IBacktestTradeResult[],
-        unrealizedByDate: Map<string, MoneyValue>,
-    ): string[] {
+    private collectDayKeys(completedTrades: readonly IBacktestTradeResult[], unrealizedByDate: Map<string, MoneyValue>): string[] {
         const keys = new Set<string>();
         for (const trade of completedTrades) {
             keys.add(this.toUtcDate(trade.closedAtMs));

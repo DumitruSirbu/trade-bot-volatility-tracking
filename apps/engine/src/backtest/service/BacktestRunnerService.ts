@@ -186,7 +186,9 @@ export class BacktestRunnerService {
         const tradeMetadata: Map<string, ITradeMetadata> = new Map();
         const dailyTierCache: Map<string, Map<string, CoinTierEnum>> = new Map();
 
-        this.logger.log(`backtest run=${config.runLabel} version=${strategyVersion.name}:${strategyVersion.version} symbols=${symbols.length} mode=${mode.kind}`);
+        this.logger.log(
+            `backtest run=${config.runLabel} version=${strategyVersion.name}:${strategyVersion.version} symbols=${symbols.length} mode=${mode.kind}`,
+        );
 
         for (const symbol of symbols) {
             const ctx: ISymbolReplayContext = {
@@ -477,13 +479,7 @@ export class BacktestRunnerService {
     // of routing into the orchestrator. flowType is classified at trigger time (the same
     // way the orchestrator does in pass 2) so the tape can be filtered by flow without
     // re-classifying.
-    private recordTriggerEvent(
-        ctx: ISymbolReplayContext,
-        bar: ICandle,
-        snapshot: IIndicatorSnapshot,
-        data: ISymbolReplayData,
-        tier: CoinTierEnum,
-    ): void {
+    private recordTriggerEvent(ctx: ISymbolReplayContext, bar: ICandle, snapshot: IIndicatorSnapshot, data: ISymbolReplayData, tier: CoinTierEnum): void {
         if (ctx.mode.kind !== 'record') {
             return;
         }

@@ -175,7 +175,10 @@ function parseIso8601(value: string, flagName: string): number {
 // Accepts either `id,id,id` (all numeric) or `name:version,name:version,...`. Mixing the
 // two forms is rejected so the parser stays unambiguous.
 export function parseVersionsArg(raw: string): IVersionSpec[] {
-    const tokens = raw.split(',').map((token) => token.trim()).filter((token) => token.length > 0);
+    const tokens = raw
+        .split(',')
+        .map((token) => token.trim())
+        .filter((token) => token.length > 0);
 
     if (tokens.length === 0) {
         throw new Error('--versions must list at least one version');
@@ -297,9 +300,7 @@ function assertWithinArtefactRoot(candidate: string): void {
     const rel = relativePath(BACKTEST_ARTEFACT_ROOT, candidate);
 
     if (rel.startsWith('..') || rel === '' || resolvePath(BACKTEST_ARTEFACT_ROOT, rel) !== candidate) {
-        throw new ArtefactPathOutsideRootException(
-            `artefact path '${candidate}' resolves outside BACKTEST_ARTEFACT_ROOT='${BACKTEST_ARTEFACT_ROOT}'`,
-        );
+        throw new ArtefactPathOutsideRootException(`artefact path '${candidate}' resolves outside BACKTEST_ARTEFACT_ROOT='${BACKTEST_ARTEFACT_ROOT}'`);
     }
 }
 
@@ -327,16 +328,12 @@ function serialiseReport(report: IComparisonReport): Record<string, unknown> {
         outcomesByVersion: Array.from(outcome.outcomesByVersion.entries()),
     }));
 
-    const regimeBreakdown: Array<[number, unknown]> | null = report.regimeBreakdown === null
-        ? null
-        : Array.from(report.regimeBreakdown.entries()).map(([versionId, metrics]) => [
-              versionId,
-              { buckets: Array.from(metrics.buckets.entries()) },
-          ]);
+    const regimeBreakdown: Array<[number, unknown]> | null =
+        report.regimeBreakdown === null
+            ? null
+            : Array.from(report.regimeBreakdown.entries()).map(([versionId, metrics]) => [versionId, { buckets: Array.from(metrics.buckets.entries()) }]);
 
-    const tailRiskByVersion: Array<[number, unknown]> | null = report.tailRiskByVersion === null
-        ? null
-        : Array.from(report.tailRiskByVersion.entries());
+    const tailRiskByVersion: Array<[number, unknown]> | null = report.tailRiskByVersion === null ? null : Array.from(report.tailRiskByVersion.entries());
 
     return {
         runId: report.runId,
@@ -487,7 +484,9 @@ function renderSummaryTable(report: IComparisonReport): string {
         const meanSharpe = averageNumeric(cells.map((c) => c.sharpeAnnualized));
         const expectancyR = computeExpectancyR(report, versionRef.versionId);
 
-        rows.push(`| ${pad(String(versionRef.versionId), 9)} | ${pad(`${versionRef.name}:${versionRef.version}`, 12)} | ${pad(String(trades), 6)} | ${pad(expectancyR.toFixed(4), 11)} | ${pad(meanPf.toFixed(3), 7)} | ${pad(meanSharpe.toFixed(4), 8)} |`);
+        rows.push(
+            `| ${pad(String(versionRef.versionId), 9)} | ${pad(`${versionRef.name}:${versionRef.version}`, 12)} | ${pad(String(trades), 6)} | ${pad(expectancyR.toFixed(4), 11)} | ${pad(meanPf.toFixed(3), 7)} | ${pad(meanSharpe.toFixed(4), 8)} |`,
+        );
     }
 
     if (report.pairwiseStats !== null && report.pairwiseStats.length > 0) {

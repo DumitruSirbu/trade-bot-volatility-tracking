@@ -38,14 +38,7 @@ import { ReservationLedger } from '../../src/risk/service/ReservationLedger';
 import { RiskGateService } from '../../src/risk/service/RiskGateService';
 import { SlotManager } from '../../src/risk/service/SlotManager';
 import { StressHaltEvaluator } from '../../src/risk/service/StressHaltEvaluator';
-import {
-    buildGateContext,
-    buildOrderIntent,
-    buildProposedExit,
-    buildRiskStateDay,
-    buildRiskStatePort,
-    buildSizing,
-} from './support/fixtures';
+import { buildGateContext, buildOrderIntent, buildProposedExit, buildRiskStateDay, buildRiskStatePort, buildSizing } from './support/fixtures';
 import { buildSnapshot } from '../strategy/support/fixtures';
 
 interface IEmittedEvent {

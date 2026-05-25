@@ -1,12 +1,6 @@
 import { Logger } from '@nestjs/common';
 
-import {
-    IClockMs,
-    WS_EVENT_STREAM_LAGGED,
-    WS_QUEUE_FULL_DISCONNECT_MS,
-    WS_QUEUE_HARD_CAP,
-    WS_QUEUE_SOFT_CAP,
-} from '../WsConstants';
+import { IClockMs, WS_EVENT_STREAM_LAGGED, WS_QUEUE_FULL_DISCONNECT_MS, WS_QUEUE_HARD_CAP, WS_QUEUE_SOFT_CAP } from '../WsConstants';
 
 // M9 W5 (ADR 0023 §2.4). Bounded per-socket outbound queue with three layers
 // of backpressure:
@@ -46,7 +40,10 @@ export class PerSocketQueue {
 
     private laggedNoticeSentAt: number | null = null;
 
-    constructor(private readonly owner: IQueueOwner, private readonly clock: IClockMs) {
+    constructor(
+        private readonly owner: IQueueOwner,
+        private readonly clock: IClockMs,
+    ) {
         this.logger = new Logger(`PerSocketQueue[${owner.socketId}]`);
     }
 

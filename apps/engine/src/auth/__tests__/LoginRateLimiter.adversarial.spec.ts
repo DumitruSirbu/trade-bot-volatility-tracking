@@ -9,12 +9,7 @@
 import { HttpException } from '@nestjs/common';
 
 import { LoginRateLimiter } from '../LoginRateLimiter';
-import {
-    LOGIN_PER_IP_BURST_MAX,
-    LOGIN_PER_IP_BURST_WINDOW_MS,
-    LOGIN_PER_IP_SUSTAINED_MAX,
-    LOGIN_PER_IP_SUSTAINED_WINDOW_MS,
-} from '../const/authConsts';
+import { LOGIN_PER_IP_BURST_MAX, LOGIN_PER_IP_BURST_WINDOW_MS, LOGIN_PER_IP_SUSTAINED_MAX, LOGIN_PER_IP_SUSTAINED_WINDOW_MS } from '../const/authConsts';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -52,10 +47,7 @@ describe('LoginRateLimiter — persistence adversarial (M11a W1.9)', () => {
             const ip = '1.2.3.4';
             const nowMs = Date.now();
             // Fill the burst window with LOGIN_PER_IP_BURST_MAX timestamps all within the window
-            const burstTimestamps = Array.from(
-                { length: LOGIN_PER_IP_BURST_MAX },
-                (_, i) => nowMs - (LOGIN_PER_IP_BURST_WINDOW_MS - 100 - i * 10),
-            );
+            const burstTimestamps = Array.from({ length: LOGIN_PER_IP_BURST_MAX }, (_, i) => nowMs - (LOGIN_PER_IP_BURST_WINDOW_MS - 100 - i * 10));
 
             const persistence = buildPersistence([{ sourceIp: ip, scope: 'burst', timestampsMs: burstTimestamps }]);
             const limiter = buildLimiter(persistence);
@@ -69,10 +61,7 @@ describe('LoginRateLimiter — persistence adversarial (M11a W1.9)', () => {
             // BUILD — old timestamps outside the burst window (should be pruned on enforce)
             const ip = '5.6.7.8';
             const nowMs = Date.now();
-            const staleTimestamps = Array.from(
-                { length: LOGIN_PER_IP_BURST_MAX + 1 },
-                (_, i) => nowMs - LOGIN_PER_IP_BURST_WINDOW_MS - 1000 - i,
-            );
+            const staleTimestamps = Array.from({ length: LOGIN_PER_IP_BURST_MAX + 1 }, (_, i) => nowMs - LOGIN_PER_IP_BURST_WINDOW_MS - 1000 - i);
 
             const persistence = buildPersistence([{ sourceIp: ip, scope: 'burst', timestampsMs: staleTimestamps }]);
             const limiter = buildLimiter(persistence);
@@ -91,7 +80,10 @@ describe('LoginRateLimiter — persistence adversarial (M11a W1.9)', () => {
             const resolvers: Array<() => void> = [];
             const slowPersistence = buildPersistence();
             slowPersistence.upsert.mockImplementation(
-                () => new Promise<void>((resolve) => { resolvers.push(resolve); }),
+                () =>
+                    new Promise<void>((resolve) => {
+                        resolvers.push(resolve);
+                    }),
             );
 
             const limiter = buildLimiter(slowPersistence);
@@ -143,10 +135,7 @@ describe('LoginRateLimiter — persistence adversarial (M11a W1.9)', () => {
             await new Promise((resolve) => setImmediate(resolve));
 
             // CHECK — upsert should be called for burst + sustained + global (3 scopes)
-            expect(persistence.upsert).toHaveBeenCalledWith(
-                expect.objectContaining({ sourceIp: ip, scope: 'burst' }),
-                expect.any(Date),
-            );
+            expect(persistence.upsert).toHaveBeenCalledWith(expect.objectContaining({ sourceIp: ip, scope: 'burst' }), expect.any(Date));
         });
     });
 

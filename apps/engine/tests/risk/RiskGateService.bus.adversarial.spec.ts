@@ -17,14 +17,7 @@ import { ReservationLedger } from '../../src/risk/service/ReservationLedger';
 import { RiskGateService } from '../../src/risk/service/RiskGateService';
 import { SlotManager } from '../../src/risk/service/SlotManager';
 import { StressHaltEvaluator } from '../../src/risk/service/StressHaltEvaluator';
-import {
-    buildGateContext,
-    buildOrderIntent,
-    buildProposedExit,
-    buildRiskStatePort,
-    buildRiskStateDay,
-    buildSizing,
-} from './support/fixtures';
+import { buildGateContext, buildOrderIntent, buildProposedExit, buildRiskStatePort, buildRiskStateDay, buildSizing } from './support/fixtures';
 import { buildSnapshot } from '../strategy/support/fixtures';
 
 // M9 QA — adversarial extension to RiskGateService.bus.spec.ts.
@@ -52,14 +45,7 @@ function makeGate(): { gate: RiskGateService; emitted: IEmittedEvent[] } {
             return true;
         }),
     };
-    const gate = new RiskGateService(
-        ledger,
-        slotManager,
-        stress,
-        positions as never,
-        riskState as never,
-        events as never,
-    );
+    const gate = new RiskGateService(ledger, slotManager, stress, positions as never, riskState as never, events as never);
     gate.markRecoveryComplete();
 
     return { gate, emitted };
@@ -217,10 +203,7 @@ describe('RiskGateService bus adversarial — in-tick stress race', () => {
         // completes — `findByDate` returns null both times so the snapshot
         // both load shows `today=null` (isHalted=false). Without the
         // in-memory `stressEmittedForDate` guard, both calls would emit.
-        await Promise.all([
-            gate.evaluate(buildIntent(), buildStressedContext()),
-            gate.evaluate(buildIntent(), buildStressedContext()),
-        ]);
+        await Promise.all([gate.evaluate(buildIntent(), buildStressedContext()), gate.evaluate(buildIntent(), buildStressedContext())]);
 
         const stressEmits = emitted.filter((e) => e.name === RISK_HALT_TRIGGERED_EVENT);
         expect(stressEmits).toHaveLength(1);

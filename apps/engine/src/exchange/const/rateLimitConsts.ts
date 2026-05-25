@@ -43,6 +43,15 @@ export const RATE_LIMIT_418_DEFAULT_FREEZE_MS = 120_000;
 // Max freeze cap (ADR 0030 §2.6) — repeated breaches double the freeze, capped.
 export const RATE_LIMIT_FREEZE_CAP_MS = 60 * 60_000;
 
+// Freeze-escalation decay (ADR 0030 §2.6.5). A second 429/418 within this
+// window of the previous freeze EXPIRY keeps the escalation chain alive
+// (doubles again, capped at RATE_LIMIT_FREEZE_CAP_MS). Beyond this window
+// the escalation resets to the base duration — the burst has decayed and
+// the next 429/418 is treated as a fresh incident. 5×baseMs of the most
+// recent baseline keeps the escalation responsive to genuine repeat bursts
+// while not punishing a single transient 429 that recurs hours later.
+export const RATE_LIMIT_FREEZE_DECAY_FACTOR = 5;
+
 // Drift-alert coalescing — emit Telegram WARN once per process boot on the
 // first drift event, then suppress further alerts for this window (ADR 0030
 // §2.5).

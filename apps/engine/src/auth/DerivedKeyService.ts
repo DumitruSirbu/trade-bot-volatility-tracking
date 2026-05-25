@@ -59,19 +59,19 @@ export class DerivedKeyService implements IDerivedKeyService, OnModuleInit {
     }
 
     getCursorKey(): Buffer {
-        if (this.cursorKey === null) {
-            throw new Error('DerivedKeyService not initialised (onModuleInit did not run)');
-        }
-
-        return this.cursorKey;
+        return this.resolveKey(this.cursorKey, 'cursor');
     }
 
     getAuthKey(): Buffer {
-        if (this.authKey === null) {
-            throw new Error('DerivedKeyService not initialised (onModuleInit did not run)');
+        return this.resolveKey(this.authKey, 'auth');
+    }
+
+    private resolveKey(key: Buffer | null, name: string): Buffer {
+        if (key === null) {
+            throw new Error(`DerivedKeyService not initialised (${name} key requested before onModuleInit)`);
         }
 
-        return this.authKey;
+        return key;
     }
 
     private derive(master: Buffer, info: string): Buffer {

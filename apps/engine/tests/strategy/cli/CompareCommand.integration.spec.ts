@@ -103,11 +103,25 @@ describe('CompareCommand (integration — requires Postgres)', () => {
             perFoldReports: new Map<`${number}:${number}:oos`, ReturnType<typeof buildLeafReport>>([
                 [
                     `${versionA.id}:0:oos`,
-                    buildLeafReport({ runLabel: 'run-A:oos', strategyVersionId: versionA.id, tradeCount: 3, netPnlUsdt: '15.00', profitFactor: '1.50', sharpeAnnualized: '1.20' }),
+                    buildLeafReport({
+                        runLabel: 'run-A:oos',
+                        strategyVersionId: versionA.id,
+                        tradeCount: 3,
+                        netPnlUsdt: '15.00',
+                        profitFactor: '1.50',
+                        sharpeAnnualized: '1.20',
+                    }),
                 ],
                 [
                     `${versionB.id}:0:oos`,
-                    buildLeafReport({ runLabel: 'run-B:oos', strategyVersionId: versionB.id, tradeCount: 5, netPnlUsdt: '-3.00', profitFactor: '0.80', sharpeAnnualized: '-0.10' }),
+                    buildLeafReport({
+                        runLabel: 'run-B:oos',
+                        strategyVersionId: versionB.id,
+                        tradeCount: 5,
+                        netPnlUsdt: '-3.00',
+                        profitFactor: '0.80',
+                        sharpeAnnualized: '-0.10',
+                    }),
                 ],
             ]),
             eventOutcomes: [

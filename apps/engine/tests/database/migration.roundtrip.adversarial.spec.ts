@@ -90,9 +90,12 @@ async function revertAllMigrations(dataSource: DataSource): Promise<void> {
 }
 
 async function getPartialIndexDefinition(dataSource: DataSource, indexName: string): Promise<string | null> {
-    const rows = (await dataSource.query(`
+    const rows = (await dataSource.query(
+        `
         SELECT indexdef FROM pg_indexes WHERE indexname = $1
-    `, [indexName])) as { indexdef: string }[];
+    `,
+        [indexName],
+    )) as { indexdef: string }[];
 
     return rows.length > 0 ? rows[0]!.indexdef : null;
 }
@@ -161,10 +164,19 @@ describe('Migration round-trip adversarial (requires Postgres — isolated DataS
         const tables = await listTables(dataSource);
 
         const REQUIRED_TABLES = [
-            'instruments', 'candles', 'tick_aggregates', 'open_interest',
-            'funding_rates', 'book_snapshots', 'universe_membership',
-            'strategy_versions', 'positions', 'transactions', 'decisions',
-            'risk_state', 'account_snapshots',
+            'instruments',
+            'candles',
+            'tick_aggregates',
+            'open_interest',
+            'funding_rates',
+            'book_snapshots',
+            'universe_membership',
+            'strategy_versions',
+            'positions',
+            'transactions',
+            'decisions',
+            'risk_state',
+            'account_snapshots',
         ];
 
         for (const table of REQUIRED_TABLES) {

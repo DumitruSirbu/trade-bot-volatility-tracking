@@ -24,7 +24,12 @@ import { V0BaselineStrategy, V1MeanReversionStrategy, V2MomentumStrategy, V3Hybr
 // beyond the anchor row (per-event outcome table, regime breakdown reads, etc.) a
 // dedicated ComparisonModule will be carved out then.
 @Module({
-    imports: [TypeOrmModule.forFeature([StrategyVersionEntity, DecisionEntity, ComparisonReportEntity]), forwardRef(() => PositionModule), MarketDataModule, forwardRef(() => RiskModule)],
+    imports: [
+        TypeOrmModule.forFeature([StrategyVersionEntity, DecisionEntity, ComparisonReportEntity]),
+        forwardRef(() => PositionModule),
+        MarketDataModule,
+        forwardRef(() => RiskModule),
+    ],
     providers: [
         StrategyVersionRepository,
         DecisionRepository,

@@ -50,8 +50,8 @@ function buildParams() {
         funding_rate_suppress_threshold: 0.01,
         candle_interval: '5m' as const,
         slippage_tier1_pct: 0.05,
-        slippage_tier2_pct: 0.10,
-        slippage_tier3_pct: 0.20,
+        slippage_tier2_pct: 0.1,
+        slippage_tier3_pct: 0.2,
         require_oi_available: false,
         oi_rising_skip: false,
         consecutive_loss_halt: 3,
@@ -126,10 +126,7 @@ function buildSnapshot(barOpenTimeMs: number, deviationSigma: number) {
 // The trigger predicate is driven indirectly: we supply snapshots whose vwapDeviationSigma
 // exceeds the tier-1 threshold (the runner's `passesTrigger` reads tier-specific σ from
 // the trigger params). Only bars at the `firingBarOpenMsList` indices fire.
-function buildRunnerWithFixture(opts: {
-    bars: Array<{ openMs: number; fires: boolean }>;
-    orchestratorImpl?: (event: any, ctx: any) => Promise<any>;
-}) {
+function buildRunnerWithFixture(opts: { bars: Array<{ openMs: number; fires: boolean }>; orchestratorImpl?: (event: any, ctx: any) => Promise<any> }) {
     const replayBars = opts.bars.map((b) => buildCandle(b.openMs));
     const firingBars = new Set(opts.bars.filter((b) => b.fires).map((b) => b.openMs));
 
@@ -155,9 +152,7 @@ function buildRunnerWithFixture(opts: {
     };
 
     const strategyVersionRepository = {
-        findById: jest.fn().mockImplementation((id: number) =>
-            Promise.resolve(buildStrategyVersionEntity(id, 'v1', 1)),
-        ),
+        findById: jest.fn().mockImplementation((id: number) => Promise.resolve(buildStrategyVersionEntity(id, 'v1', 1))),
     };
 
     const instrumentRepository = { findAllTradable: jest.fn().mockResolvedValue([]) };
@@ -201,8 +196,7 @@ function buildRunnerWithFixture(opts: {
     const openInterestRepository = { findRange: jest.fn().mockResolvedValue([]) };
     const bookSnapshotRepository = { findRange: jest.fn().mockResolvedValue([]) };
 
-    const defaultOrchestrator = () =>
-        Promise.resolve({ skipped: true, rejectedByGate: false, missedFill: false, filled: false });
+    const defaultOrchestrator = () => Promise.resolve({ skipped: true, rejectedByGate: false, missedFill: false, filled: false });
     const orchestrator = {
         processEvent: jest.fn().mockImplementation(opts.orchestratorImpl ?? defaultOrchestrator),
     };
@@ -216,18 +210,29 @@ function buildRunnerWithFixture(opts: {
             toUtcDate: args.toUtcDate,
             runLabel: args.runLabel,
             tradeCount: args.trades.length,
-            winCount: 0, lossCount: 0,
-            winRatePct: '0', grossPnlUsdt: '0', feesUsdt: '0', fundingUsdt: '0',
-            slippageCostUsdt: '0', netPnlUsdt: '0', returnPct: '0', profitFactor: '0',
-            avgHoldMs: 0, maxDrawdownPct: args.maxDrawdownPct,
+            winCount: 0,
+            lossCount: 0,
+            winRatePct: '0',
+            grossPnlUsdt: '0',
+            feesUsdt: '0',
+            fundingUsdt: '0',
+            slippageCostUsdt: '0',
+            netPnlUsdt: '0',
+            returnPct: '0',
+            profitFactor: '0',
+            avgHoldMs: 0,
+            maxDrawdownPct: args.maxDrawdownPct,
             maxDrawdownDurationDays: args.maxDrawdownDurationDays,
-            sharpeAnnualized: '0', sortinoAnnualized: '0',
+            sharpeAnnualized: '0',
+            sortinoAnnualized: '0',
             skippedTriggerCount: args.skippedTriggerCount,
             rejectedByGateCount: args.rejectedByGateCount,
             missedLimitFillCount: args.missedLimitFillCount,
             lowFidelityTradeCount: args.lowFidelityTradeCount,
             equityCurve: args.equityCurve,
-            perRegime: [], perFlowType: [], perSymbol: [],
+            perRegime: [],
+            perFlowType: [],
+            perSymbol: [],
             trades: args.trades,
         })),
     };
@@ -298,7 +303,10 @@ describe('BacktestRunnerService.recordEventTape', () => {
 
     it('does NOT invoke the orchestrator during a tape-recording pass', async () => {
         const day0 = new Date('2024-01-01T00:00:00.000Z').getTime();
-        const bars = [{ openMs: day0, fires: true }, { openMs: day0 + CANDLE_5M_INTERVAL_MS, fires: true }];
+        const bars = [
+            { openMs: day0, fires: true },
+            { openMs: day0 + CANDLE_5M_INTERVAL_MS, fires: true },
+        ];
 
         const { runner, orchestrator } = buildRunnerWithFixture({ bars });
 
@@ -424,10 +432,7 @@ describe('ComparisonRunnerService.runComparison', () => {
         const { runner } = buildRunnerWithFixture({ bars });
         const service = new ComparisonRunnerService(runner, new BootstrapStatsService());
 
-        const candidates = [
-            buildStrategyVersionEntity(1, 'v1', 1),
-            buildStrategyVersionEntity(2, 'v2', 1),
-        ];
+        const candidates = [buildStrategyVersionEntity(1, 'v1', 1), buildStrategyVersionEntity(2, 'v2', 1)];
 
         const report = await service.runComparison({
             runId: 'cmp-1',
@@ -632,11 +637,7 @@ describe('ComparisonRunnerService.runComparison', () => {
         const { runner } = buildRunnerWithFixture({ bars });
         const service = new ComparisonRunnerService(runner, new BootstrapStatsService());
 
-        const candidates = [
-            buildStrategyVersionEntity(1, 'v1', 1),
-            buildStrategyVersionEntity(2, 'v2', 1),
-            buildStrategyVersionEntity(3, 'v3', 1),
-        ];
+        const candidates = [buildStrategyVersionEntity(1, 'v1', 1), buildStrategyVersionEntity(2, 'v2', 1), buildStrategyVersionEntity(3, 'v3', 1)];
 
         const report = await service.runComparison({
             runId: 'cmp-fwer',

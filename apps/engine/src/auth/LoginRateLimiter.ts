@@ -3,6 +3,7 @@ import { HttpException, Inject, Injectable, Logger, OnModuleInit } from '@nestjs
 
 import { ALERT_SINK, IAlertSink } from '../alert/sink/AlertSinkModule';
 import {
+    GLOBAL_ROW_SOURCE_IP,
     LOGIN_GLOBAL_ALERT_COALESCE_MS,
     LOGIN_GLOBAL_MAX_ATTEMPTS,
     LOGIN_GLOBAL_WINDOW_MS,
@@ -11,14 +12,12 @@ import {
     LOGIN_PER_IP_SUSTAINED_MAX,
     LOGIN_PER_IP_SUSTAINED_WINDOW_MS,
 } from './const/authConsts';
-import { LoginRateLimitStateRepository, LoginRateLimitScope } from './repository/LoginRateLimitStateRepository';
 
-// M11a W1.9 — `GLOBAL_KEY` is the synthetic source-ip used for the cross-IP
-// global ceiling row (the global window has no real IP to key off, but the
-// composite PK requires non-null `source_ip`). Picked to be unambiguously
-// non-routable so a future operator inspection cannot mistake it for a real
-// source.
-const GLOBAL_ROW_SOURCE_IP = '__GLOBAL__';
+// Memory-bound on hydrated timestamps per row — twice the sustained-window
+// max so a re-hydrated row that was at the throttle ceiling has slack but a
+// poisoned Postgres row can never balloon engine RSS.
+const MAX_HYDRATED_TIMESTAMPS = LOGIN_PER_IP_SUSTAINED_MAX * 2;
+import { LoginRateLimitStateRepository, LoginRateLimitScope } from './repository/LoginRateLimitStateRepository';
 
 // M10 W0.5 (ADR 0027 §2.4). In-memory sliding-window rate limiter for the
 // /v1/auth/login endpoint. Two layered per-IP windows + a global ceiling.
@@ -88,8 +87,13 @@ export class LoginRateLimiter implements OnModuleInit {
     }
 
     private hydrateRow(sourceIp: string, scope: LoginRateLimitScope, timestamps: number[]): void {
+        // Memory-bound — a poisoned `timestamps_ms` row cannot inflate RSS
+        // past the constant cap. The first enforce() pass prunes further by
+        // the per-scope window threshold; the clamp is a defence-in-depth.
+        const clamped = timestamps.slice(0, MAX_HYDRATED_TIMESTAMPS);
+
         if (scope === 'global') {
-            for (const ts of timestamps) {
+            for (const ts of clamped) {
                 this.globalWindow.push(ts);
             }
 
@@ -99,9 +103,9 @@ export class LoginRateLimiter implements OnModuleInit {
         const existing = this.perIp.get(sourceIp) ?? { burst: [], sustained: [] };
 
         if (scope === 'burst') {
-            existing.burst = timestamps.slice();
+            existing.burst = clamped;
         } else {
-            existing.sustained = timestamps.slice();
+            existing.sustained = clamped;
         }
 
         this.perIp.set(sourceIp, existing);

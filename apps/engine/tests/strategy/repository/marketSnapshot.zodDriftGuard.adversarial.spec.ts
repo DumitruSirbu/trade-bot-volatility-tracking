@@ -20,15 +20,7 @@
  *   - Boundary: minimum passing snapshot has ALL required fields.
  */
 
-import {
-    marketSnapshotSchema,
-    CoinTierEnum,
-    RegimeLabelEnum,
-    VwapAnchorTypeEnum,
-    FlowTypeEnum,
-    PositionSlotEnum,
-    CorrelationModeEnum,
-} from '@bot/shared';
+import { marketSnapshotSchema, CoinTierEnum, RegimeLabelEnum, VwapAnchorTypeEnum, FlowTypeEnum, PositionSlotEnum, CorrelationModeEnum } from '@bot/shared';
 
 // Build a complete, valid snapshot for use as the base in each adversarial test.
 function buildValidSnapshot(): Record<string, unknown> {
@@ -151,9 +143,7 @@ describe('marketSnapshotSchema — adversarial unknown extra fields under .stric
 
         if (!result.success) {
             // .strict() adds an "unrecognized_keys" issue type.
-            const hasUnrecognizedKeysIssue = result.error.issues.some(
-                (issue) => issue.code === 'unrecognized_keys',
-            );
+            const hasUnrecognizedKeysIssue = result.error.issues.some((issue) => issue.code === 'unrecognized_keys');
 
             expect(hasUnrecognizedKeysIssue).toBe(true);
         }

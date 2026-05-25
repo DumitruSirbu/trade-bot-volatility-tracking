@@ -285,19 +285,26 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
     }
 
     private async callSapiGetAccountApiRestrictions(): Promise<Record<string, unknown>> {
-        // ccxt's binanceusdm exposes the spot-side restriction endpoints via
-        // the `sapi*` implicit methods on the parent binance class; the
-        // narrow cast lets us call them through the ccxt-pro surface without
-        // declaring every implicit endpoint signature.
-        const sapiClient = this.client as unknown as { sapiGetAccountApiRestrictions(): Promise<Record<string, unknown>> };
-
-        return sapiClient.sapiGetAccountApiRestrictions();
+        return this.callSapiMethod<Record<string, unknown>>('sapiGetAccountApiRestrictions');
     }
 
     private async callSapiGetAccountApiRestrictionsIpRestriction(): Promise<Record<string, unknown>> {
-        const sapiClient = this.client as unknown as { sapiGetAccountApiRestrictionsIpRestriction(): Promise<Record<string, unknown>> };
+        return this.callSapiMethod<Record<string, unknown>>('sapiGetAccountApiRestrictionsIpRestriction');
+    }
 
-        return sapiClient.sapiGetAccountApiRestrictionsIpRestriction();
+    // ccxt's binanceusdm exposes spot-side restriction endpoints via implicit
+    // `sapi*` methods on the parent binance class. The narrow cast in one
+    // place lets us call those endpoints through the ccxt-pro surface without
+    // declaring every implicit endpoint signature at each call site.
+    private async callSapiMethod<T>(methodName: string): Promise<T> {
+        const sapiClient = this.client as unknown as Record<string, () => Promise<T>>;
+        const method = sapiClient[methodName];
+
+        if (typeof method !== 'function') {
+            throw new Error(`ccxt client does not expose sapi method '${methodName}'`);
+        }
+
+        return method.call(sapiClient);
     }
 
     async close(): Promise<void> {

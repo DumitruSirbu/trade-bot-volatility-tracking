@@ -135,4 +135,3 @@ function clampUnitInterval(value: number): number {
 
     return value;
 }
-

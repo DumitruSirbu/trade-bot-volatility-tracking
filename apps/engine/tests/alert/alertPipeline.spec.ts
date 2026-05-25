@@ -416,7 +416,10 @@ describe('RiskListeners', () => {
 
 describe('HaltService HALT_CHANGED_EVENT', () => {
     // Minimal hand-rolled fakes mirroring the shape HaltService exercises.
-    function fakeAuditRow(id: string, action: 'halt' | 'resume'): {
+    function fakeAuditRow(
+        id: string,
+        action: 'halt' | 'resume',
+    ): {
         id: string;
         occurredAt: string;
         actorSub: string;

@@ -69,8 +69,8 @@ function buildParams() {
         funding_rate_suppress_threshold: 0.01,
         candle_interval: '5m' as const,
         slippage_tier1_pct: 0.05,
-        slippage_tier2_pct: 0.10,
-        slippage_tier3_pct: 0.20,
+        slippage_tier2_pct: 0.1,
+        slippage_tier3_pct: 0.2,
         require_oi_available: false,
         oi_rising_skip: false,
         consecutive_loss_halt: 3,
@@ -203,10 +203,7 @@ function buildInstrumentConstraints() {
     };
 }
 
-function buildContext(
-    bookOverride?: BacktestBook,
-    strategyOverride?: IStrategy,
-): IBacktestOrchestratorContext {
+function buildContext(bookOverride?: BacktestBook, strategyOverride?: IStrategy): IBacktestOrchestratorContext {
     const book = bookOverride ?? new BacktestBook();
     book.instruments.set('ETHUSDT', buildInstrumentConstraints());
 
@@ -248,8 +245,8 @@ function buildContext(
         strategyVersionId: 1,
         tierSlippageParams: {
             slippage_tier1_pct: 0.05,
-            slippage_tier2_pct: 0.10,
-            slippage_tier3_pct: 0.20,
+            slippage_tier2_pct: 0.1,
+            slippage_tier3_pct: 0.2,
         },
         config: {
             strategyVersionId: 1,
@@ -806,8 +803,8 @@ describe('BacktestOrchestrator.processEvent — missing instrument', () => {
             strategyVersionId: 1,
             tierSlippageParams: {
                 slippage_tier1_pct: 0.05,
-                slippage_tier2_pct: 0.10,
-                slippage_tier3_pct: 0.20,
+                slippage_tier2_pct: 0.1,
+                slippage_tier3_pct: 0.2,
             },
             config: {
                 strategyVersionId: 1,
@@ -886,12 +883,13 @@ describe('BacktestOrchestrator — OrderPolicyRouter injection (M8 W1)', () => {
     });
 
     it('resolves HYBRID strategy direction by flow_type: TREND_INITIATION → MOMENTUM, FORCED_EXHAUSTION → MEAN_REVERSION', async () => {
-        const v3Strategy = (flowType: FlowTypeEnum): IStrategy => ({
-            name: 'v3',
-            version: 1,
-            direction: 'hybrid' as any,
-            evaluate: jest.fn().mockReturnValue({ ...buildOpenSignal(), flowType }),
-        } as any);
+        const v3Strategy = (flowType: FlowTypeEnum): IStrategy =>
+            ({
+                name: 'v3',
+                version: 1,
+                direction: 'hybrid' as any,
+                evaluate: jest.fn().mockReturnValue({ ...buildOpenSignal(), flowType }),
+            }) as any;
 
         // Case 1: TREND_INITIATION (new-money / catalyst leg) → MOMENTUM leg routed.
         {

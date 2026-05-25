@@ -79,10 +79,7 @@ export class PositionRepository extends BaseRepository<PositionEntity> implement
         // and the controller's nextCursor derivation. The state filter alone
         // does not enforce this — a legacy partial-close path could mark a row
         // CLOSED before stamping closedAt; we surface only fully-finalised rows.
-        const qb = this.repository
-            .createQueryBuilder('p')
-            .where('p.state = :state', { state: PositionStateEnum.CLOSED })
-            .andWhere('p.closed_at IS NOT NULL');
+        const qb = this.repository.createQueryBuilder('p').where('p.state = :state', { state: PositionStateEnum.CLOSED }).andWhere('p.closed_at IS NOT NULL');
 
         if (cursor !== null) {
             qb.andWhere('(p.closed_at, p.positions_id) < (:cursorTs, :cursorId)', {

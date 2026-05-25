@@ -1,9 +1,19 @@
 import { ExchangeEnvironmentEnum } from '@bot/shared';
 import { Injectable, Logger } from '@nestjs/common';
-import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
 
 import { AppConfigService } from '../config/service';
+
+// Reject token files larger than this — the legitimate file holds a short
+// opaque token (typically <128 bytes). Bound prevents OOM if the operator
+// accidentally points the env var at a large log file or arbitrary blob.
+const LIVE_GO_AHEAD_MAX_BYTES = 4096;
+
+// Group + other permission mask. A non-zero result means the file is readable
+// outside the owning user, which defeats the "operator dropped a private file"
+// intent of the two-token gate.
+const FILE_MODE_NON_OWNER_MASK = 0o077;
 
 // M11a W1.1 (ADR 0028 / M11a §W0.1). Two-token live-mode boot guard.
 //
@@ -45,14 +55,35 @@ export class LiveGoAheadVerifier {
             throw new Error('EXCHANGE_ENV=LIVE requires LIVE_GO_AHEAD_TOKEN_HASH to be set');
         }
 
+        await this.assertFileSafe(filePath);
+
         const actualHash = await this.computeFileHash(filePath);
 
-        if (actualHash !== expectedHash.toLowerCase()) {
+        if (!hashesMatch(actualHash, expectedHash.toLowerCase())) {
             // No values in the error body — only that the comparison failed.
             throw new Error('LIVE_GO_AHEAD token hash mismatch (file content does not match LIVE_GO_AHEAD_TOKEN_HASH)');
         }
 
         this.logger.warn('LIVE_GO_AHEAD token verified — engine permitted to boot in LIVE mode');
+    }
+
+    // Pre-flight size + mode checks. Both failure modes surface as a hash
+    // mismatch (intentional — the operator-visible signal is "the gate
+    // refused"; the log carries the precise diagnostic).
+    private async assertFileSafe(filePath: string): Promise<void> {
+        const stats = await stat(filePath);
+
+        if (stats.size > LIVE_GO_AHEAD_MAX_BYTES) {
+            this.logger.error(`LIVE_GO_AHEAD token file size ${stats.size} exceeds ${LIVE_GO_AHEAD_MAX_BYTES} bytes`);
+
+            throw new Error('LIVE_GO_AHEAD token hash mismatch (file content does not match LIVE_GO_AHEAD_TOKEN_HASH)');
+        }
+
+        if ((stats.mode & FILE_MODE_NON_OWNER_MASK) !== 0) {
+            this.logger.error(`LIVE_GO_AHEAD token file mode ${(stats.mode & 0o777).toString(8)} permits group/other read — must be 0600`);
+
+            throw new Error('LIVE_GO_AHEAD token hash mismatch (file content does not match LIVE_GO_AHEAD_TOKEN_HASH)');
+        }
     }
 
     private async computeFileHash(filePath: string): Promise<string> {
@@ -61,4 +92,21 @@ export class LiveGoAheadVerifier {
 
         return createHash('sha256').update(trimmed, 'utf8').digest('hex');
     }
+}
+
+// Constant-time hex hash compare. Length-mismatch is rejected first so
+// `timingSafeEqual` always sees equal-length buffers (its precondition).
+function hashesMatch(actualHex: string, expectedHex: string): boolean {
+    if (actualHex.length !== expectedHex.length) {
+        return false;
+    }
+
+    const actualBuf = Buffer.from(actualHex, 'hex');
+    const expectedBuf = Buffer.from(expectedHex, 'hex');
+
+    if (actualBuf.length !== expectedBuf.length) {
+        return false;
+    }
+
+    return timingSafeEqual(actualBuf, expectedBuf);
 }

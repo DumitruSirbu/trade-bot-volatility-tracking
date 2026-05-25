@@ -54,11 +54,7 @@ export class FundingReplayLoader {
         }));
     }
 
-    computeCashflow(
-        notionalUsdt: MoneyValue,
-        fundingRate: DecimalValue,
-        side: 'long' | 'short',
-    ): MoneyValue {
+    computeCashflow(notionalUsdt: MoneyValue, fundingRate: DecimalValue, side: 'long' | 'short'): MoneyValue {
         const rate = new Money(fundingRate.toString());
         if (side === 'long') {
             return notionalUsdt.times(rate.negated());

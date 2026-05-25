@@ -176,14 +176,15 @@ describe('AuthGuard', () => {
             await expectAuthFailure(promise, AuthFailureReasonEnum.BAD_SCOPE);
         });
 
-        it('rejects with MALFORMED when the signature is tampered', async () => {
+        it('rejects with BAD_SIGNATURE when the signature is tampered', async () => {
             const { guard, tokens } = buildGuard();
             const { token } = tokens.issue({ sub: 'op', scopes: [AuthScopeEnum.READ], ttlSec: 900, now: new Date() });
             const tampered = token.slice(0, -2) + (token.endsWith('A') ? 'BB' : 'AA');
 
             const promise = guard.canActivate(buildContext({ headers: { authorization: `Bearer ${tampered}` } }));
 
-            await expectAuthFailure(promise, AuthFailureReasonEnum.MALFORMED);
+            // M11a W1.5 — BAD_SIGNATURE now rides on the wire enum directly.
+            await expectAuthFailure(promise, AuthFailureReasonEnum.BAD_SIGNATURE);
         });
     });
 
@@ -238,7 +239,12 @@ describe('AuthCorsInterceptor', () => {
 
     it('rejects preflight from a disallowed origin with the IAuthFailure shape', () => {
         process.env[AUTH_CORS_ALLOWLIST_ENV] = 'http://localhost:5173';
-        const middleware = new AuthCorsInterceptor({ corsAllowlist: (process.env[AUTH_CORS_ALLOWLIST_ENV] ?? '').split(',').map((s) => s.trim()).filter((s) => s.length > 0) } as unknown as import('../../src/config/service').AppConfigService);
+        const middleware = new AuthCorsInterceptor({
+            corsAllowlist: (process.env[AUTH_CORS_ALLOWLIST_ENV] ?? '')
+                .split(',')
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0),
+        } as unknown as import('../../src/config/service').AppConfigService);
         const status = jest.fn().mockReturnThis();
         const json = jest.fn();
         const res = { status, json, setHeader: jest.fn(), end: jest.fn() } as unknown as Parameters<typeof middleware.use>[1];
@@ -253,7 +259,12 @@ describe('AuthCorsInterceptor', () => {
 
     it('allows preflight from an allow-listed origin and short-circuits with 204', () => {
         process.env[AUTH_CORS_ALLOWLIST_ENV] = 'http://localhost:5173';
-        const middleware = new AuthCorsInterceptor({ corsAllowlist: (process.env[AUTH_CORS_ALLOWLIST_ENV] ?? '').split(',').map((s) => s.trim()).filter((s) => s.length > 0) } as unknown as import('../../src/config/service').AppConfigService);
+        const middleware = new AuthCorsInterceptor({
+            corsAllowlist: (process.env[AUTH_CORS_ALLOWLIST_ENV] ?? '')
+                .split(',')
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0),
+        } as unknown as import('../../src/config/service').AppConfigService);
         const setHeader = jest.fn();
         const status = jest.fn().mockReturnThis();
         const end = jest.fn();
@@ -269,7 +280,12 @@ describe('AuthCorsInterceptor', () => {
 
     it('passes same-origin requests (no Origin header) through to next()', () => {
         process.env[AUTH_CORS_ALLOWLIST_ENV] = '';
-        const middleware = new AuthCorsInterceptor({ corsAllowlist: (process.env[AUTH_CORS_ALLOWLIST_ENV] ?? '').split(',').map((s) => s.trim()).filter((s) => s.length > 0) } as unknown as import('../../src/config/service').AppConfigService);
+        const middleware = new AuthCorsInterceptor({
+            corsAllowlist: (process.env[AUTH_CORS_ALLOWLIST_ENV] ?? '')
+                .split(',')
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0),
+        } as unknown as import('../../src/config/service').AppConfigService);
         const next = jest.fn();
         const res = { setHeader: jest.fn(), status: jest.fn().mockReturnThis(), end: jest.fn(), json: jest.fn() } as unknown as Parameters<
             typeof middleware.use

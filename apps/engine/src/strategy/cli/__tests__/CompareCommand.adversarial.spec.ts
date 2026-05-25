@@ -38,72 +38,41 @@ describe('parseCompareArgs — adversarial', () => {
 
     describe('missing required flags', () => {
         it('throws when --from is missing', () => {
-            expect(() =>
-                parseCompareArgs([
-                    '--to=2026-06-01',
-                    '--versions=1',
-                ]),
-            ).toThrow(/--from is required/i);
+            expect(() => parseCompareArgs(['--to=2026-06-01', '--versions=1'])).toThrow(/--from is required/i);
         });
 
         it('throws when --versions is missing', () => {
-            expect(() =>
-                parseCompareArgs([
-                    '--from=2026-01-01',
-                    '--to=2026-06-01',
-                ]),
-            ).toThrow(/--versions is required/i);
+            expect(() => parseCompareArgs(['--from=2026-01-01', '--to=2026-06-01'])).toThrow(/--versions is required/i);
         });
     });
 
     describe('invalid ISO-8601 dates', () => {
         it('throws on a non-parseable --from value', () => {
-            expect(() =>
-                parseCompareArgs([
-                    '--from=not-a-date',
-                    '--to=2026-06-01',
-                    '--versions=1',
-                ]),
-            ).toThrow(/is not a valid ISO-8601/i);
+            expect(() => parseCompareArgs(['--from=not-a-date', '--to=2026-06-01', '--versions=1'])).toThrow(/is not a valid ISO-8601/i);
         });
     });
 
     describe('invalid --versions format', () => {
         it('throws on mixed numeric id and name:version in the same --versions value', () => {
-            expect(() =>
-                parseVersionsArg('1,myStrategy:2'),
-            ).toThrow(/either all numeric ids OR all name:version/i);
+            expect(() => parseVersionsArg('1,myStrategy:2')).toThrow(/either all numeric ids OR all name:version/i);
         });
 
         it('throws when --versions is empty', () => {
-            expect(() =>
-                parseVersionsArg(''),
-            ).toThrow(/at least one version/i);
+            expect(() => parseVersionsArg('')).toThrow(/at least one version/i);
         });
 
         it('throws when a numeric id is not a positive integer', () => {
-            expect(() =>
-                parseVersionsArg('-1'),
-            ).toThrow(/positive integer/i);
+            expect(() => parseVersionsArg('-1')).toThrow(/positive integer/i);
         });
 
         it('throws when a name:version has a non-positive version number', () => {
-            expect(() =>
-                parseVersionsArg('myStrategy:0'),
-            ).toThrow(/non-positive integer version/i);
+            expect(() => parseVersionsArg('myStrategy:0')).toThrow(/non-positive integer version/i);
         });
     });
 
     describe('positional argument rejection', () => {
         it('throws when a positional argument appears instead of a --flag', () => {
-            expect(() =>
-                parseCompareArgs([
-                    'positional',
-                    '--from=2026-01-01',
-                    '--to=2026-06-01',
-                    '--versions=1',
-                ]),
-            ).toThrow(/unexpected positional argument/i);
+            expect(() => parseCompareArgs(['positional', '--from=2026-01-01', '--to=2026-06-01', '--versions=1'])).toThrow(/unexpected positional argument/i);
         });
     });
 });
@@ -171,9 +140,7 @@ describe('CompareCommand artefact writer — label collision guard', () => {
 
         try {
             // Attempting to open with 'wx' must throw.
-            await expect(
-                fs.promises.open(filePath, 'wx'),
-            ).rejects.toThrow();
+            await expect(fs.promises.open(filePath, 'wx')).rejects.toThrow();
         } finally {
             await fs.promises.unlink(filePath).catch(() => undefined);
         }

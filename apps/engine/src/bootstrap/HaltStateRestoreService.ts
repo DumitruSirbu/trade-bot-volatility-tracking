@@ -80,16 +80,12 @@ export class HaltStateRestoreService implements OnApplicationBootstrap {
 
     // Public for tests + future replay paths.
     async restore(): Promise<void> {
-
         if (this.restored) {
             return;
         }
 
         const todayUtc = toUtcDateString(new Date());
-        const [latestAudit, todayRiskState] = await Promise.all([
-            this.auditRepo.findLatest(),
-            this.riskStateRepo.findByDate(todayUtc),
-        ]);
+        const [latestAudit, todayRiskState] = await Promise.all([this.auditRepo.findLatest(), this.riskStateRepo.findByDate(todayUtc)]);
 
         const resolution = this.resolveNewerWins(latestAudit, todayRiskState);
 
@@ -97,16 +93,12 @@ export class HaltStateRestoreService implements OnApplicationBootstrap {
         this.applyResolution(resolution, latestAudit);
     }
 
-    private resolveNewerWins(
-        latestAudit: IHaltAuditEntry | null,
-        todayRiskState: RiskStateEntity | null,
-    ): IRestoreResolution {
+    private resolveNewerWins(latestAudit: IHaltAuditEntry | null, todayRiskState: RiskStateEntity | null): IRestoreResolution {
         const riskHalted = todayRiskState !== null && todayRiskState.isHalted === true;
         const riskReason = todayRiskState?.haltReason ?? null;
 
         // No audit row at all → risk_state alone decides.
         if (latestAudit === null) {
-
             if (riskHalted) {
                 return {
                     desiredHalted: true,
@@ -171,9 +163,7 @@ export class HaltStateRestoreService implements OnApplicationBootstrap {
 
         if (resolution.desiredHalted && !flagHalted) {
             this.haltFlag.halt(`${resolution.source}:${resolution.reason ?? 'restored'}`);
-            this.logger.warn(
-                `halt.restored state=halted source=${resolution.source} origin=${resolution.origin} reason=${resolution.reason ?? ''}`,
-            );
+            this.logger.warn(`halt.restored state=halted source=${resolution.source} origin=${resolution.origin} reason=${resolution.reason ?? ''}`);
 
             return;
         }
@@ -188,9 +178,7 @@ export class HaltStateRestoreService implements OnApplicationBootstrap {
         }
 
         if (resolution.desiredHalted && flagHalted) {
-            this.logger.warn(
-                `halt.restored state=halted source=${resolution.source} origin=${resolution.origin} (flag already engaged)`,
-            );
+            this.logger.warn(`halt.restored state=halted source=${resolution.source} origin=${resolution.origin} (flag already engaged)`);
 
             return;
         }
@@ -211,7 +199,6 @@ interface IRestoreResolution {
 // Unknown / unparsable falls back to OPERATOR — the safer default for a row
 // whose origin we can't classify.
 function resolveSourceFromActor(actorSub: string): HaltSourceEnum {
-
     if (!actorSub.startsWith(PROGRAMMATIC_ACTOR_PREFIX)) {
         return HaltSourceEnum.OPERATOR;
     }
@@ -230,7 +217,6 @@ function resolveSourceFromActor(actorSub: string): HaltSourceEnum {
 // `<SOURCE>:<reason>` prefix (mirroring the in-memory flag). We extract the
 // leading enum-shaped token; anything we can't classify maps to OTHER.
 function resolveProgrammaticSource(haltReason: string | null): HaltSourceEnum {
-
     if (haltReason === null || haltReason.length === 0) {
         return HaltSourceEnum.OTHER;
     }

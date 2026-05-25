@@ -72,7 +72,7 @@ function buildManagerMock(candidate: StrategyVersionEntity, incumbent: StrategyV
                 return null;
             }),
         })),
-        findOne: jest.fn().mockResolvedValue(reportExists ? { id: 99 } as ComparisonReportEntity : null),
+        findOne: jest.fn().mockResolvedValue(reportExists ? ({ id: 99 } as ComparisonReportEntity) : null),
         save: jest.fn().mockImplementation(async (_entity: unknown, row: StrategyVersionEntity) => row),
     };
 }

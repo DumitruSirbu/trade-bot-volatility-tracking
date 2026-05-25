@@ -124,6 +124,57 @@ exercised during the soak window (`docs/plans/M11a-local-soak.md` §"Soak
 exit criteria"). Recording the rotation in the work log is the evidence
 that criterion was met.
 
+## HKDF cursor-key cutover (W1.7)
+
+The W1.7 change derives the cursor MAC key and the JWT signing key from
+`AUTH_HMAC_SECRET` via HKDF-Expand with domain separation (`info='cursor v1'`
+and `info='auth v1'`). Before W1.7 the cursor codec signed directly with the
+raw master secret.
+
+The cutover is a **one-time event** at deploy. The first engine boot under
+W1.7 invalidates every cursor that was issued by the previous deploy: those
+cursors were signed under the master secret and will fail MAC verification
+under the new derived sub-key. **Clients see "start of page" silently** —
+the read API treats an undecodable cursor as "no cursor supplied" rather
+than surfacing a decode error (ADR 0020 cursor-opacity rule).
+
+Operator action:
+
+- Expected after the upgrade-restart: dashboard list views may briefly jump
+  to the first page on next paginate-forward. No corrective action needed;
+  the next request issues a fresh cursor under the new key.
+- Unexpected: if dashboard users report repeated "lost place in list"
+  behaviour beyond the immediate post-restart window, check that
+  `AUTH_HMAC_SECRET` has not been rotated unintentionally — every rotation
+  re-runs the HKDF derivation and invalidates outstanding cursors.
+
+The same property applies to JWTs: a master-secret rotation invalidates
+every outstanding session token at the same moment. This is the documented
+behaviour in §"Bootstrap-secret rotation" above (a paired `AUTH_HMAC_SECRET`
+rotation is a separate procedure).
+
+## WebSocket stall detection (operator-side)
+
+Until a dedicated stall alert lands (deferred), the operator-side mitigation
+for a wedged price feed is to treat **absence of `price.update` events for
+more than N minutes** as a stall signal. The W1 socket gateway emits
+`price.update` on every market-data tick under normal operation; even on a
+quiet symbol, ticks arrive every few seconds during exchange hours.
+
+Daily check procedure (full version in §"Daily check" once W3.15 lands):
+
+1. On the dashboard, confirm the connection indicator shows "live".
+2. Confirm the most recent price tick on any tracked symbol is timestamped
+   within the last N minutes (suggested N = 5 for liquid majors, 15 for
+   tier-3). A longer gap with the indicator still "live" implies the engine
+   subscription is wedged behind a transport-level reconnect — restart the
+   engine container (`docker compose up -d --no-deps engine`).
+3. Cross-check `control_audit` for any halt rows since the last tick — a
+   halted engine does not emit ticks, and that is expected, not a stall.
+
+This is operator-procedure only; a dedicated stall alert + auto-recovery is
+M11 follow-up scope.
+
 ## TODO — sections owned by later waves
 
 The full W3.15 runbook (daily check, halt + drain, strategy-version

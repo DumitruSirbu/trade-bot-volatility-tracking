@@ -37,13 +37,7 @@
  * Failure routing: any test failure → ARCHITECT ROUTING NEEDED per dev-qa-cycle.md §2.2.
  */
 
-import {
-    OrderIntentActionEnum,
-    OrderPolicyEnum,
-    PositionSideEnum,
-    ProtectiveOrderTypeEnum,
-    StrategyDirectionEnum,
-} from '@bot/shared';
+import { OrderIntentActionEnum, OrderPolicyEnum, PositionSideEnum, ProtectiveOrderTypeEnum, StrategyDirectionEnum } from '@bot/shared';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
@@ -116,7 +110,11 @@ function makeBundle(
     };
 
     const policyRouter = { plan: jest.fn().mockReturnValue(defaultPlan) } as unknown as OrderPolicyRouter;
-    const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
+    const localProtectiveMonitor = new LocalProtectiveMonitor(
+        { findById: jest.fn().mockResolvedValue(null) } as never,
+        { evaluate: jest.fn() } as never,
+        new EventEmitter2(),
+    );
     const haltFlag = new HaltFlagService();
     const exchangeClient = {
         watchOrderBook: jest.fn().mockResolvedValue({ bids: [{ price: '30000' }], asks: [{ price: '30001' }] }),

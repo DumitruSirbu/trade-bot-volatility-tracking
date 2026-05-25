@@ -1,10 +1,4 @@
-import {
-    ExitReasonEnum,
-    PositionSideEnum,
-    PositionSlotEnum,
-    PositionStateEnum,
-    ProtectiveOrderTypeEnum,
-} from '@bot/shared';
+import { ExitReasonEnum, PositionSideEnum, PositionSlotEnum, PositionStateEnum, ProtectiveOrderTypeEnum } from '@bot/shared';
 
 import { Money } from '../../src/common/utils/money';
 import { PositionEntity } from '../../src/position/entity';
@@ -88,10 +82,7 @@ class FakePositionRepository {
         return this.open;
     }
 
-    async findClosedPage(
-        cursor: { closedAt: Date; id: number } | null,
-        pageSize: number,
-    ): Promise<PositionEntity[]> {
+    async findClosedPage(cursor: { closedAt: Date; id: number } | null, pageSize: number): Promise<PositionEntity[]> {
         const sorted = [...this.closed].sort((left, right) => {
             const leftTs = (left.closedAt ?? left.openedAt).getTime();
             const rightTs = (right.closedAt ?? right.openedAt).getTime();
@@ -122,20 +113,28 @@ class FakePositionRepository {
 
 class FakeDecisionRepository {
     rows: never[] = [];
-    async findPage(): Promise<never[]> { return []; }
+    async findPage(): Promise<never[]> {
+        return [];
+    }
 }
 
 class FakeAccountSnapshotRepository {
-    async findLatest() { return null; }
+    async findLatest() {
+        return null;
+    }
 }
 
 class FakeRiskStateRepository {
-    async findByDate() { return null; }
+    async findByDate() {
+        return null;
+    }
 }
 
 class FakeStrategyVersionRepository {
     byId = new Map();
-    async findById(id: number) { return this.byId.get(id) ?? null; }
+    async findById(id: number) {
+        return this.byId.get(id) ?? null;
+    }
 }
 
 function buildHarness() {
@@ -146,10 +145,7 @@ function buildHarness() {
     const versions = new FakeStrategyVersionRepository();
     const cursors = new CursorCodec(new StubSecretProvider() as never);
 
-    const positionsController = new PositionsController(
-        positions as unknown as PositionRepository,
-        cursors,
-    );
+    const positionsController = new PositionsController(positions as unknown as PositionRepository, cursors);
     const metricsController = new MetricsController(
         decisions as unknown as DecisionRepository,
         positions as unknown as PositionRepository,
@@ -304,9 +300,7 @@ describe('ReadApi adversarial — future before-cursor', () => {
             ts: new Date('2099-01-01T00:00:00Z'),
         });
 
-        await expect(
-            harness.positionsController.listClosed(futureCursor, '10'),
-        ).resolves.not.toThrow();
+        await expect(harness.positionsController.listClosed(futureCursor, '10')).resolves.not.toThrow();
     });
 
     it('a tampered/invalid cursor string falls back to page-1 without throwing', async () => {
@@ -419,9 +413,7 @@ describe('ReadApi adversarial — monetary fields serialised as strings', () => 
 
     it('monetary null fields (slPrice/tpPrice) are null, not 0 or "0"', async () => {
         const harness = buildHarness();
-        harness.positions.open.push(
-            buildPosition({ stopLossPrice: null, takeProfitPrice: null }),
-        );
+        harness.positions.open.push(buildPosition({ stopLossPrice: null, takeProfitPrice: null }));
 
         const [view] = await harness.positionsController.listOpen();
 

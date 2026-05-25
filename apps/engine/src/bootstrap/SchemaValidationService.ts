@@ -163,10 +163,7 @@ export class SchemaValidationService implements OnApplicationBootstrap {
 
     private async checkTodayPartitionWarn(now: Date): Promise<void> {
         const partitionName = this.buildPartitionName(now);
-        const rows: Array<{ exists: boolean }> = await this.dataSource.query(
-            `SELECT to_regclass($1) IS NOT NULL AS exists`,
-            [partitionName],
-        );
+        const rows: Array<{ exists: boolean }> = await this.dataSource.query(`SELECT to_regclass($1) IS NOT NULL AS exists`, [partitionName]);
 
         const present = rows[0]?.exists === true;
 

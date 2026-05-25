@@ -31,7 +31,6 @@ export class PointInTimeUniverse {
         const result = new Map<string, CoinTierEnum>();
 
         for (const row of rows) {
-
             if (!result.has(row.symbol)) {
                 result.set(row.symbol, row.coinTier);
             }

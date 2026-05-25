@@ -13,7 +13,6 @@ import { ALERT_SINK, IAlertSink } from '../alert/sink/AlertSinkModule';
 import { AppConfigService } from '../config/service';
 import { ControlAuditRepository } from '../control/repository/ControlAuditRepository';
 import { API_KEY_FINGERPRINT_PREFIX_LEN, API_KEY_FINGERPRINT_SUFFIX_LEN } from '../exchange/const';
-import { KeyPermissionAssertionFailedException } from '../exchange/exception';
 import { EXCHANGE_CLIENT, IExchangeClient } from '../exchange/interface';
 import { LiveGoAheadVerifier } from './LiveGoAheadVerifier';
 
@@ -142,11 +141,12 @@ export class KeyPermissionAssertionService implements OnApplicationBootstrap {
 
         try {
             snapshot = await this.exchange.fetchKeyPermissions();
-        } catch (cause) {
-            // ADR 0028 §2.5: a throw IS an assertion failure.
+        } catch {
+            // ADR 0028 §2.5: a throw IS an assertion failure. `failHard` is
+            // typed `Promise<never>` — control flow does not return.
             await this.failHard(['fetch_error'], null);
-            // failHard exits; the throw below is for type-narrowing only.
-            throw cause;
+
+            return;
         }
 
         if (isKeyPermissionSnapshotAcceptable(snapshot, nowMs)) {
@@ -237,8 +237,6 @@ export class KeyPermissionAssertionService implements OnApplicationBootstrap {
         process.stderr.write(`key.permission.assertion.failed — clauses=${reasonList}\n`);
 
         process.exit(1);
-        // Unreachable, but TypeScript needs the never-return contract.
-        throw new KeyPermissionAssertionFailedException(failingClauses);
     }
 
     private formatRedactedSnapshot(snapshot: IKeyPermissionSnapshot): string {

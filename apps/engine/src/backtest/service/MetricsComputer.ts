@@ -242,10 +242,7 @@ export class MetricsComputer {
         return sumSq.dividedBy(values.length).sqrt();
     }
 
-    private buildBreakdown(
-        trades: readonly IBacktestTradeResult[],
-        keyOf: (trade: IBacktestTradeResult) => string,
-    ): IBacktestBreakdownRow[] {
+    private buildBreakdown(trades: readonly IBacktestTradeResult[], keyOf: (trade: IBacktestTradeResult) => string): IBacktestBreakdownRow[] {
         const buckets: Map<string, IBacktestTradeResult[]> = new Map();
         for (const trade of trades) {
             const key = keyOf(trade);

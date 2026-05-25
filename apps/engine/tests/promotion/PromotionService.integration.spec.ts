@@ -263,11 +263,7 @@ describe('PromotionService (integration — requires Postgres)', () => {
         await txA.startTransaction('SERIALIZABLE');
 
         try {
-            await txA.manager
-                .createQueryBuilder(StrategyVersionEntity, 'sv')
-                .setLock('pessimistic_write')
-                .where('sv.id = :id', { id: incumbent.id })
-                .getOne();
+            await txA.manager.createQueryBuilder(StrategyVersionEntity, 'sv').setLock('pessimistic_write').where('sv.id = :id', { id: incumbent.id }).getOne();
 
             const serviceB = buildPromotionService(buildPromoteOutcome(candidateB.id, reportIdB));
             const promiseB = serviceB.promote(candidateB.id, reportIdB, 'concurrent B'); // blocks on incumbent row lock
@@ -277,12 +273,18 @@ describe('PromotionService (integration — requires Postgres)', () => {
             await new Promise((resolve) => setTimeout(resolve, 50));
 
             await txA.manager.update(StrategyVersionEntity, { id: incumbent.id }, { status: StrategyStatusEnum.ARCHIVED, archivedAt: new Date() });
-            await txA.manager.update(StrategyVersionEntity, { id: candidateA.id }, { status: StrategyStatusEnum.ACTIVE, promotedAt: new Date(), promotionReportId: reportIdA });
+            await txA.manager.update(
+                StrategyVersionEntity,
+                { id: candidateA.id },
+                { status: StrategyStatusEnum.ACTIVE, promotedAt: new Date(), promotionReportId: reportIdA },
+            );
             await txA.commitTransaction();
 
             // Now B unblocks: its snapshot is from before A committed; SERIALIZABLE
             // aborts it.
-            const outcomeB = await promiseB.then((value) => ({ kind: 'fulfilled' as const, value })).catch((reason: unknown) => ({ kind: 'rejected' as const, reason }));
+            const outcomeB = await promiseB
+                .then((value) => ({ kind: 'fulfilled' as const, value }))
+                .catch((reason: unknown) => ({ kind: 'rejected' as const, reason }));
 
             expect(outcomeB.kind).toBe('rejected');
 
@@ -317,6 +319,8 @@ describe('PromotionService (integration — requires Postgres)', () => {
         const name = `${UNIQUE_NAME_PREFIX}db_fence_${Date.now()}`;
         await strategyRepository.save(strategyRepository.create(buildStrategyRow(name, 1, StrategyStatusEnum.ACTIVE)));
 
-        await expect(strategyRepository.save(strategyRepository.create(buildStrategyRow(name, 2, StrategyStatusEnum.ACTIVE)))).rejects.toBeInstanceOf(QueryFailedError);
+        await expect(strategyRepository.save(strategyRepository.create(buildStrategyRow(name, 2, StrategyStatusEnum.ACTIVE)))).rejects.toBeInstanceOf(
+            QueryFailedError,
+        );
     });
 });

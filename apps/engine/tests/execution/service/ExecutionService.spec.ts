@@ -68,7 +68,11 @@ function makeService(
         }),
     } as unknown as OrderPolicyRouter;
 
-    const localProtectiveMonitor = new LocalProtectiveMonitor({ findById: jest.fn().mockResolvedValue(null) } as never, { evaluate: jest.fn() } as never, new EventEmitter2());
+    const localProtectiveMonitor = new LocalProtectiveMonitor(
+        { findById: jest.fn().mockResolvedValue(null) } as never,
+        { evaluate: jest.fn() } as never,
+        new EventEmitter2(),
+    );
     const haltFlag = new HaltFlagService();
     const exchangeClient = {
         watchOrderBook: jest.fn().mockResolvedValue({ bids: [{ price: '30000' }], asks: [{ price: '30001' }] }),

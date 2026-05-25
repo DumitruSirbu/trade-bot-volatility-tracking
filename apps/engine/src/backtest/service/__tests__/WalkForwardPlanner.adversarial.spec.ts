@@ -178,21 +178,15 @@ describe('WalkForwardPlanner — adversarial edges', () => {
 
     describe('validation guards', () => {
         it('throws when rangeToMs <= rangeFromMs', () => {
-            expect(() =>
-                WalkForwardPlanner.plan(1000, 1000, buildRollingPolicy()),
-            ).toThrow(WalkForwardPolicyException);
+            expect(() => WalkForwardPlanner.plan(1000, 1000, buildRollingPolicy())).toThrow(WalkForwardPolicyException);
         });
 
         it('throws when trainBars <= 0', () => {
-            expect(() =>
-                WalkForwardPlanner.plan(0, 1_000_000, buildRollingPolicy({ trainBars: 0 })),
-            ).toThrow(WalkForwardPolicyException);
+            expect(() => WalkForwardPlanner.plan(0, 1_000_000, buildRollingPolicy({ trainBars: 0 }))).toThrow(WalkForwardPolicyException);
         });
 
         it('throws when oosBars <= 0', () => {
-            expect(() =>
-                WalkForwardPlanner.plan(0, 1_000_000, buildRollingPolicy({ oosBars: -1 })),
-            ).toThrow(WalkForwardPolicyException);
+            expect(() => WalkForwardPlanner.plan(0, 1_000_000, buildRollingPolicy({ oosBars: -1 }))).toThrow(WalkForwardPolicyException);
         });
     });
 });

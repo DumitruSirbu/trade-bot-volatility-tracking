@@ -33,11 +33,7 @@ export class DecisionRepository extends BaseRepository<DecisionEntity> {
     // Cursor is the (ts, id) tuple of the previous page's tail row, monotonic descending.
     // Optional symbol / flow_type (signal_type) filters are AND'ed in so the dashboard
     // can drill into a single symbol's decision log.
-    async findPage(
-        cursor: { ts: Date; id: number } | null,
-        pageSize: number,
-        filters: { symbol?: string; flowType?: string },
-    ): Promise<DecisionEntity[]> {
+    async findPage(cursor: { ts: Date; id: number } | null, pageSize: number, filters: { symbol?: string; flowType?: string }): Promise<DecisionEntity[]> {
         const qb = this.repository.createQueryBuilder('d');
 
         if (cursor !== null) {

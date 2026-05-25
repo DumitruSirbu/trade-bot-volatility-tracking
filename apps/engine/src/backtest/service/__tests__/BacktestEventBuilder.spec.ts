@@ -11,13 +11,7 @@
  * All tests are pure (no I/O, no mocks needed — the builder is a pure function).
  */
 
-import {
-    CoinTierEnum,
-    DeviationSideEnum,
-    FlowTypeEnum,
-    RegimeLabelEnum,
-    VwapAnchorTypeEnum,
-} from '@bot/shared';
+import { CoinTierEnum, DeviationSideEnum, FlowTypeEnum, RegimeLabelEnum, VwapAnchorTypeEnum } from '@bot/shared';
 
 import { Money } from '../../../common/utils/money';
 import { IIndicatorSnapshot } from '../../../market-data/interface';
@@ -265,11 +259,7 @@ describe('buildBacktestEvent — field contracts', () => {
     });
 
     it('serializes openInterest as fixed-18 string when oiValue is non-null', () => {
-        const event = buildBacktestEvent(
-            buildSnapshot(),
-            1_700_000_000_000,
-            buildContext({ oiValue: new Money('1234567.89') }),
-        );
+        const event = buildBacktestEvent(buildSnapshot(), 1_700_000_000_000, buildContext({ oiValue: new Money('1234567.89') }));
 
         expect(event.openInterest).toBe(new Money('1234567.89').toFixed(18));
     });

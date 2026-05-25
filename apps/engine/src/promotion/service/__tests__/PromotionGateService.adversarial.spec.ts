@@ -135,8 +135,24 @@ function buildCleanReport(candidateId: number, baselineId: number): IComparisonR
     ];
 
     const regimeBreakdown = new Map([
-        [candidateId, { buckets: new Map([[RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.4, winRate: 0.6, totalR: 40 }], [RegimeLabelEnum.TRANSITIONING, { tradeCount: 50, meanR: 0.5, winRate: 0.6, totalR: 25 }]]) }],
-        [baselineId, { buckets: new Map([[RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.1, winRate: 0.55, totalR: 10 }], [RegimeLabelEnum.TRANSITIONING, { tradeCount: 50, meanR: 0.2, winRate: 0.5, totalR: 10 }]]) }],
+        [
+            candidateId,
+            {
+                buckets: new Map([
+                    [RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.4, winRate: 0.6, totalR: 40 }],
+                    [RegimeLabelEnum.TRANSITIONING, { tradeCount: 50, meanR: 0.5, winRate: 0.6, totalR: 25 }],
+                ]),
+            },
+        ],
+        [
+            baselineId,
+            {
+                buckets: new Map([
+                    [RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.1, winRate: 0.55, totalR: 10 }],
+                    [RegimeLabelEnum.TRANSITIONING, { tradeCount: 50, meanR: 0.2, winRate: 0.5, totalR: 10 }],
+                ]),
+            },
+        ],
     ]);
 
     return {
@@ -208,7 +224,10 @@ describe('PromotionGateService — adversarial failure modes', () => {
             regimeBreakdown:
                 report.regimeBreakdown === null
                     ? null
-                    : Array.from(report.regimeBreakdown.entries()).map(([versionId, metrics]) => [versionId, { buckets: Array.from(metrics.buckets.entries()) }]),
+                    : Array.from(report.regimeBreakdown.entries()).map(([versionId, metrics]) => [
+                          versionId,
+                          { buckets: Array.from(metrics.buckets.entries()) },
+                      ]),
             eventOutcomes: report.eventOutcomes.map((entry) => ({ ...entry, outcomesByVersion: Array.from(entry.outcomesByVersion.entries()) })),
         };
         await fs.writeFile(tempArtefactPath, JSON.stringify(serialisable));
@@ -238,10 +257,7 @@ describe('PromotionGateService — adversarial failure modes', () => {
 
         const oosKey = `${candidate.id}:0:oos` as const;
         const cell = report.perFoldReports.get(oosKey)!;
-        const equityCurveWithWorstDay = [
-            ...cell.equityCurve,
-            { utcDate: '2026-03-15', equityUsdt: '900', dailyReturnPct: String(worstDayPct) },
-        ];
+        const equityCurveWithWorstDay = [...cell.equityCurve, { utcDate: '2026-03-15', equityUsdt: '900', dailyReturnPct: String(worstDayPct) }];
         report.perFoldReports.set(oosKey, { ...cell, equityCurve: equityCurveWithWorstDay });
         await writeArtefact(report);
 
@@ -316,20 +332,26 @@ describe('PromotionGateService — adversarial failure modes', () => {
 
         // Override regime breakdown: candidate wins RANGING, loses TRENDING_UP.
         const momentumRegimeBreakdown = new Map([
-            [candidate.id, {
-                buckets: new Map([
-                    [RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.9, winRate: 0.7, totalR: 90 }],
-                    [RegimeLabelEnum.TRENDING_UP, { tradeCount: 80, meanR: 0.1, winRate: 0.5, totalR: 8 }],
-                    [RegimeLabelEnum.TRENDING_DOWN, { tradeCount: 80, meanR: 0.3, winRate: 0.55, totalR: 24 }],
-                ]),
-            }],
-            [baseline.id, {
-                buckets: new Map([
-                    [RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.2, winRate: 0.5, totalR: 20 }],
-                    [RegimeLabelEnum.TRENDING_UP, { tradeCount: 80, meanR: 0.5, winRate: 0.65, totalR: 40 }], // baseline wins here
-                    [RegimeLabelEnum.TRENDING_DOWN, { tradeCount: 80, meanR: 0.2, winRate: 0.5, totalR: 16 }],
-                ]),
-            }],
+            [
+                candidate.id,
+                {
+                    buckets: new Map([
+                        [RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.9, winRate: 0.7, totalR: 90 }],
+                        [RegimeLabelEnum.TRENDING_UP, { tradeCount: 80, meanR: 0.1, winRate: 0.5, totalR: 8 }],
+                        [RegimeLabelEnum.TRENDING_DOWN, { tradeCount: 80, meanR: 0.3, winRate: 0.55, totalR: 24 }],
+                    ]),
+                },
+            ],
+            [
+                baseline.id,
+                {
+                    buckets: new Map([
+                        [RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.2, winRate: 0.5, totalR: 20 }],
+                        [RegimeLabelEnum.TRENDING_UP, { tradeCount: 80, meanR: 0.5, winRate: 0.65, totalR: 40 }], // baseline wins here
+                        [RegimeLabelEnum.TRENDING_DOWN, { tradeCount: 80, meanR: 0.2, winRate: 0.5, totalR: 16 }],
+                    ]),
+                },
+            ],
         ]);
 
         const momentumReport: IComparisonReport = { ...report, regimeBreakdown: momentumRegimeBreakdown };
@@ -359,12 +381,7 @@ describe('PromotionGateService — adversarial failure modes', () => {
 
         // 200 trades spread across 4 regimes (50 each), 50 distinct days each (200 distinct
         // total) so the shadow-days gate also clears via tape fallback.
-        const regimes: RegimeLabelEnum[] = [
-            RegimeLabelEnum.RANGING,
-            RegimeLabelEnum.TRANSITIONING,
-            RegimeLabelEnum.TRENDING_UP,
-            RegimeLabelEnum.TRENDING_DOWN,
-        ];
+        const regimes: RegimeLabelEnum[] = [RegimeLabelEnum.RANGING, RegimeLabelEnum.TRANSITIONING, RegimeLabelEnum.TRENDING_UP, RegimeLabelEnum.TRENDING_DOWN];
         const trades: IBacktestTradeResult[] = [];
         for (let i = 0; i < 200; i += 1) {
             const regime = regimes[i % 4];

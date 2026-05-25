@@ -6,11 +6,7 @@ import {
     BACKTEST_BOOTSTRAP_TRADES_PER_CANDIDATE_FLOOR,
 } from '../const/backtestConsts';
 import { IComparisonEventOutcome } from '../interface/IComparisonEventOutcome';
-import {
-    IPairwiseBootstrapResult,
-    IPairwiseSampleCounters,
-    PairwiseWinner,
-} from '../interface/IPairwiseBootstrapResult';
+import { IPairwiseBootstrapResult, IPairwiseSampleCounters, PairwiseWinner } from '../interface/IPairwiseBootstrapResult';
 import { circularBlockBootstrap } from '../stats/circularBlockBootstrap';
 import { politisWhite } from '../stats/politisWhite';
 import { fnv1a32 } from '../stats/rng';
@@ -34,11 +30,7 @@ export class BootstrapStatsService {
     // Produce one bootstrap result per ordered pair `(A, B)` of `versionIds`. Pairs are
     // emitted in `(i, j)` order with `i < j` so a 4-version run yields 6 results, not 12.
     // The promotion gate's family-wise reasoning (ADR 0018 §2.7) assumes this ordering.
-    computePairwiseStats(
-        eventOutcomes: readonly IComparisonEventOutcome[],
-        versionIds: readonly number[],
-        runLabel: string,
-    ): IPairwiseBootstrapResult[] {
+    computePairwiseStats(eventOutcomes: readonly IComparisonEventOutcome[], versionIds: readonly number[], runLabel: string): IPairwiseBootstrapResult[] {
         const results: IPairwiseBootstrapResult[] = [];
 
         for (let i = 0; i < versionIds.length; i += 1) {
@@ -66,12 +58,7 @@ export class BootstrapStatsService {
         );
     }
 
-    private computeOnePair(
-        eventOutcomes: readonly IComparisonEventOutcome[],
-        versionA: number,
-        versionB: number,
-        runLabel: string,
-    ): IPairwiseBootstrapResult {
+    private computeOnePair(eventOutcomes: readonly IComparisonEventOutcome[], versionA: number, versionB: number, runLabel: string): IPairwiseBootstrapResult {
         const { diffSeries, tradesA, tradesB, pairedNonZeroEvents } = this.buildPairedDiffSeries(eventOutcomes, versionA, versionB);
 
         // The bootstrap operates on the difference series — it has no per-event regime
@@ -128,7 +115,7 @@ export class BootstrapStatsService {
 
         this.logger.debug(
             `pair v${versionA} vs v${versionB} blockLen=${blockLen} ` +
-            `mean=${distribution.meanDiff.toFixed(6)} ci=[${distribution.ci95Low.toFixed(6)}, ${distribution.ci95High.toFixed(6)}] winner=${winner}`,
+                `mean=${distribution.meanDiff.toFixed(6)} ci=[${distribution.ci95Low.toFixed(6)}, ${distribution.ci95High.toFixed(6)}] winner=${winner}`,
         );
 
         return {
@@ -205,4 +192,3 @@ function resolveWinner(ci95Low: number, ci95High: number): PairwiseWinner {
 
     return 'tie';
 }
-

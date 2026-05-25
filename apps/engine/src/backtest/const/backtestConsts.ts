@@ -70,8 +70,4 @@ export const BACKTEST_BOOTSTRAP_PAIRED_NON_ZERO_EVENTS_FLOOR = 30;
 // notice is logged in CompareCommand.)
 import { resolve as resolvePath } from 'path';
 
-export const BACKTEST_ARTEFACT_ROOT = resolvePath(
-    process.env['BACKTEST_ARTEFACT_ROOT']
-        ?? process.env['BACKTEST_ARTEFACT_DIR']
-        ?? './var/backtest-artefacts',
-);
+export const BACKTEST_ARTEFACT_ROOT = resolvePath(process.env['BACKTEST_ARTEFACT_ROOT'] ?? process.env['BACKTEST_ARTEFACT_DIR'] ?? './var/backtest-artefacts');

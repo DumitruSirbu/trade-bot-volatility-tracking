@@ -8,18 +8,17 @@
 import { ExchangeEnvironmentEnum } from '@bot/shared';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeFile, unlink } from 'node:fs/promises';
+import { writeFile, unlink, chmod } from 'node:fs/promises';
 import * as crypto from 'node:crypto';
 
 import { LiveGoAheadVerifier } from '../LiveGoAheadVerifier';
 
 // ─── factory helpers ──────────────────────────────────────────────────────────
 
-function makeConfig(overrides: {
-    liveGoAheadTokenFile?: string;
-    liveGoAheadTokenHash?: string;
-    exchangeEnv?: ExchangeEnvironmentEnum;
-}): { liveGoAheadTokenFile: string | undefined; liveGoAheadTokenHash: string | undefined } {
+function makeConfig(overrides: { liveGoAheadTokenFile?: string; liveGoAheadTokenHash?: string; exchangeEnv?: ExchangeEnvironmentEnum }): {
+    liveGoAheadTokenFile: string | undefined;
+    liveGoAheadTokenHash: string | undefined;
+} {
     return {
         liveGoAheadTokenFile: overrides.liveGoAheadTokenFile,
         liveGoAheadTokenHash: overrides.liveGoAheadTokenHash,
@@ -33,13 +32,12 @@ function sha256Hex(text: string): string {
 async function writeTempFile(content: string): Promise<string> {
     const path = join(tmpdir(), `live-go-ahead-test-${Date.now()}-${Math.random()}`);
     await writeFile(path, content, 'utf8');
+    // W1 follow-up — verifier rejects group/other-readable token files.
+    await chmod(path, 0o600);
     return path;
 }
 
-function buildVerifier(configOverrides: {
-    liveGoAheadTokenFile?: string;
-    liveGoAheadTokenHash?: string;
-}): LiveGoAheadVerifier {
+function buildVerifier(configOverrides: { liveGoAheadTokenFile?: string; liveGoAheadTokenHash?: string }): LiveGoAheadVerifier {
     const appConfig = {
         ...makeConfig(configOverrides),
     };
@@ -88,9 +86,7 @@ describe('LiveGoAheadVerifier — adversarial', () => {
             const verifier = new LiveGoAheadVerifier(appConfig);
 
             // OPERATE + CHECK
-            await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.LIVE)).rejects.toThrow(
-                'LIVE_GO_AHEAD_TOKEN_FILE',
-            );
+            await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.LIVE)).rejects.toThrow('LIVE_GO_AHEAD_TOKEN_FILE');
         });
 
         it('throws when LIVE_GO_AHEAD_TOKEN_FILE is an empty string', async () => {
@@ -102,9 +98,7 @@ describe('LiveGoAheadVerifier — adversarial', () => {
             const verifier = new LiveGoAheadVerifier(appConfig);
 
             // OPERATE + CHECK
-            await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.LIVE)).rejects.toThrow(
-                'LIVE_GO_AHEAD_TOKEN_FILE',
-            );
+            await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.LIVE)).rejects.toThrow('LIVE_GO_AHEAD_TOKEN_FILE');
         });
 
         it('throws when LIVE_GO_AHEAD_TOKEN_HASH is not configured', async () => {
@@ -118,9 +112,7 @@ describe('LiveGoAheadVerifier — adversarial', () => {
                 const verifier = new LiveGoAheadVerifier(appConfig);
 
                 // OPERATE + CHECK
-                await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.LIVE)).rejects.toThrow(
-                    'LIVE_GO_AHEAD_TOKEN_HASH',
-                );
+                await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.LIVE)).rejects.toThrow('LIVE_GO_AHEAD_TOKEN_HASH');
             } finally {
                 await unlink(filePath).catch(() => undefined);
             }
@@ -150,9 +142,7 @@ describe('LiveGoAheadVerifier — adversarial', () => {
                 const verifier = new LiveGoAheadVerifier(appConfig);
 
                 // OPERATE + CHECK — empty file trims to '', hash differs from 'real-token'
-                await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.LIVE)).rejects.toThrow(
-                    'hash mismatch',
-                );
+                await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.LIVE)).rejects.toThrow('hash mismatch');
             } finally {
                 await unlink(filePath).catch(() => undefined);
             }
@@ -170,9 +160,7 @@ describe('LiveGoAheadVerifier — adversarial', () => {
                 const verifier = new LiveGoAheadVerifier(appConfig);
 
                 // OPERATE + CHECK — whitespace-only trims to '' -> hash mismatch
-                await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.LIVE)).rejects.toThrow(
-                    'hash mismatch',
-                );
+                await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.LIVE)).rejects.toThrow('hash mismatch');
             } finally {
                 await unlink(filePath).catch(() => undefined);
             }
@@ -189,9 +177,7 @@ describe('LiveGoAheadVerifier — adversarial', () => {
                 const verifier = new LiveGoAheadVerifier(appConfig);
 
                 // OPERATE + CHECK
-                await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.LIVE)).rejects.toThrow(
-                    'hash mismatch',
-                );
+                await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.LIVE)).rejects.toThrow('hash mismatch');
             } finally {
                 await unlink(filePath).catch(() => undefined);
             }

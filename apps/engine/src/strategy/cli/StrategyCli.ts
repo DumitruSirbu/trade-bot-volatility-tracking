@@ -67,11 +67,7 @@ async function main(argv: readonly string[]): Promise<number> {
 
     try {
         if (subcommand === SUBCOMMAND_COMPARE) {
-            const command = new CompareCommand(
-                app.get(ComparisonRunnerService),
-                app.get(ComparisonReportRepository),
-                app.get(StrategyVersionRepository),
-            );
+            const command = new CompareCommand(app.get(ComparisonRunnerService), app.get(ComparisonReportRepository), app.get(StrategyVersionRepository));
 
             const result = await command.execute(parsedArgs as ICompareArgs);
 

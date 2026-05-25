@@ -83,10 +83,7 @@ function buildContext(authorizationHeader: string): ExecutionContext {
     } as unknown as ExecutionContext;
 }
 
-async function expectFailureReason(
-    promise: Promise<unknown>,
-    reason: AuthFailureReasonEnum,
-): Promise<void> {
+async function expectFailureReason(promise: Promise<unknown>, reason: AuthFailureReasonEnum): Promise<void> {
     await expect(promise).rejects.toBeInstanceOf(UnauthorizedException);
     await promise.catch((err: UnauthorizedException) => {
         const body = err.getResponse() as { error: string; reason: AuthFailureReasonEnum };
@@ -111,10 +108,7 @@ describe('AuthGuard adversarial — expired-in-flight token', () => {
             now: new Date(Date.now() - 10_000),
         });
 
-        await expectFailureReason(
-            guard.canActivate(buildContext(`Bearer ${token}`)),
-            AuthFailureReasonEnum.EXPIRED,
-        );
+        await expectFailureReason(guard.canActivate(buildContext(`Bearer ${token}`)), AuthFailureReasonEnum.EXPIRED);
     });
 
     it('token exactly at exp boundary (exp === floor(now/1000)) is rejected, not passed', async () => {
@@ -151,20 +145,14 @@ describe('AuthGuard adversarial — CR/LF header injection', () => {
         // "X-Forwarded-For" fragment as a valid bearer.
         const injected = 'Bearer eyJhbGciOiJIUzI1NiJ9.fakepayload.fakesig\r\nX-Forwarded-For: evil';
 
-        await expectFailureReason(
-            guard.canActivate(buildContext(injected)),
-            AuthFailureReasonEnum.MALFORMED,
-        );
+        await expectFailureReason(guard.canActivate(buildContext(injected)), AuthFailureReasonEnum.MALFORMED);
     });
 
     it('bearer value with embedded null byte is treated as MALFORMED', async () => {
         const { guard } = buildGuard([AuthScopeEnum.READ]);
         const injected = 'Bearer valid\x00.but.notreally';
 
-        await expectFailureReason(
-            guard.canActivate(buildContext(injected)),
-            AuthFailureReasonEnum.MALFORMED,
-        );
+        await expectFailureReason(guard.canActivate(buildContext(injected)), AuthFailureReasonEnum.MALFORMED);
     });
 });
 
@@ -183,10 +171,7 @@ describe('AuthGuard adversarial — scope downgrade', () => {
             now: new Date(),
         });
 
-        await expectFailureReason(
-            guard.canActivate(buildContext(`Bearer ${token}`)),
-            AuthFailureReasonEnum.BAD_SCOPE,
-        );
+        await expectFailureReason(guard.canActivate(buildContext(`Bearer ${token}`)), AuthFailureReasonEnum.BAD_SCOPE);
     });
 
     it('rejects a READ token when both HALT and ADMIN scopes are required', async () => {
@@ -198,10 +183,7 @@ describe('AuthGuard adversarial — scope downgrade', () => {
             now: new Date(),
         });
 
-        await expectFailureReason(
-            guard.canActivate(buildContext(`Bearer ${token}`)),
-            AuthFailureReasonEnum.BAD_SCOPE,
-        );
+        await expectFailureReason(guard.canActivate(buildContext(`Bearer ${token}`)), AuthFailureReasonEnum.BAD_SCOPE);
     });
 
     it('a token that holds READ+HALT but NOT ADMIN is rejected for ADMIN-scoped route', async () => {
@@ -213,10 +195,7 @@ describe('AuthGuard adversarial — scope downgrade', () => {
             now: new Date(),
         });
 
-        await expectFailureReason(
-            guard.canActivate(buildContext(`Bearer ${token}`)),
-            AuthFailureReasonEnum.BAD_SCOPE,
-        );
+        await expectFailureReason(guard.canActivate(buildContext(`Bearer ${token}`)), AuthFailureReasonEnum.BAD_SCOPE);
     });
 });
 
@@ -237,7 +216,12 @@ describe('AuthCorsInterceptor adversarial — CORS denial shape', () => {
 
     it('disallowed origin returns 403 with IAuthFailure shape, not 200', () => {
         process.env[AUTH_CORS_ALLOWLIST_ENV] = 'http://localhost:5173';
-        const middleware = new AuthCorsInterceptor({ corsAllowlist: (process.env[AUTH_CORS_ALLOWLIST_ENV] ?? '').split(',').map((s) => s.trim()).filter((s) => s.length > 0) } as unknown as import('../../src/config/service').AppConfigService);
+        const middleware = new AuthCorsInterceptor({
+            corsAllowlist: (process.env[AUTH_CORS_ALLOWLIST_ENV] ?? '')
+                .split(',')
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0),
+        } as unknown as import('../../src/config/service').AppConfigService);
         const status = jest.fn().mockReturnThis();
         const json = jest.fn();
         const res = {
@@ -248,24 +232,23 @@ describe('AuthCorsInterceptor adversarial — CORS denial shape', () => {
         } as unknown as Parameters<typeof middleware.use>[1];
         const next = jest.fn();
 
-        middleware.use(
-            { method: 'OPTIONS', headers: { origin: 'https://attacker.example.com' } } as never,
-            res,
-            next,
-        );
+        middleware.use({ method: 'OPTIONS', headers: { origin: 'https://attacker.example.com' } } as never, res, next);
 
         // Must not call next, must not return 200.
         expect(next).not.toHaveBeenCalled();
         expect(status).not.toHaveBeenCalledWith(200);
         expect(status).toHaveBeenCalledWith(403);
-        expect(json).toHaveBeenCalledWith(
-            expect.objectContaining({ error: 'AUTH_FAILED', reason: AuthFailureReasonEnum.CORS_FORBIDDEN }),
-        );
+        expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: 'AUTH_FAILED', reason: AuthFailureReasonEnum.CORS_FORBIDDEN }));
     });
 
     it('GET from a disallowed origin is also denied (not just OPTIONS)', () => {
         process.env[AUTH_CORS_ALLOWLIST_ENV] = 'http://localhost:5173';
-        const middleware = new AuthCorsInterceptor({ corsAllowlist: (process.env[AUTH_CORS_ALLOWLIST_ENV] ?? '').split(',').map((s) => s.trim()).filter((s) => s.length > 0) } as unknown as import('../../src/config/service').AppConfigService);
+        const middleware = new AuthCorsInterceptor({
+            corsAllowlist: (process.env[AUTH_CORS_ALLOWLIST_ENV] ?? '')
+                .split(',')
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0),
+        } as unknown as import('../../src/config/service').AppConfigService);
         const status = jest.fn().mockReturnThis();
         const json = jest.fn();
         const res = {
@@ -276,11 +259,7 @@ describe('AuthCorsInterceptor adversarial — CORS denial shape', () => {
         } as unknown as Parameters<typeof middleware.use>[1];
         const next = jest.fn();
 
-        middleware.use(
-            { method: 'GET', headers: { origin: 'https://evil.example.com' } } as never,
-            res,
-            next,
-        );
+        middleware.use({ method: 'GET', headers: { origin: 'https://evil.example.com' } } as never, res, next);
 
         expect(next).not.toHaveBeenCalled();
         expect(status).toHaveBeenCalledWith(403);
@@ -288,7 +267,12 @@ describe('AuthCorsInterceptor adversarial — CORS denial shape', () => {
 
     it('empty allowlist denies every Origin header', () => {
         process.env[AUTH_CORS_ALLOWLIST_ENV] = '';
-        const middleware = new AuthCorsInterceptor({ corsAllowlist: (process.env[AUTH_CORS_ALLOWLIST_ENV] ?? '').split(',').map((s) => s.trim()).filter((s) => s.length > 0) } as unknown as import('../../src/config/service').AppConfigService);
+        const middleware = new AuthCorsInterceptor({
+            corsAllowlist: (process.env[AUTH_CORS_ALLOWLIST_ENV] ?? '')
+                .split(',')
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0),
+        } as unknown as import('../../src/config/service').AppConfigService);
         const status = jest.fn().mockReturnThis();
         const json = jest.fn();
         const res = {
@@ -299,11 +283,7 @@ describe('AuthCorsInterceptor adversarial — CORS denial shape', () => {
         } as unknown as Parameters<typeof middleware.use>[1];
         const next = jest.fn();
 
-        middleware.use(
-            { method: 'OPTIONS', headers: { origin: 'http://localhost:3000' } } as never,
-            res,
-            next,
-        );
+        middleware.use({ method: 'OPTIONS', headers: { origin: 'http://localhost:3000' } } as never, res, next);
 
         expect(next).not.toHaveBeenCalled();
         expect(status).toHaveBeenCalledWith(403);

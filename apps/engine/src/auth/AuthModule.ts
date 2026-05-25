@@ -195,15 +195,12 @@ export class AuthTokenService {
         const actualBuf = Buffer.from(signatureSeg, 'utf8');
 
         if (expectedBuf.byteLength !== actualBuf.byteLength || !timingSafeEqual(expectedBuf, actualBuf)) {
-            // M11a W1.5 follow-up — `AuthFailureReasonEnum.BAD_SIGNATURE` now
-            // exists in `@bot/shared` (commit e14b098). Promote the engine
-            // discriminator onto the wire so signature-verification failures
-            // surface as BAD_SIGNATURE instead of MALFORMED. The non-enumerable
-            // `engineReason` is retained for backward-compatible audit/metric
-            // routing.
-            this.logger.warn('auth.verify.failure reason=BAD_SIGNATURE engineReason=BAD_SIGNATURE signatureMismatch=true');
+            // M11a W1.5 follow-up — `AuthFailureReasonEnum.BAD_SIGNATURE` is
+            // now on the wire enum directly. Callers route audit/metric off
+            // `failure.reason === BAD_SIGNATURE`; no side-channel needed.
+            this.logger.warn('auth.verify.failure reason=BAD_SIGNATURE signatureMismatch=true');
 
-            return failureWithSignal(AuthFailureReasonEnum.BAD_SIGNATURE, 'BAD_SIGNATURE');
+            return failure(AuthFailureReasonEnum.BAD_SIGNATURE);
         }
 
         let parsed: IJwtPayload;
@@ -236,37 +233,6 @@ export class AuthTokenService {
 
 function failure(reason: AuthFailureReasonEnum): IAuthFailure {
     return { error: 'AUTH_FAILED', reason };
-}
-
-// M11a W1.5 — engine-side discriminator riding alongside the wire reason.
-// `engineReason` is non-enumerable so it does not serialise into the response
-// body (the wire contract stays in `IAuthFailure.reason`); inspectors that
-// know about the field (the guard's audit/metric path) read it via the typed
-// helper `getEngineReason` and route the signal to the audit row + Telegram.
-// When bot-shared-maintainer adds `BAD_SIGNATURE` to `AuthFailureReasonEnum`,
-// `failureWithSignal` is the single edit point that promotes the engine
-// reason onto the wire.
-export type EngineAuthFailureReason = 'BAD_SIGNATURE';
-
-const ENGINE_REASON_KEY = '__engineReason';
-
-function failureWithSignal(reason: AuthFailureReasonEnum, engineReason: EngineAuthFailureReason): IAuthFailure {
-    const payload: IAuthFailure & { [ENGINE_REASON_KEY]?: EngineAuthFailureReason } = { error: 'AUTH_FAILED', reason };
-
-    Object.defineProperty(payload, ENGINE_REASON_KEY, {
-        value: engineReason,
-        enumerable: false,
-        writable: false,
-        configurable: false,
-    });
-
-    return payload;
-}
-
-export function getEngineReason(failureBody: IAuthFailure): EngineAuthFailureReason | null {
-    const value = (failureBody as { [ENGINE_REASON_KEY]?: EngineAuthFailureReason })[ENGINE_REASON_KEY];
-
-    return value ?? null;
 }
 
 function isWellFormedPayload(value: unknown): value is IJwtPayload {

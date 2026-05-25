@@ -22,11 +22,7 @@ import { WS_CLOCK, WsAuthAdapter } from './auth/WsAuthHandshake';
 
 @Module({
     imports: [AuthModule, PositionModule],
-    providers: [
-        { provide: WS_CLOCK, useValue: (): number => Date.now() },
-        WsAuthAdapter,
-        LiveGateway,
-    ],
+    providers: [{ provide: WS_CLOCK, useValue: (): number => Date.now() }, WsAuthAdapter, LiveGateway],
     exports: [LiveGateway],
 })
 export class WsModule {}

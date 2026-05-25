@@ -77,7 +77,10 @@ describe('PromotionGateService — unit (synthetic IComparisonReport)', () => {
             regimeBreakdown:
                 report.regimeBreakdown === null
                     ? null
-                    : Array.from(report.regimeBreakdown.entries()).map(([versionId, metrics]) => [versionId, { buckets: Array.from(metrics.buckets.entries()) }]),
+                    : Array.from(report.regimeBreakdown.entries()).map(([versionId, metrics]) => [
+                          versionId,
+                          { buckets: Array.from(metrics.buckets.entries()) },
+                      ]),
             eventOutcomes: report.eventOutcomes.map((entry) => ({ ...entry, outcomesByVersion: Array.from(entry.outcomesByVersion.entries()) })),
         };
         await fs.writeFile(tempArtefactPath, JSON.stringify(serialisable));
@@ -190,8 +193,12 @@ describe('PromotionGateService — unit (synthetic IComparisonReport)', () => {
         // Pump BTCUSDT to 60% of OOS trades (well above MAX_SYMBOL_CONCENTRATION_PCT).
         const oosKey = `${candidate.id}:0:oos` as const;
         const cell = report.perFoldReports.get(oosKey)!;
-        const heavySymbol: IBacktestTradeResult[] = Array.from({ length: 6 }, (_, i) => buildTrade(`evt-btc-${i}`, 'BTCUSDT', '1.00', 1700000000000 + i * 86_400_000));
-        const lightSymbol: IBacktestTradeResult[] = Array.from({ length: 4 }, (_, i) => buildTrade(`evt-other-${i}`, `OTHER${i}USDT`, '1.00', 1700000000000 + (10 + i) * 86_400_000));
+        const heavySymbol: IBacktestTradeResult[] = Array.from({ length: 6 }, (_, i) =>
+            buildTrade(`evt-btc-${i}`, 'BTCUSDT', '1.00', 1700000000000 + i * 86_400_000),
+        );
+        const lightSymbol: IBacktestTradeResult[] = Array.from({ length: 4 }, (_, i) =>
+            buildTrade(`evt-other-${i}`, `OTHER${i}USDT`, '1.00', 1700000000000 + (10 + i) * 86_400_000),
+        );
         report.perFoldReports.set(oosKey, { ...cell, trades: [...heavySymbol, ...lightSymbol] });
         await writeArtefact(report);
 
@@ -230,8 +237,24 @@ describe('PromotionGateService — unit (synthetic IComparisonReport)', () => {
         const flippedReport: IComparisonReport = {
             ...report,
             regimeBreakdown: new Map([
-                [candidate.id, { buckets: new Map([[RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.1, winRate: 0.55, totalR: 10 }], [RegimeLabelEnum.TRANSITIONING, { tradeCount: 50, meanR: 0.5, winRate: 0.6, totalR: 25 }]]) }],
-                [baseline.id, { buckets: new Map([[RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.4, winRate: 0.6, totalR: 40 }], [RegimeLabelEnum.TRANSITIONING, { tradeCount: 50, meanR: 0.3, winRate: 0.55, totalR: 15 }]]) }],
+                [
+                    candidate.id,
+                    {
+                        buckets: new Map([
+                            [RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.1, winRate: 0.55, totalR: 10 }],
+                            [RegimeLabelEnum.TRANSITIONING, { tradeCount: 50, meanR: 0.5, winRate: 0.6, totalR: 25 }],
+                        ]),
+                    },
+                ],
+                [
+                    baseline.id,
+                    {
+                        buckets: new Map([
+                            [RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.4, winRate: 0.6, totalR: 40 }],
+                            [RegimeLabelEnum.TRANSITIONING, { tradeCount: 50, meanR: 0.3, winRate: 0.55, totalR: 15 }],
+                        ]),
+                    },
+                ],
             ]),
         };
         await writeArtefact(flippedReport);
@@ -315,12 +338,22 @@ function buildTrade(eventId: string, symbol: string, netPnlUsdt: string, openedA
     };
 }
 
-function buildBacktestReport(versionId: number, foldIndex: number, window: 'train' | 'validation' | 'oos', overrides: Partial<IBacktestReport> = {}): IBacktestReport {
+function buildBacktestReport(
+    versionId: number,
+    foldIndex: number,
+    window: 'train' | 'validation' | 'oos',
+    overrides: Partial<IBacktestReport> = {},
+): IBacktestReport {
     // Spread across 5 symbols + 12 ISO weeks so default concentration thresholds
     // (40% per symbol, 30% per week) are not breached by the clean fixture.
     const symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'ADAUSDT'];
     const baseTrades: IBacktestTradeResult[] = Array.from({ length: 12 }, (_, i) =>
-        buildTrade(`evt-${versionId}-${foldIndex}-${window}-${i}`, symbols[i % symbols.length], i % 3 === 0 ? '-0.50' : '1.50', 1700000000000 + i * 86_400_000 * 7),
+        buildTrade(
+            `evt-${versionId}-${foldIndex}-${window}-${i}`,
+            symbols[i % symbols.length],
+            i % 3 === 0 ? '-0.50' : '1.50',
+            1700000000000 + i * 86_400_000 * 7,
+        ),
     );
 
     return {
@@ -386,8 +419,24 @@ function buildCleanReport(versionId: number, baselineId: number): IComparisonRep
     ];
 
     const regimeBreakdown = new Map([
-        [versionId, { buckets: new Map([[RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.4, winRate: 0.6, totalR: 40 }], [RegimeLabelEnum.TRANSITIONING, { tradeCount: 50, meanR: 0.5, winRate: 0.6, totalR: 25 }]]) }],
-        [baselineId, { buckets: new Map([[RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.1, winRate: 0.55, totalR: 10 }], [RegimeLabelEnum.TRANSITIONING, { tradeCount: 50, meanR: 0.2, winRate: 0.5, totalR: 10 }]]) }],
+        [
+            versionId,
+            {
+                buckets: new Map([
+                    [RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.4, winRate: 0.6, totalR: 40 }],
+                    [RegimeLabelEnum.TRANSITIONING, { tradeCount: 50, meanR: 0.5, winRate: 0.6, totalR: 25 }],
+                ]),
+            },
+        ],
+        [
+            baselineId,
+            {
+                buckets: new Map([
+                    [RegimeLabelEnum.RANGING, { tradeCount: 100, meanR: 0.1, winRate: 0.55, totalR: 10 }],
+                    [RegimeLabelEnum.TRANSITIONING, { tradeCount: 50, meanR: 0.2, winRate: 0.5, totalR: 10 }],
+                ]),
+            },
+        ],
     ]);
 
     return {

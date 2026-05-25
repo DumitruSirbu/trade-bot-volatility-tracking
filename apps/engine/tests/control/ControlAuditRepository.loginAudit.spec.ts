@@ -76,10 +76,7 @@ function mapLoginActionToDb(action: HaltAuditActionEnum): string {
 }
 
 // Mirrors the production appendLoginAudit logic.
-async function appendLoginAudit(
-    params: IAppendLoginAuditParams,
-    repo: StubOrmRepository,
-): Promise<{ id: string } | null> {
+async function appendLoginAudit(params: IAppendLoginAuditParams, repo: StubOrmRepository): Promise<{ id: string } | null> {
     const dbAction = mapLoginActionToDb(params.action);
     const row = repo.create({
         occurredAt: params.occurredAt,

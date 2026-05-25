@@ -38,10 +38,7 @@ export class PositionsController {
     }
 
     @Get('closed')
-    async listClosed(
-        @Query('cursor') rawCursor?: string,
-        @Query('pageSize') rawPageSize?: string,
-    ): Promise<IPaginated<IClosedPositionView>> {
+    async listClosed(@Query('cursor') rawCursor?: string, @Query('pageSize') rawPageSize?: string): Promise<IPaginated<IClosedPositionView>> {
         const pageSize = clampPageSize(rawPageSize);
         const decoded = this.cursors.decode(rawCursor);
         // Position ids are SERIAL numbers; a forged string-id cursor is treated

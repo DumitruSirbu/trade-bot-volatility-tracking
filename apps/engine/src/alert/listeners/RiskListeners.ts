@@ -1,11 +1,4 @@
-import {
-    AlertSeverityEnum,
-    AlertTypeEnum,
-    HaltSourceEnum,
-    IAlertPayload,
-    IModelDivergenceEvent,
-    IRiskHaltEvent,
-} from '@bot/shared';
+import { AlertSeverityEnum, AlertTypeEnum, HaltSourceEnum, IAlertPayload, IModelDivergenceEvent, IRiskHaltEvent } from '@bot/shared';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 
@@ -55,7 +48,6 @@ export class RiskListeners {
 
     @OnEvent(RISK_HALT_TRIGGERED_EVENT)
     async onRiskHalt(event: IRiskHaltEvent): Promise<void> {
-
         if (this.isWithinDedupWindow(event.source)) {
             this.logger.debug(`riskHalt.coalesced source=${event.source}`);
 
@@ -161,7 +153,6 @@ export class RiskListeners {
         const now = this.clock.now();
 
         try {
-
             if (!this.haltFlag.isHalted()) {
                 this.haltFlag.halt(`${params.source}:${params.reason}`);
             }
@@ -219,7 +210,6 @@ export class RiskListeners {
 }
 
 function describe(cause: unknown): string {
-
     if (cause instanceof Error) {
         return `${cause.name}: ${cause.message}`;
     }

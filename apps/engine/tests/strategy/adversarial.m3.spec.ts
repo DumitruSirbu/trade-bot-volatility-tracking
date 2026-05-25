@@ -53,7 +53,9 @@ function buildInput(overrides: Partial<IStrategyInput> = {}): IStrategyInput {
     };
 }
 
-function buildVersionRow(overrides: Partial<{ id: number; name: string; version: number; direction: StrategyDirectionEnum; params: Record<string, unknown> }> = {}) {
+function buildVersionRow(
+    overrides: Partial<{ id: number; name: string; version: number; direction: StrategyDirectionEnum; params: Record<string, unknown> }> = {},
+) {
     return {
         id: 1,
         name: 'volatility-vwap',
@@ -160,7 +162,21 @@ function buildMocks() {
 
     const universe = { findOpenMembership: jest.fn().mockResolvedValue({ symbol: 'BTCUSDT' }) };
 
-    return { config, strategyVersions, positions, decisions, events, registry, strategyImpl, riskGate, sizer, riskStatePort, openPositionsPort, instrumentPort, universe };
+    return {
+        config,
+        strategyVersions,
+        positions,
+        decisions,
+        events,
+        registry,
+        strategyImpl,
+        riskGate,
+        sizer,
+        riskStatePort,
+        openPositionsPort,
+        instrumentPort,
+        universe,
+    };
 }
 
 function buildService(mocks: ReturnType<typeof buildMocks>): StrategyService {
@@ -207,15 +223,17 @@ describe('M3 adversarial — surface 1: strategy determinism across v0–v3', ()
     // ADR 0003 §pure-and-deterministic
     it('v1: N identical calls on the same frozen exhaustion-confirmed input produce bit-identical output', () => {
         const strategy = new V1MeanReversionStrategy();
-        const input = Object.freeze(buildInput({
-            event: buildEvent({
-                side: DeviationSideEnum.ABOVE,
-                bollingerPctB: 0.7,
-                volumeRatio: 0.8,
-                openInterestChange5mPct: -1.0,
-                flowType: FlowTypeEnum.FORCED_EXHAUSTION,
+        const input = Object.freeze(
+            buildInput({
+                event: buildEvent({
+                    side: DeviationSideEnum.ABOVE,
+                    bollingerPctB: 0.7,
+                    volumeRatio: 0.8,
+                    openInterestChange5mPct: -1.0,
+                    flowType: FlowTypeEnum.FORCED_EXHAUSTION,
+                }),
             }),
-        }));
+        );
         const results = Array.from({ length: 10 }, () => strategy.evaluate(input));
 
         for (let idx = 1; idx < results.length; idx++) {
@@ -230,9 +248,11 @@ describe('M3 adversarial — surface 1: strategy determinism across v0–v3', ()
     // ADR 0003 §pure-and-deterministic
     it('v2: N identical calls on the same frozen trending input produce bit-identical output', () => {
         const strategy = new V2MomentumStrategy();
-        const input = Object.freeze(buildInput({
-            event: buildEvent({ flowType: FlowTypeEnum.TREND_INITIATION, regimeLabel: 'trending_up' as any }),
-        }));
+        const input = Object.freeze(
+            buildInput({
+                event: buildEvent({ flowType: FlowTypeEnum.TREND_INITIATION, regimeLabel: 'trending_up' as any }),
+            }),
+        );
         const results = Array.from({ length: 10 }, () => strategy.evaluate(input));
 
         for (let idx = 1; idx < results.length; idx++) {
@@ -245,9 +265,11 @@ describe('M3 adversarial — surface 1: strategy determinism across v0–v3', ()
     // ADR 0003 §pure-and-deterministic
     it('v3: N identical calls on the same frozen input produce bit-identical output', () => {
         const strategy = new V3HybridRouterStrategy();
-        const input = Object.freeze(buildInput({
-            event: buildEvent({ flowType: FlowTypeEnum.FORCED_EXHAUSTION }),
-        }));
+        const input = Object.freeze(
+            buildInput({
+                event: buildEvent({ flowType: FlowTypeEnum.FORCED_EXHAUSTION }),
+            }),
+        );
         const results = Array.from({ length: 10 }, () => strategy.evaluate(input));
 
         for (let idx = 1; idx < results.length; idx++) {
@@ -372,7 +394,9 @@ describe('M3 adversarial — surface 2: nowMs derivation from bar, not wall-cloc
         const first = strategy.evaluate(frozenInput);
         // Spin the CPU briefly so wall-clock advances, then re-evaluate.
         const busyWaitEnd = Date.now() + 5; // 5 ms busy-wait
-        while (Date.now() < busyWaitEnd) { /* spin */ }
+        while (Date.now() < busyWaitEnd) {
+            /* spin */
+        }
         const second = strategy.evaluate(frozenInput);
 
         expect(first.action).toBe(second.action);
@@ -398,7 +422,7 @@ describe('M3 adversarial — surface 3: single-stamp orchestrator; stale pre-pop
         // The incoming event carries a stale/wrong flowType that the orchestrator must replace
         // with its own fresh classification.
         const event = buildEvent({
-            openInterestChange5mPct: -2.0,     // raw data → FORCED_EXHAUSTION
+            openInterestChange5mPct: -2.0, // raw data → FORCED_EXHAUSTION
             flowType: FlowTypeEnum.CATALYST_RISK, // stale pre-populated value — must be overwritten
         });
 
@@ -509,8 +533,8 @@ describe('M3 adversarial — surface 4: v1 exhaustion confirmation boundary tigh
         const input = buildInput({
             event: buildEvent({
                 side: DeviationSideEnum.ABOVE,
-                bollingerPctB: 0.8,           // exactly at boundary — should fail band re-entry
-                volumeRatio: 2.5,             // elevated — NOT decelerating
+                bollingerPctB: 0.8, // exactly at boundary — should fail band re-entry
+                volumeRatio: 2.5, // elevated — NOT decelerating
                 openInterestChange5mPct: 0.5, // OI rising — NOT confirmed
                 idiosyncrasyScore: 0.2,
             }),
@@ -531,7 +555,7 @@ describe('M3 adversarial — surface 4: v1 exhaustion confirmation boundary tigh
             event: buildEvent({
                 side: DeviationSideEnum.ABOVE,
                 bollingerPctB: 0.79,
-                volumeRatio: 2.5,             // elevated — NOT volume-decelerating alone
+                volumeRatio: 2.5, // elevated — NOT volume-decelerating alone
                 openInterestChange5mPct: 0.5, // OI rising — not OI-confirmed alone
                 regimeLabel: 'ranging' as any,
                 idiosyncrasyScore: 0.2,
@@ -552,8 +576,8 @@ describe('M3 adversarial — surface 4: v1 exhaustion confirmation boundary tigh
         const input = buildInput({
             event: buildEvent({
                 side: DeviationSideEnum.BELOW,
-                bollingerPctB: 0.2,           // exactly at lower boundary — should fail
-                volumeRatio: 2.5,             // elevated
+                bollingerPctB: 0.2, // exactly at lower boundary — should fail
+                volumeRatio: 2.5, // elevated
                 openInterestChange5mPct: 0.5, // OI rising
                 idiosyncrasyScore: 0.2,
                 flowType: FlowTypeEnum.FORCED_EXHAUSTION,
@@ -613,8 +637,8 @@ describe('M3 adversarial — surface 4: v1 exhaustion confirmation boundary tigh
         const input = buildInput({
             event: buildEvent({
                 side: DeviationSideEnum.ABOVE,
-                bollingerPctB: 1.3,           // still extended — band re-entry fails
-                volumeRatio: 3.5,             // elevated — volume deceleration fails
+                bollingerPctB: 1.3, // still extended — band re-entry fails
+                volumeRatio: 3.5, // elevated — volume deceleration fails
                 openInterestChange5mPct: 0.0, // exactly at OI not-rising boundary
                 idiosyncrasyScore: 0.2,
                 flowType: FlowTypeEnum.FORCED_EXHAUSTION,
@@ -632,8 +656,8 @@ describe('M3 adversarial — surface 4: v1 exhaustion confirmation boundary tigh
         const input = buildInput({
             event: buildEvent({
                 side: DeviationSideEnum.ABOVE,
-                bollingerPctB: 1.3,            // still extended
-                volumeRatio: 3.5,              // elevated
+                bollingerPctB: 1.3, // still extended
+                volumeRatio: 3.5, // elevated
                 openInterestChange5mPct: 0.0001, // just above zero → OI still rising
                 idiosyncrasyScore: 0.2,
                 flowType: FlowTypeEnum.FORCED_EXHAUSTION,
@@ -663,7 +687,9 @@ describe('M3 adversarial — surface 5: v3 router fallthrough on unknown / missi
         });
 
         let signal: ReturnType<typeof strategy.evaluate> | null = null;
-        expect(() => { signal = strategy.evaluate(input); }).not.toThrow();
+        expect(() => {
+            signal = strategy.evaluate(input);
+        }).not.toThrow();
         expect(signal!.action).toBe(SignalActionEnum.SKIP);
     });
 
@@ -674,7 +700,9 @@ describe('M3 adversarial — surface 5: v3 router fallthrough on unknown / missi
         });
 
         let signal: ReturnType<typeof strategy.evaluate> | null = null;
-        expect(() => { signal = strategy.evaluate(input); }).not.toThrow();
+        expect(() => {
+            signal = strategy.evaluate(input);
+        }).not.toThrow();
         expect(signal!.action).toBe(SignalActionEnum.SKIP);
     });
 
@@ -686,7 +714,9 @@ describe('M3 adversarial — surface 5: v3 router fallthrough on unknown / missi
         });
 
         let signal: ReturnType<typeof strategy.evaluate> | null = null;
-        expect(() => { signal = strategy.evaluate(input); }).not.toThrow();
+        expect(() => {
+            signal = strategy.evaluate(input);
+        }).not.toThrow();
         expect(signal!.action).toBe(SignalActionEnum.SKIP);
         expect(signal!.tradeSide).toBeNull();
     });
@@ -739,7 +769,7 @@ describe('M3 adversarial — surface 5: v3 router fallthrough on unknown / missi
             event: buildEvent({
                 flowType: 'schema_drift_unknown_v12' as unknown as FlowTypeEnum,
                 side: DeviationSideEnum.ABOVE,
-                bollingerPctB: 0.7,            // exhaustion confirmed
+                bollingerPctB: 0.7, // exhaustion confirmed
                 volumeRatio: 0.8,
                 openInterestChange5mPct: -2.0,
                 regimeLabel: 'ranging' as any,
