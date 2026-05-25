@@ -1,6 +1,18 @@
-import { CoinTierEnum, OrderIntentActionEnum, PositionSideEnum, PositionSlotEnum, RejectReasonEnum, RiskOutcomeEnum } from '@bot/shared';
+import {
+    CoinTierEnum,
+    HaltSourceEnum,
+    IModelDivergenceEvent,
+    IRiskHaltEvent,
+    OrderIntentActionEnum,
+    PositionSideEnum,
+    PositionSlotEnum,
+    RejectReasonEnum,
+    RiskOutcomeEnum,
+} from '@bot/shared';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+
+import { MODEL_DIVERGENCE_TRIGGERED_EVENT, RISK_HALT_TRIGGERED_EVENT } from '../../alert/const/alertEvents';
 
 import { MS_PER_MINUTE } from '../../common/const';
 import { Money, MoneyValue } from '../../common/utils/money';
@@ -58,6 +70,28 @@ export class RiskGateService {
     // OnApplicationBootstrap hook. `markRecoveryComplete()` is called by the
     // bootstrap service at phase 9.
     private recoveryReady = false;
+
+    // M9 W6.1 — bus-emit transition guards. Both flags ensure the alert pipeline
+    // hears the engage exactly once: market-stress mirrors `risk_state.isHalted`
+    // (DB-canonical, replay-safe), so we only emit when the durable persistHalt
+    // would actually write the flip — `state.today.isHalted === false`. Model-
+    // divergence has no DB flag (the source signal is `context.modelDivergenceDetected`
+    // recomputed each evaluate), so we keep an in-memory transition flag that
+    // resets when the context signal clears — first re-engage after a clear
+    // re-fires, repeated rejects while still detected do not.
+    private divergenceEmitted = false;
+
+    // M9 R2 fix — same-tick race guard for the stress emit. The pre-fix path
+    // read `state.today.isHalted` from a snapshot loaded BEFORE `persistHalt`
+    // ran, so two concurrent `evaluate(...)` calls in the same tick (Promise
+    // scheduling) could BOTH observe `isHalted=false` and BOTH emit before
+    // either persist landed. The UTC-day key here is the same idempotency
+    // anchor `persistHalt` uses on the DB side — once we emit for today, we
+    // do not re-emit until the UTC day rolls over (or the day key clears).
+    // Reset semantics mirror `divergenceEmitted`: cleared by the day-rollover
+    // path in `firstFailingHaltCheck` so the next UTC day's first engage
+    // emits cleanly.
+    private stressEmittedForDate: string | null = null;
 
     constructor(
         private readonly ledger: ReservationLedger,
@@ -399,21 +433,101 @@ export class RiskGateService {
             return RejectReasonEnum.GLOBAL_HALT;
         }
 
+        // M9 R2 — UTC-day rollover reset for the stress dedup flag. Mirrors
+        // the divergenceEmitted reset pattern (cleared when the source signal
+        // changes). The dedup is per UTC day so a fresh day re-arms the emit.
+        if (this.stressEmittedForDate !== null && this.stressEmittedForDate !== context.utcDateString) {
+            this.stressEmittedForDate = null;
+        }
+
         if (context.modelDivergenceDetected) {
+            this.emitModelDivergenceOnce(context);
+
             return RejectReasonEnum.MODEL_DIVERGENCE_HALT;
         }
+
+        // M9 W6.1 — context signal cleared; reset the transition flag so the
+        // next re-engage fires a fresh alert event.
+        this.divergenceEmitted = false;
 
         if (state.today !== null && state.today.isHalted) {
             return RejectReasonEnum.GLOBAL_HALT;
         }
 
         if (this.stress.isStressed(context.snapshot, context.params)) {
+            // M9 W6.1 — emit BEFORE persistHalt so the engage transition is
+            // gated by the same "not yet halted today" predicate persistHalt
+            // uses internally. Re-evaluations later in the day find
+            // state.today.isHalted === true and skip both the persist and the
+            // bus emit (idempotent on the UTC-day key).
+            this.emitMarketStressIfTransitioning(context, state);
             await this.persistHalt(context, state, RejectReasonEnum.MARKET_STRESS);
 
             return RejectReasonEnum.MARKET_STRESS;
         }
 
         return null;
+    }
+
+    // M9 W6.1 — bus-emit on the engage transition for market-stress halt. The
+    // payload mirrors the existing reject reason vocabulary and stringifies the
+    // cheap, already-available snapshot metrics that drove the stress verdict.
+    // Read-only side-channel: never touches the gate's reject/accept decision.
+    private emitMarketStressIfTransitioning(context: IRiskGateContext, state: ILoadedState): void {
+        if (state.today !== null && state.today.isHalted) {
+            return;
+        }
+
+        // M9 R2 — same-tick race guard. Two concurrent evaluate() calls can
+        // both observe state.today.isHalted===false before either persistHalt
+        // commits; the in-memory flag closes that window without changing the
+        // accept/reject decision path.
+        if (this.stressEmittedForDate === context.utcDateString) {
+            return;
+        }
+
+        this.stressEmittedForDate = context.utcDateString;
+
+        const payload: IRiskHaltEvent = {
+            source: HaltSourceEnum.MARKET_STRESS,
+            reason: RejectReasonEnum.MARKET_STRESS,
+            engagedAt: new Date(context.nowMs).toISOString(),
+            metrics: {
+                oiChange5mPct: String(context.snapshot.open_interest_change_5m_pct),
+                fundingRate: String(context.snapshot.funding_rate),
+                spreadPct: String(context.snapshot.bid_ask_spread_pct),
+            },
+        };
+
+        this.events.emit(RISK_HALT_TRIGGERED_EVENT, payload);
+    }
+
+    // M9 W6.1 — bus-emit on the engage transition for model-divergence kill
+    // switch. The reject path stays byte-identical; emit is a read-only
+    // side-channel. Transition is tracked in-memory because the source signal
+    // is a recomputed context boolean, not a DB flag.
+    private emitModelDivergenceOnce(context: IRiskGateContext): void {
+        if (this.divergenceEmitted) {
+            return;
+        }
+
+        this.divergenceEmitted = true;
+
+        // TODO M11: surface modeled-vs-observed slippage gap. The current
+        // context only carries the boolean `modelDivergenceDetected`; the
+        // numeric figures live in the M11 divergence detector. Until that
+        // surfaces them on IRiskGateContext, the payload reports `null` per
+        // ADR 0022 §2.3.1 — divide-by-zero on a zero-sample window is not
+        // "0 bps" of slippage, it is "unknown".
+        const payload: IModelDivergenceEvent = {
+            engagedAt: new Date(context.nowMs).toISOString(),
+            reason: RejectReasonEnum.MODEL_DIVERGENCE_HALT,
+            observedSlippageBps: null,
+            modeledSlippageBps: null,
+            sampleCount: 0,
+        };
+
+        this.events.emit(MODEL_DIVERGENCE_TRIGGERED_EVENT, payload);
     }
 
     private firstFailingTierFilter(intent: IOrderIntent, context: IRiskGateContext): RejectReasonEnum | null {

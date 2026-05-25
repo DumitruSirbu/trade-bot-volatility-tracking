@@ -69,6 +69,54 @@ export class PositionRepository extends BaseRepository<PositionEntity> implement
         });
     }
 
+    // M9 W4 — cursor-paginated read of closed positions for `GET /v1/positions/closed`.
+    // Cursor is the (closedAt, id) tuple of the previous page's tail row, monotonic
+    // descending; nullable cursor returns the first page. The id tiebreaker handles
+    // multiple closes within the same millisecond deterministically.
+    async findClosedPage(cursor: { closedAt: Date; id: number } | null, pageSize: number): Promise<PositionEntity[]> {
+        // M9 R2 wave B (Q8): explicit `closed_at IS NOT NULL` guard. A CLOSED
+        // row without a closedAt would crash the (closed_at, id) cursor tuple
+        // and the controller's nextCursor derivation. The state filter alone
+        // does not enforce this — a legacy partial-close path could mark a row
+        // CLOSED before stamping closedAt; we surface only fully-finalised rows.
+        const qb = this.repository
+            .createQueryBuilder('p')
+            .where('p.state = :state', { state: PositionStateEnum.CLOSED })
+            .andWhere('p.closed_at IS NOT NULL');
+
+        if (cursor !== null) {
+            qb.andWhere('(p.closed_at, p.positions_id) < (:cursorTs, :cursorId)', {
+                cursorTs: cursor.closedAt,
+                cursorId: cursor.id,
+            });
+        }
+
+        return qb.orderBy('p.closed_at', 'DESC').addOrderBy('p.positions_id', 'DESC').take(pageSize).getMany();
+    }
+
+    // M9 W4 — aggregate per-version performance over a trailing day window for
+    // `GET /v1/performance/by-version`. Returns a SUM(realized_pnl), COUNT, win-count
+    // tuple per strategy_version_id over CLOSED positions in [since, now].
+    async aggregatePerformanceByVersion(since: Date): Promise<Array<{ strategyVersionId: number; tradeCount: number; winCount: number; netPnlUsd: string }>> {
+        const rows = await this.repository
+            .createQueryBuilder('p')
+            .select('p.strategy_version_id', 'strategyVersionId')
+            .addSelect('COUNT(*)', 'tradeCount')
+            .addSelect('COUNT(*) FILTER (WHERE p.realized_pnl > 0)', 'winCount')
+            .addSelect('COALESCE(SUM(p.realized_pnl), 0)', 'netPnlUsd')
+            .where('p.state = :state', { state: PositionStateEnum.CLOSED })
+            .andWhere('p.closed_at >= :since', { since })
+            .groupBy('p.strategy_version_id')
+            .getRawMany<{ strategyVersionId: string; tradeCount: string; winCount: string; netPnlUsd: string }>();
+
+        return rows.map((row) => ({
+            strategyVersionId: Number(row.strategyVersionId),
+            tradeCount: Number(row.tradeCount),
+            winCount: Number(row.winCount),
+            netPnlUsd: String(row.netPnlUsd),
+        }));
+    }
+
     // M5: persist a fresh OPEN position from the entry-fill outcome. Returns the saved row
     // (with assigned id) so the executor can arm SL/TP + protection against the real positionId.
     async createOpen(entityLike: DeepPartial<PositionEntity>): Promise<PositionEntity> {
