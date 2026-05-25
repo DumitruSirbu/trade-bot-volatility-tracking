@@ -38,3 +38,14 @@ export { IAlertPayload } from './IAlertPayload.js';
 export { IHealthView } from './IHealthView.js';
 export { IKeyPermissionSnapshot } from './IKeyPermissionSnapshot.js';
 export { ILiveModeProfile } from './ILiveModeProfile.js';
+export { ISimulatedFill } from './ISimulatedFill.js';
+export { IVirtualLedgerSnapshot, IVirtualOpenPosition, IVirtualClosedTradeLogEntry } from './IVirtualLedgerSnapshot.js';
+export {
+	IVirtualPositionLedger,
+	IVirtualGateInput,
+	IVirtualGateOutcome,
+	IVirtualOpenInput,
+	IVirtualCloseInput,
+	IVirtualMutationResult,
+} from './IVirtualPositionLedger.js';
+export { IShadowDecision } from './IShadowDecision.js';

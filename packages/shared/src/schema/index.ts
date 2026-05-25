@@ -3,3 +3,5 @@ export { strategyParamsSchema, type IStrategyParams } from './strategyParamsSche
 export { orderPlanSchema, type IOrderPlan } from './orderPlanSchema.js';
 export { exchangeEnvironmentSchema, type IExchangeEnvironment } from './exchangeEnvironmentSchema.js';
 export { liveModeProfileSchema } from './liveModeProfileSchema.js';
+export { simulatedFillSchema } from './simulatedFillSchema.js';
+export { virtualLedgerSnapshotSchema } from './virtualLedgerSnapshotSchema.js';
