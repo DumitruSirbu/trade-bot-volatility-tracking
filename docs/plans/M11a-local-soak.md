@@ -84,9 +84,30 @@ shape cannot express demo trading and cannot enforce the demo→live invariant.
   now (rejecting the other two with one line of rationale):
   1. **New `shadow_decisions` table.** Owned by the decisions module, columns
      mirror `decisions` plus `shadow_version`, `virtual_slot_state_snapshot`,
-     `simulated_fill` (jsonb, see W0.6). **Recommended** — keeps the
+     `simulated_fill` (jsonb — see schema below). **Recommended** — keeps the
      high-volume `decisions` table free of nullable shadow-only columns and
      avoids retention-policy collisions with real decisions.
+
+     `simulated_fill` JSONB schema (pinned inline so the table is queryable
+     without inspecting code; mirrors the M7 fill-simulator output):
+     ```ts
+     interface ISimulatedFill {
+       entryPrice: string;          // decimal
+       exitPrice: string | null;    // null until close
+       slippageEntryPct: string;    // decimal, signed
+       slippageExitPct: string | null;
+       slippageComponents: {
+         tierBase: string;
+         latency: string;
+         crossingSpread: string;
+       };
+       missed: boolean;             // true if simulator skipped the fill
+       forceClose: boolean;         // true if closed by end-of-window rule
+       lowFidelity: boolean;        // mirrors M7 IBacktestReport
+       closedAt: string | null;     // ISO timestamp of simulated close
+       closeReason: 'sl' | 'tp' | 'force_close' | 'intra_bar_stop' | null;
+     }
+     ```
   2. Add `shadow_version` + `executed` to `decisions`. Rejected: pollutes the
      hot table and forces every existing query to filter on `executed=true`.
   3. Sidecar JSONL log file. Rejected: untyped, not queryable from the read
@@ -104,6 +125,16 @@ shape cannot express demo trading and cannot enforce the demo→live invariant.
      by its **own** ledger evaluated against the same event tape. This is the
      counterfactual: "what would version X have decided with its own state at
      this event."
+
+     **Shadow-close semantics (pinned in the W0.6 ADR):** the
+     `halt_after_consecutive_losses` and `max_trades_per_day` gates require a
+     definition of "loss" and "day" for the virtual ledger. Pin to M7's
+     existing rules — a shadow position closes on simulated SL/TP hit
+     (intra-bar stop), on M7's end-of-window force-close, or when a reverse
+     signal would have been routed by the same version. "Day" follows the
+     existing `risk_day` boundary used by the live limiter so the gate
+     behaves identically to v1's. Without these pins the two gates produce
+     different shadow behaviour across runs.
   2. **Shadow decisions are scored by replaying through the M7
      `BacktestRunnerService` fill simulator** (tier slippage + latency +
      missed-fill + intra-bar stops) before any comparison metric is computed.
@@ -111,14 +142,25 @@ shape cannot express demo trading and cannot enforce the demo→live invariant.
      comparison input — it ignores adverse selection, partial fills, and
      spread, and would trivially beat v1's realised PnL by construction. An
      ADR captures the rule.
+
+     **`lowFidelity` propagation (mirrors M8 ADR-0019 criterion 12):** every
+     shadow trade carries the M7 `lowFidelity` flag (currently always true
+     until the depth-aware extension lands). The shadow-comparison report
+     must produce **two** rankings — one over all shadow trades, one
+     excluding `lowFidelity` trades — and the "active version beats shadow
+     v2/v3" exit criterion requires the **same winner on both**. If they
+     disagree, the criterion is marked inconclusive and downgrades to the
+     v1-only expectancy CI gate.
   - *Output:* `IVirtualPositionLedger` interface in shared, ADR locking the
-    counterfactual + fill-simulator pipeline; W4.2 references both by name.
+    counterfactual + fill-simulator pipeline + shadow-close semantics +
+    `lowFidelity` propagation; W4.2 references each by name.
 - **W0.7 — `risk_state.updated_at` server-side timestamp migration.** W2.4
   consumes a true server-side `updated_at` (`DEFAULT now() ON UPDATE`); verify
   the column shape today, and if it is derived (TypeORM `@UpdateDateColumn`
   client-side) rather than server-set, the migration belongs here in W0, not
   in the W2 consumer wave. Skip this task entirely if the column is already
-  server-side; document the verification either way.
+  server-side; record the verification result (column shape + decision) in
+  `docs/work-log.md` under the M11a W0 entry either way.
   - *Output:* the W2 consumer fix lands against a contract that already
     enforces newer-wins at the database, not at the application layer.
 
@@ -278,10 +320,12 @@ postgres on `0.0.0.0`, contradicting the bind policy. W3 lands all of:
   implementer does not ship security theatre.
 - **W3.7 — `start_period: 60s`** on the engine healthcheck so the M6 10-phase
   crash-recovery cold start does not flap.
-- **W3.8 — `env_file:` only.** Audit `docker-compose.yml` for any
-  `environment:` block inlining a secret; convert all secret-bearing values to
-  `env_file: [.env]` so `docker inspect` / `docker compose config` cannot
-  print them.
+- **W3.8 — `env_file:` only — verify + CI lint.** Confirmed today
+  (round-3 devops): no secret is inlined in `docker-compose.yml`; engine +
+  migrator already use `env_file: [.env]`. Reframed from "convert" to
+  "verify + add a CI lint" that fails on any future `environment:` block
+  whose value matches a known secret-key name (`*_API_KEY`, `*_SECRET`,
+  `*_TOKEN`, `JWT_*`, `BOOTSTRAP_*`). Prevents drift, no-op work avoided.
 - **W3.16 — Remove adminer service entirely.** Delete the `adminer` service
   from `docker-compose.yml:124-130` (currently behind `profile: dev`). Even
   profile-gated, adminer is a real attack-surface item under a multi-week
@@ -308,8 +352,14 @@ postgres on `0.0.0.0`, contradicting the bind policy. W3 lands all of:
 
 - **W3.9 — Backup + restore sidecars.** Add two compose profiles. Note that
   `postgres:18.4-alpine` has neither `age` nor `rclone` — bake a small custom
-  image (`FROM postgres:18.4-alpine; RUN apk add --no-cache age rclone`) and
-  pin it in the compose file.
+  image and pin it in the compose file. **Pin the apk package versions** so
+  an Alpine package refresh mid-soak cannot change the encryption tool under
+  the cron:
+  ```dockerfile
+  FROM postgres:18.4-alpine
+  # Pin to the versions current at soak-start; bump in a deliberate edit.
+  RUN apk add --no-cache age=~1.2 rclone=~1.68
+  ```
   - `profiles: [backup]` — runs
     `pg_dump -h postgres … | gzip | age -r <pubkey> | rclone rcat b2:bucket/path`.
     Driven by host-cron `0 3 * * * docker compose --profile backup run --rm pgbackup`.
@@ -342,10 +392,19 @@ Per the devops review, sizing estimate: `decisions` ≈ 5–10M rows / 3–6 GB 
 negligible; alert log unbounded under retry spikes; `tick_aggregates` already
 has partition rollover (M2/M8 W0).
 
-- **W3.10 — Retention SQL.**
-  - `decisions`: prune `WHERE created_at < now() - interval '60 days'` (cron-
-    driven via the backup-profile container).
-  - `account_snapshots`: same window.
+- **W3.10 — Retention SQL.** Retention floors must not collide with the
+  soak-closeout evidence window — a 60-day prune over a 60-day soak strips
+  day-1 evidence on day 60 when the exit-gate evaluator runs. Apply
+  `soak_duration + 30 days` as the floor for tables that feed the exit gate,
+  and a tighter floor for the rest.
+  - `decisions`: floor at **soak-duration + 30 days** (so a 60-day soak
+    retains ≥90 days). Pruning runs but excludes any `created_at` newer than
+    that floor. The exit-gate evaluator (W4) reads `decisions` for the
+    expectancy + per-regime breakdown; pruning evidence under it produces a
+    false inconclusive.
+  - `account_snapshots`: same floor — feeds drawdown abort-threshold +
+    soak-window equity curve.
+  - `audit_events`: **archive, not prune** — copy expired rows to a separate
   - `audit_events`: **archive, not prune** — copy expired rows to a separate
     table or off-host archive before deletion. Security audit trail must be
     append-only for the soak window.
@@ -365,10 +424,17 @@ has partition rollover (M2/M8 W0).
   - *Output:* one-page host-setup checklist in `RUNBOOK.md`.
 - **W3.13 — Remote access via Tailscale.** `127.0.0.1` bind is unreachable
   from the tailnet by default. Mandated configuration:
+  - **Tailscale runs as a host package**, not a compose service. Install via
+    the OS package manager (`brew install tailscale` / distro package +
+    `systemctl enable --now tailscaled`). A containerised tailscale sidecar
+    inside the compose network cannot reach the host's `127.0.0.1` bind, so
+    `tailscale serve` only works from the host daemon.
   - `tailscale up --shields-up`;
   - `tailscale serve` proxying to the dashboard's `127.0.0.1:<port>`;
   - ACL restricting the dashboard port to the operator's own node;
-  - `tailscale funnel=off`.
+  - **Verify funnel was never enabled** (`tailscale funnel status` empty);
+    funnel is off by default — the check is to confirm no prior session
+    enabled it.
   Verification: nmap from a LAN peer **and** from a second tailnet node with
   the ACL applied; both must fail to reach the dashboard.
   - *Output:* documented tunnel setup + nmap verification; recorded in runbook.
@@ -466,6 +532,13 @@ a code gap.
   Each drill verifies the W2.1/W2.2/W2.3 fixes did not regress (zero-clamp
   alert fires, slot adoption is correct, post-boot guard rejects writes).
 
+  **Drill recency for soak closeout:** a soak ending on day 45 with the last
+  drill on day 30 is 15 days stale. Tighten the cadence to **≤21 days**, and
+  require an additional drill in the **final 7 days** of the soak before
+  closeout evaluation. Bundling a routine drill with an auth-rotation drill
+  (W1.8 bootstrap-secret rotation or JWT rotation) into a single operational
+  window is allowed and encouraged — counts as one drill, not two.
+
 - **W4.4 — Calibration day.** Before the soak proper begins, record 24h of
   growth on `decisions`, `tick_aggregates`, `account_snapshots`,
   `audit_events`, Telegram alert log, and project × 60 days. If the projection
@@ -488,10 +561,19 @@ following hold:
   comparison is uninformative and the soak extends (not fails). Justification:
   with `max_trades_per_day: 3`, `halt_after_consecutive_losses: 2`, and
   exhaustion-confirmation gating, the M9 10h smoke saw 0 fills on 14
-  candidates; ≥80 trades is roughly the minimum to detect a 2-sigma
-  expectancy difference at the restricted profile's variance and is a
-  documented relaxation of M8's ≥200-trade floor for this specific soak-window
-  evaluation.
+  candidates; ≥80 trades is the documented relaxation of M8's ≥200-trade
+  floor for this specific soak-window evaluation.
+
+  **Fat-tailed-returns escape clause.** Per-trade crypto PnL is not Gaussian
+  — M8 ADR-0018 records skew + kurtosis precisely because the tails are fat.
+  A "2-sigma" argument understates the real floor. The escape rule:
+  - If the 95% bootstrap CI on v1's expectancy is **inconclusive at 80
+    trades**, the soak extends to 60 days regardless of the duration
+    criterion.
+  - If still inconclusive at 60 days, the soak does **not** pass — it
+    routes to M8 strategy iteration, not M11b. M11b requires the CI to
+    exclude zero from above; an inconclusive result is a "no" for go-live,
+    not a "maybe."
 
 - **Reduced evaluation gate (soak-specific, documented).** M8's full
   12-criterion all-of promotion gate cannot run because v0 has no per-event
@@ -566,8 +648,10 @@ with:
   `audit_events` archived;
 - `RUNBOOK.md` covering daily check, incidents, key rotation, bootstrap-secret
   rotation, soak abort triggers, demo→live transition;
-- restricted v1 profile committed via `ILiveModeProfile`, shadow v2/v3
-  recording decisions for comparison;
+- restricted v1 profile committed via `ILiveModeProfile`; shadow v0/v2/v3
+  recording into `shadow_decisions` with simulated-fill records produced by
+  the M7 fill simulator; per-version comparison report generated (both
+  full-set and `lowFidelity`-excluded rankings);
 - soak completed with all reduced-gate exit criteria met **or** the soak
   routed back to M8 because criteria failed without abort, **or** an abort
   trigger fired and the soak was halted.
