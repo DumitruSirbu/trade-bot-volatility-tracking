@@ -112,6 +112,14 @@ class StubRevokedRepo implements IRevokedJtiRepositoryPort {
     async revoke(): Promise<void> {
         // not exercised in this spec
     }
+
+    async pruneOlderThan(_cutoff: Date): Promise<number> {
+        return 0;
+    }
+
+    async countAll(): Promise<number> {
+        return this.revokedSet.size;
+    }
 }
 
 class StubPositionRepository {

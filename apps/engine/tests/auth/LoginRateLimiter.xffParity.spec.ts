@@ -31,6 +31,22 @@ class StubAlerts implements IAlertSink {
     }
 }
 
+// M11a W1.9 — LoginRateLimiter now persists windows; in-memory stub keeps the
+// hot-path tests deterministic without a Postgres dependency.
+class StubLoginRateLimitPersistence {
+    async loadAll(): Promise<Array<{ sourceIp: string; scope: 'burst' | 'sustained' | 'global'; timestampsMs: number[] }>> {
+        return [];
+    }
+
+    async upsert(): Promise<void> {
+        // not exercised
+    }
+
+    async deleteByKey(): Promise<void> {
+        // not exercised
+    }
+}
+
 describe('LoginRateLimiter XFF parity at TRUSTED_PROXY_HOPS=0', () => {
     it('Express resolves req.ip to the socket address and ignores any X-Forwarded-For header', async () => {
         const app = express();
@@ -72,7 +88,7 @@ describe('LoginRateLimiter XFF parity at TRUSTED_PROXY_HOPS=0', () => {
         // At trust-proxy=0, every spoofed XFF collapses to the same `req.ip`
         // (the socket address). Simulate that contract directly: the limiter
         // sees the SAME sourceIp on every call regardless of XFF content.
-        const limiter = new LoginRateLimiter(new StubAlerts());
+        const limiter = new LoginRateLimiter(new StubAlerts(), new StubLoginRateLimitPersistence() as never);
         const now = new Date('2026-05-25T12:00:00Z');
         const sameSocketIp = '10.0.0.5';
 
@@ -92,7 +108,7 @@ describe('LoginRateLimiter XFF parity at TRUSTED_PROXY_HOPS=0', () => {
         // an external proxy actually in front of the engine, a peer rotating
         // XFF would in fact reset buckets. Pinning TRUSTED_PROXY_HOPS=0 in
         // `.env.example` prevents this; this assertion is the contract guard.
-        const limiter = new LoginRateLimiter(new StubAlerts());
+        const limiter = new LoginRateLimiter(new StubAlerts(), new StubLoginRateLimitPersistence() as never);
         const now = new Date('2026-05-25T12:00:00Z');
 
         // Two DIFFERENT sourceIps — what Express would yield IF trust-proxy

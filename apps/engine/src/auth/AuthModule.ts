@@ -4,11 +4,15 @@ import { InjectRepository, TypeOrmModule } from '@nestjs/typeorm';
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import { Repository } from 'typeorm';
 
+import { AlertSinkModule } from '../alert/sink/AlertSinkModule';
+import { CLOCK, SystemClock } from '../common/clock/Clock';
 import { AppConfigModule } from '../config/AppConfigModule';
 import { AppConfigService } from '../config/service';
 import { AuthCorsInterceptor } from './AuthCorsInterceptor';
 import { AUTH_HS256_HEADER_B64URL, AUTH_MIN_SECRET_BYTES, AUTH_TOKEN_DEFAULT_TTL_SEC } from './const/authConsts';
+import { DerivedKeyService, DERIVED_KEY_SERVICE } from './DerivedKeyService';
 import { RevokedJtiEntity } from './entity/RevokedJtiEntity';
+import { RevokedJtiPruneScheduler } from './RevokedJtiPruneScheduler';
 
 // M9 W2 (ADR 0020).
 //
@@ -40,6 +44,12 @@ export interface IAuthSecretProvider {
 export interface IRevokedJtiRepositoryPort {
     isRevoked(jti: string): Promise<boolean>;
     revoke(jti: string, revokedBy: string, reason: string | null): Promise<void>;
+    // M11a W1.6 (ADR 0031). Deletes rows with `revoked_at < cutoff`. Returns
+    // the number of rows deleted so the scheduler can log + alert. Idempotent.
+    pruneOlderThan(cutoff: Date): Promise<number>;
+    // M11a W1.6 (ADR 0031 §2.4). Cheap COUNT(*) for the unbounded-growth
+    // alert. The hourly cadence + indexed PK makes this a small scan.
+    countAll(): Promise<number>;
 }
 
 // WS handshake contract consumed by W5. Pure function shape — takes a raw
@@ -139,7 +149,11 @@ export interface IIssuedToken {
 export class AuthTokenService {
     private readonly logger = new Logger(AuthTokenService.name);
 
-    constructor(@Inject(AUTH_SECRET_PROVIDER) private readonly secrets: IAuthSecretProvider) {}
+    // M11a W1.7 — JWT signing keys are derived from the master via HKDF
+    // (info='auth v1'). Domain separation from the cursor MAC key (CursorCodec
+    // uses info='cursor v1'). Both rotate atomically on AUTH_HMAC_SECRET
+    // restart; rotation overlap is M11b scope.
+    constructor(@Inject(DERIVED_KEY_SERVICE) private readonly derivedKeys: { getAuthKey(): Buffer }) {}
 
     issue(input: IIssueTokenInput): IIssuedToken {
         const iat = Math.floor(input.now.getTime() / 1000);
@@ -155,7 +169,7 @@ export class AuthTokenService {
         };
 
         const headerAndPayload = `${AUTH_HS256_HEADER_B64URL}.${base64UrlEncode(JSON.stringify(payload))}`;
-        const signature = signHs256(headerAndPayload, this.secrets.getSigningSecret());
+        const signature = signHs256(headerAndPayload, this.derivedKeys.getAuthKey());
 
         return { token: `${headerAndPayload}.${signature}`, jti, exp };
     }
@@ -176,21 +190,25 @@ export class AuthTokenService {
             return failure(AuthFailureReasonEnum.MALFORMED);
         }
 
-        const expected = signHs256(`${headerSeg}.${payloadSeg}`, this.secrets.getSigningSecret());
+        const expected = signHs256(`${headerSeg}.${payloadSeg}`, this.derivedKeys.getAuthKey());
         const expectedBuf = Buffer.from(expected, 'utf8');
         const actualBuf = Buffer.from(signatureSeg, 'utf8');
 
         if (expectedBuf.byteLength !== actualBuf.byteLength || !timingSafeEqual(expectedBuf, actualBuf)) {
-            // M9 R1 #4 — signature mismatch is a stronger signal than a
-            // generic structural malformation (the token survived split + b64
-            // checks). We surface MALFORMED on the wire (per failure-shape
-            // contract — `BAD_SIGNATURE` enum bump is a deferred M11
-            // follow-up) but emit a high-cardinality `signatureMismatch=true`
-            // log field for triage. TODO(M11): split into BAD_SIGNATURE once
-            // bot-shared-maintainer adds the enum member.
-            this.logger.warn('auth.verify.failure reason=MALFORMED signatureMismatch=true');
+            // M11a W1.5 — signature mismatch is operationally distinct from
+            // structural malformation: it carries a security signal ("token
+            // tampered or signed under a rotated/foreign secret") whereas
+            // EXPIRED / MISSING / MALFORMED are operational. We mark the
+            // failure with `engineReason=BAD_SIGNATURE` on the local log line,
+            // metric, and audit row so an audit reader can distinguish the
+            // two without changing the wire enum (the `BAD_SIGNATURE` enum
+            // member must be added to `@bot/shared` AuthFailureReasonEnum by
+            // bot-shared-maintainer — flagged in the W1 hand-off). On the wire
+            // we still surface MALFORMED so the dashboard / CLI keep a stable
+            // shape; the security signal lives in the side-channels.
+            this.logger.warn('auth.verify.failure reason=MALFORMED engineReason=BAD_SIGNATURE signatureMismatch=true');
 
-            return failure(AuthFailureReasonEnum.MALFORMED);
+            return failureWithSignal(AuthFailureReasonEnum.MALFORMED, 'BAD_SIGNATURE');
         }
 
         let parsed: IJwtPayload;
@@ -223,6 +241,37 @@ export class AuthTokenService {
 
 function failure(reason: AuthFailureReasonEnum): IAuthFailure {
     return { error: 'AUTH_FAILED', reason };
+}
+
+// M11a W1.5 — engine-side discriminator riding alongside the wire reason.
+// `engineReason` is non-enumerable so it does not serialise into the response
+// body (the wire contract stays in `IAuthFailure.reason`); inspectors that
+// know about the field (the guard's audit/metric path) read it via the typed
+// helper `getEngineReason` and route the signal to the audit row + Telegram.
+// When bot-shared-maintainer adds `BAD_SIGNATURE` to `AuthFailureReasonEnum`,
+// `failureWithSignal` is the single edit point that promotes the engine
+// reason onto the wire.
+export type EngineAuthFailureReason = 'BAD_SIGNATURE';
+
+const ENGINE_REASON_KEY = '__engineReason';
+
+function failureWithSignal(reason: AuthFailureReasonEnum, engineReason: EngineAuthFailureReason): IAuthFailure {
+    const payload: IAuthFailure & { [ENGINE_REASON_KEY]?: EngineAuthFailureReason } = { error: 'AUTH_FAILED', reason };
+
+    Object.defineProperty(payload, ENGINE_REASON_KEY, {
+        value: engineReason,
+        enumerable: false,
+        writable: false,
+        configurable: false,
+    });
+
+    return payload;
+}
+
+export function getEngineReason(failureBody: IAuthFailure): EngineAuthFailureReason | null {
+    const value = (failureBody as { [ENGINE_REASON_KEY]?: EngineAuthFailureReason })[ENGINE_REASON_KEY];
+
+    return value ?? null;
 }
 
 function isWellFormedPayload(value: unknown): value is IJwtPayload {
@@ -273,6 +322,19 @@ export class RevokedJtiRepository implements IRevokedJtiRepositoryPort {
         // NOTHING preserves the original revocation timestamp + actor.
         await this.repository.createQueryBuilder().insert().values({ jti, revokedBy, reason }).orIgnore().execute();
     }
+
+    async pruneOlderThan(cutoff: Date): Promise<number> {
+        // M11a W1.6 (ADR 0031 §2.5). Single indexed DELETE on `revoked_at`;
+        // idx_revoked_jti_revoked_at is present from the M9 migration. Returns
+        // the affected row count so the scheduler logs + alerts.
+        const result = await this.repository.createQueryBuilder().delete().where('revoked_at < :cutoff', { cutoff }).execute();
+
+        return result.affected ?? 0;
+    }
+
+    async countAll(): Promise<number> {
+        return this.repository.count();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -297,15 +359,34 @@ export class WsAuthHandshake implements IWsAuthHandshake {
 // ---------------------------------------------------------------------------
 
 @Module({
-    imports: [AppConfigModule, TypeOrmModule.forFeature([RevokedJtiEntity])],
+    imports: [AppConfigModule, AlertSinkModule, TypeOrmModule.forFeature([RevokedJtiEntity])],
     providers: [
         { provide: AUTH_SECRET_PROVIDER, useClass: EnvAuthSecretProvider },
+        // M11a W1.7 — derived per-domain sub-keys (cursor + auth) computed
+        // at boot from the master signing secret via HKDF-Expand. Provided
+        // before AuthTokenService so DI ordering matches construction order.
+        DerivedKeyService,
+        { provide: DERIVED_KEY_SERVICE, useExisting: DerivedKeyService },
         AuthTokenService,
         { provide: REVOKED_JTI_REPOSITORY, useClass: RevokedJtiRepository },
         RevokedJtiRepository,
         WsAuthHandshake,
         AuthCorsInterceptor,
+        // M11a W1.6 — local CLOCK provider so the scheduler stays decoupled
+        // from ControlModule's CLOCK (CLOCK is a port; duplicate providers are
+        // safe by ADR 0024 §IClock).
+        { provide: CLOCK, useClass: SystemClock },
+        RevokedJtiPruneScheduler,
     ],
-    exports: [AuthTokenService, AUTH_SECRET_PROVIDER, REVOKED_JTI_REPOSITORY, RevokedJtiRepository, WsAuthHandshake, AuthCorsInterceptor],
+    exports: [
+        AuthTokenService,
+        AUTH_SECRET_PROVIDER,
+        DERIVED_KEY_SERVICE,
+        DerivedKeyService,
+        REVOKED_JTI_REPOSITORY,
+        RevokedJtiRepository,
+        WsAuthHandshake,
+        AuthCorsInterceptor,
+    ],
 })
 export class AuthModule {}

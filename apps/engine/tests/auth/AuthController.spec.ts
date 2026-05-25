@@ -56,6 +56,33 @@ class StubSecretProvider implements IAuthSecretProvider {
     getSigningSecret(): Buffer {
         return this.secret;
     }
+
+    // M11a W1.7 — AuthTokenService now consumes IDerivedKeyService; the stub
+    // exposes the test-secret via both ports so existing tests keep their
+    // sign/verify symmetry.
+    getAuthKey(): Buffer {
+        return this.secret;
+    }
+
+    getCursorKey(): Buffer {
+        return this.secret;
+    }
+}
+
+class StubLoginRateLimitPersistence {
+    readonly calls: Array<{ sourceIp: string; scope: string; timestampsMs: number[] }> = [];
+
+    async loadAll(): Promise<Array<{ sourceIp: string; scope: 'burst' | 'sustained' | 'global'; timestampsMs: number[] }>> {
+        return [];
+    }
+
+    async upsert(row: { sourceIp: string; scope: 'burst' | 'sustained' | 'global'; timestampsMs: number[] }, _now: Date): Promise<void> {
+        this.calls.push({ sourceIp: row.sourceIp, scope: row.scope, timestampsMs: row.timestampsMs.slice() });
+    }
+
+    async deleteByKey(): Promise<void> {
+        // not exercised in unit tests
+    }
 }
 
 class StubAuditRepo {
@@ -126,7 +153,7 @@ function buildController(opts?: { loginScopes?: AuthScopeEnum[] }): IBuiltContro
     const haltFlag = new StubHaltFlag();
     const alerts = new StubAlertSink();
     const tokens = new AuthTokenService(new StubSecretProvider(SIGNING_SECRET_BYTES));
-    const limiter = new LoginRateLimiter(alerts);
+    const limiter = new LoginRateLimiter(alerts, new StubLoginRateLimitPersistence() as never);
     const clock = new FixedClock(NOW);
 
     const scopes = opts?.loginScopes ?? [AuthScopeEnum.READ, AuthScopeEnum.HALT];
@@ -746,7 +773,7 @@ describe('LoginRateLimiter (M10 W0.5 / ADR 0027)', () => {
     function build(): { limiter: LoginRateLimiter; alerts: StubAlertSink } {
         const alerts = new StubAlertSink();
 
-        return { limiter: new LoginRateLimiter(alerts), alerts };
+        return { limiter: new LoginRateLimiter(alerts, new StubLoginRateLimitPersistence() as never), alerts };
     }
 
     it('admits up to LOGIN_PER_IP_BURST_MAX in the 10s window, throws on the next attempt', () => {

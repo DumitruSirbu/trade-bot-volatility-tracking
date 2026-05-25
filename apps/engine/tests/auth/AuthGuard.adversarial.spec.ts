@@ -20,6 +20,17 @@ class StubSecretProvider {
     getSigningSecret(): Buffer {
         return this.secret;
     }
+
+    // M11a W1.7 — also satisfy the IDerivedKeyService surface AuthTokenService
+    // now consumes. The legacy getSigningSecret remains for any direct
+    // IAuthSecretProvider consumers.
+    getAuthKey(): Buffer {
+        return this.secret;
+    }
+
+    getCursorKey(): Buffer {
+        return this.secret;
+    }
 }
 
 class StubRevokedRepo implements IRevokedJtiRepositoryPort {
@@ -31,6 +42,14 @@ class StubRevokedRepo implements IRevokedJtiRepositoryPort {
 
     async revoke(jti: string, revokedBy: string, reason: string | null): Promise<void> {
         this.revokedSet.add(jti);
+    }
+
+    async pruneOlderThan(_cutoff: Date): Promise<number> {
+        return 0;
+    }
+
+    async countAll(): Promise<number> {
+        return this.revokedSet.size;
     }
 }
 

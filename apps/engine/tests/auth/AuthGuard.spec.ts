@@ -22,6 +22,21 @@ class StubSecretProvider implements IAuthSecretProvider {
     }
 }
 
+// M11a W1.7 — AuthTokenService now consumes IDerivedKeyService.getAuthKey().
+// Stub directly returns the test secret as the auth sub-key so tests do not
+// re-implement HKDF; the guard-side behaviour is unchanged.
+class StubDerivedKeyService {
+    constructor(private readonly secret: Buffer = Buffer.alloc(32, 0x42)) {}
+
+    getAuthKey(): Buffer {
+        return this.secret;
+    }
+
+    getCursorKey(): Buffer {
+        return this.secret;
+    }
+}
+
 class StubRevokedRepo implements IRevokedJtiRepositoryPort {
     readonly revokedSet = new Set<string>();
     readonly revokedCalls: Array<{ jti: string; revokedBy: string; reason: string | null }> = [];
@@ -33,6 +48,14 @@ class StubRevokedRepo implements IRevokedJtiRepositoryPort {
     async revoke(jti: string, revokedBy: string, reason: string | null): Promise<void> {
         this.revokedCalls.push({ jti, revokedBy, reason });
         this.revokedSet.add(jti);
+    }
+
+    async pruneOlderThan(_cutoff: Date): Promise<number> {
+        return 0;
+    }
+
+    async countAll(): Promise<number> {
+        return this.revokedSet.size;
     }
 }
 
@@ -63,7 +86,7 @@ function buildGuard(opts?: { revoked?: StubRevokedRepo; secret?: Buffer }): {
     reflector: Reflector;
 } {
     const reflector = new Reflector();
-    const tokens = new AuthTokenService(new StubSecretProvider(opts?.secret));
+    const tokens = new AuthTokenService(new StubDerivedKeyService(opts?.secret));
     const revoked = opts?.revoked ?? new StubRevokedRepo();
     const guard = new AuthGuard(reflector, tokens, revoked);
 

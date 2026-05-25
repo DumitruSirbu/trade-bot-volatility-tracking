@@ -8,6 +8,8 @@ import { LoginRateLimiter } from '../auth/LoginRateLimiter';
 import { CommonModule } from '../common/CommonModule';
 import { CLOCK, SystemClock } from '../common/clock/Clock';
 import { CursorCodec } from '../read-api/pagination/CursorCodec';
+import { LoginRateLimitStateEntity } from '../auth/entity/LoginRateLimitStateEntity';
+import { LoginRateLimitStateRepository } from '../auth/repository/LoginRateLimitStateRepository';
 import { ControlAuditEntity } from './entity/ControlAuditEntity';
 import { ControlAuditRepository } from './repository/ControlAuditRepository';
 import { HaltController } from './HaltController';
@@ -42,7 +44,7 @@ import { HaltService } from './HaltService';
 // `BootstrapModule` (PHASE 3 ordering) so that the boot pipeline restores the
 // halt flag before any market-data subscription opens.
 @Module({
-    imports: [AlertSinkModule, AuthModule, CommonModule, TypeOrmModule.forFeature([ControlAuditEntity])],
+    imports: [AlertSinkModule, AuthModule, CommonModule, TypeOrmModule.forFeature([ControlAuditEntity, LoginRateLimitStateEntity])],
     // M10 W0.5 — AuthController (POST /v1/auth/login) registered here to
     // avoid an AuthModule → ControlModule cycle (ControlModule already imports
     // AuthModule for the guard). The controller depends on AppConfigService,
@@ -51,6 +53,9 @@ import { HaltService } from './HaltService';
     controllers: [HaltController, AuthController],
     providers: [
         ControlAuditRepository,
+        // M11a W1.9 — persistence repo for the login limiter so a restart
+        // does not re-open the brute-force window. Hot-path remains in-memory.
+        LoginRateLimitStateRepository,
         LoginRateLimiter,
         // M10 R2 #1 — DI-resolved route filter so it can write the LOGIN_FAILURE
         // audit row when the global ValidationPipe rejects a malformed body.

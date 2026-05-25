@@ -62,6 +62,9 @@ export const REQUIRED_SCHEMA_MANIFEST: ReadonlyArray<IRequiredTable> = [
     { table: 'account_snapshots', requiredColumns: ['account_snapshots_id', 'ts', 'balance', 'equity'] },
     { table: 'control_audit', requiredColumns: ['control_audit_id', 'occurred_at', 'actor_sub', 'action', 'new_state'] },
     { table: 'revoked_jti', requiredColumns: ['jti', 'revoked_at', 'revoked_by'] },
+    // M11a W1.9 — persisted LoginRateLimiter state. Boot fails if the table
+    // is missing so a restart cannot silently re-open the brute-force window.
+    { table: 'login_rate_limit_state', requiredColumns: ['source_ip', 'scope', 'timestamps_ms', 'updated_at'] },
 ];
 
 export const SCHEMA_GATE_TITLE = 'Engine refused to boot: schema gate failed';

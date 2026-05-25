@@ -98,6 +98,14 @@ class StubRevokedRepo implements IRevokedJtiRepositoryPort {
     }
 
     async revoke(): Promise<void> { /* not exercised */ }
+
+    async pruneOlderThan(_cutoff: Date): Promise<number> {
+        return 0;
+    }
+
+    async countAll(): Promise<number> {
+        return this.revokedSet.size;
+    }
 }
 
 function buildGateway(opts: { clock?: () => number; revoked?: StubRevokedRepo } = {}): {

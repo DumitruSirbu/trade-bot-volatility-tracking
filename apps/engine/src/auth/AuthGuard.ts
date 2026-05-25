@@ -2,7 +2,7 @@ import { AuthFailureReasonEnum, AuthScopeEnum, IAuthFailure, IAuthSubject } from
 import { CanActivate, ExecutionContext, Inject, Injectable, Logger, SetMetadata, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
-import { AuthTokenService, IRevokedJtiRepositoryPort, REVOKED_JTI_REPOSITORY } from './AuthModule';
+import { AuthTokenService, IRevokedJtiRepositoryPort, REVOKED_JTI_REPOSITORY, getEngineReason } from './AuthModule';
 import { AUTH_BEARER_PREFIX, REQUIRED_SCOPES_METADATA_KEY } from './const/authConsts';
 import { IAuthenticatedRequest } from './interface/IAuthenticatedRequest';
 
@@ -49,6 +49,14 @@ export class AuthGuard implements CanActivate {
         const verified = this.tokens.verify(token, new Date());
 
         if (this.isFailure(verified)) {
+            // M11a W1.5 — surface the engine-side BAD_SIGNATURE discriminator
+            // when present; the wire body still carries the public reason.
+            const engineReason = getEngineReason(verified);
+
+            if (engineReason !== null) {
+                this.logger.warn(`auth.denied reason=${verified.reason} engineReason=${engineReason}`);
+            }
+
             this.deny(verified.reason);
         }
 

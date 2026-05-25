@@ -53,6 +53,17 @@ class StubSecretProvider implements IAuthSecretProvider {
     getSigningSecret(): Buffer {
         return this.secret;
     }
+
+    // M11a W1.7 — CursorCodec now consumes IDerivedKeyService; the stub
+    // doubles as both the IAuthSecretProvider and the derived-key port
+    // (its getCursorKey returns the same buffer the legacy contract returned).
+    getCursorKey(): Buffer {
+        return this.secret;
+    }
+
+    getAuthKey(): Buffer {
+        return this.secret;
+    }
 }
 
 function buildPosition(overrides: Partial<PositionEntity> = {}): PositionEntity {

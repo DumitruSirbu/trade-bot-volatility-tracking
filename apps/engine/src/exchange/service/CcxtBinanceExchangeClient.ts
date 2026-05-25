@@ -1,5 +1,5 @@
 import { ExchangeEnvironmentEnum, IKeyPermissionSnapshot } from '@bot/shared';
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { pro as ccxtPro } from 'ccxt';
 import type {
     Balances,
@@ -25,7 +25,7 @@ import {
     TRADING_AUTHORITY_NEVER_EXPIRES_SENTINEL,
 } from '../const';
 import { ExchangeCredentialsException, ExchangeRequestException } from '../exception';
-import { sanitizeExchangeError } from '../utils';
+import { parseRateLimitHeaders, sanitizeExchangeError } from '../utils';
 import {
     IBalanceSnapshot,
     ICreateOrderRequest,
@@ -42,6 +42,8 @@ import {
     ITickerSnapshot,
     ITradeSnapshot,
 } from '../interface';
+import { IRateLimitPolicy, RATE_LIMIT_POLICY, IRateLimitedCall } from '../interface/IRateLimitPolicy';
+import { buildRateLimitedCall } from './RateLimitPolicyService';
 
 // The single chokepoint for all Binance USDT-M Futures I/O. Wraps ccxt.pro's
 // unified methods, normalises every response into the engine's boundary types,
@@ -53,7 +55,10 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
 
     private readonly client: InstanceType<typeof ccxtPro.binanceusdm>;
 
-    constructor(private readonly appConfig: AppConfigService) {
+    constructor(
+        private readonly appConfig: AppConfigService,
+        @Inject(RATE_LIMIT_POLICY) private readonly rateLimit: IRateLimitPolicy,
+    ) {
         this.assertCredentialsPresent();
 
         this.client = new ccxtPro.binanceusdm({
@@ -305,10 +310,28 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
 
     // Single try/catch boundary (code-conventions "Integration calls"): log with
     // context, then rethrow as a domain exception so no ccxt error escapes.
+    //
+    // M11a W1.4 (ADR 0030). The boundary now also enforces the rate-limit policy
+    // around every ccxt call: `acquire()` before the call, and
+    // `reconcileFromHeaders()` after every response (success AND failure — Binance
+    // returns rate-limit headers on 4xx too). The descriptor maps the legacy
+    // `operation:symbol` tag string into a typed IRateLimitedCall via
+    // `buildRateLimitedCall`; an unknown operation throws at acquisition time
+    // so no new call site can drift past the limiter.
     private async callExchange<T>(operation: string, request: () => Promise<T>): Promise<T> {
+        const call = this.descriptorFromTag(operation);
+
+        await this.rateLimit.acquire(call);
+
         try {
-            return await request();
+            const result = await request();
+
+            this.reconcileHeadersFromClient(null);
+
+            return result;
         } catch (cause) {
+            this.reconcileHeadersFromClient(cause);
+
             // Carry only the SANITIZED message as the exception context — never the raw
             // ccxt error — so a future AllExceptionsFilter can't serialize an
             // unredacted signature/API key out of `cause`.
@@ -318,6 +341,69 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
 
             throw new ExchangeRequestException(operation, sanitizedCause);
         }
+    }
+
+    // Maps a legacy `operation` / `operation:symbol` tag onto the typed
+    // IRateLimitedCall. Order operations fail-fast (ADR 0030 §2.3); everything
+    // else awaits up to 30s (the longest configured poll cadence). This keeps
+    // the call-site refactor surgical — call sites still pass strings.
+    private descriptorFromTag(tag: string): IRateLimitedCall {
+        const colonIndex = tag.indexOf(':');
+        const operation = colonIndex === -1 ? tag : tag.slice(0, colonIndex);
+        const symbol = colonIndex === -1 ? null : tag.slice(colonIndex + 1);
+        const isOrderOp = operation === 'createOrder' || operation === 'cancelOrder' || operation === 'cancelOrderByClientId';
+
+        return buildRateLimitedCall({
+            operation,
+            isOrderOp,
+            symbol,
+            mode: isOrderOp ? 'fail-fast' : 'await',
+            maxWaitMs: isOrderOp ? null : 30_000,
+        });
+    }
+
+    // ccxt parks the most recent response headers on `last_response_headers`
+    // (per-instance, not per-call) and on `httpHeaders` of the thrown ccxt
+    // error. We try both. Parsing failures collapse to "no header" — the
+    // limiter's local accounting is the runtime gate in that case.
+    private reconcileHeadersFromClient(cause: unknown): void {
+        const fromError = this.headersFromError(cause);
+        const fromClient = (this.client as unknown as { last_response_headers?: Record<string, string> }).last_response_headers;
+        const status = this.statusFromError(cause);
+
+        if (fromError !== null) {
+            this.rateLimit.reconcileFromHeaders(parseRateLimitHeaders(fromError, status));
+
+            return;
+        }
+
+        if (fromClient !== undefined) {
+            this.rateLimit.reconcileFromHeaders(parseRateLimitHeaders(fromClient, status));
+        }
+    }
+
+    private headersFromError(cause: unknown): Record<string, string> | null {
+        if (cause === null || typeof cause !== 'object') {
+            return null;
+        }
+
+        const maybeHeaders = (cause as { httpHeaders?: Record<string, string> }).httpHeaders;
+
+        if (maybeHeaders === undefined || typeof maybeHeaders !== 'object') {
+            return null;
+        }
+
+        return maybeHeaders;
+    }
+
+    private statusFromError(cause: unknown): number | null {
+        if (cause === null || typeof cause !== 'object') {
+            return null;
+        }
+
+        const status = (cause as { httpStatusCode?: number; httpCode?: number }).httpStatusCode ?? (cause as { httpCode?: number }).httpCode;
+
+        return typeof status === 'number' ? status : null;
     }
 
     private toMarketInfo(market: MarketInterface): IMarketInfo {

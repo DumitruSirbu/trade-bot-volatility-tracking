@@ -8,9 +8,12 @@ export const PERPETUAL_SETTLE_CURRENCY = 'USDT';
 // full book (ADR §2 tiering — never deep books for the whole universe).
 export const ORDER_BOOK_DEPTH_LIMIT = 20;
 
-// ccxt's built-in rate-limiter is mandatory: a single client fans out hundreds of
-// REST OI/funding polls, and tripping Binance's weight ban would blind the bot.
-export const ENABLE_RATE_LIMIT = true;
+// ccxt's built-in rate-limiter is DISABLED — M11a W1.4 (ADR 0030 §2). The
+// in-engine RateLimitPolicyService is the sole authority; two stacked
+// throttles confuse observability (a stall in one is invisible behind the
+// other). See `RateLimitPolicyService` for the per-class token-bucket
+// accounting and 429/418 freeze path.
+export const ENABLE_RATE_LIMIT = false;
 
 // Censor substituted for any credential-bearing token found inside a ccxt error
 // string before it reaches the logs.

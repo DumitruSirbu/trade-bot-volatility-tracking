@@ -22,6 +22,16 @@ const TRUST_PROXY_HOPS_ENV = 'TRUST_PROXY_HOPS';
 const AUTH_BOOTSTRAP_SECRET_ENV = 'AUTH_BOOTSTRAP_SECRET';
 const AUTH_LOGIN_SCOPES_ENV = 'AUTH_LOGIN_SCOPES';
 
+// M11a W1.6 (ADR 0031) — revoked-jti prune TTL + unbounded-growth alert
+// threshold. Floor is enforced at boot: prune_after >= token TTL + 1 hour.
+const AUTH_TOKEN_TTL_SEC_ENV = 'AUTH_TOKEN_TTL_SEC';
+const AUTH_REVOKED_JTI_PRUNE_AFTER_SEC_ENV = 'AUTH_REVOKED_JTI_PRUNE_AFTER_SEC';
+const REVOKED_JTI_MAX_ROWS_ENV = 'REVOKED_JTI_MAX_ROWS';
+const AUTH_TOKEN_TTL_SEC_DEFAULT = 15 * 60;
+const AUTH_REVOKED_JTI_PRUNE_AFTER_SEC_DEFAULT = 75 * 60;
+const REVOKED_JTI_MAX_ROWS_DEFAULT = 10_000;
+const AUTH_REVOKED_JTI_PRUNE_SAFETY_MARGIN_SEC = 3600;
+
 const AUTH_HMAC_SECRET_MIN_BYTES = 32;
 const AUTH_BOOTSTRAP_SECRET_MIN_BYTES = 32;
 const DEV_SECRET_BYTES = 32;
@@ -54,6 +64,9 @@ export class AppConfigService {
     private readonly resolvedTrustProxy: string | number;
     private readonly resolvedAuthBootstrapSecret: string;
     private readonly resolvedAuthLoginScopes: ReadonlyArray<AuthScopeEnum>;
+    private readonly resolvedAuthTokenTtlSec: number;
+    private readonly resolvedRevokedJtiPruneAfterSec: number;
+    private readonly resolvedRevokedJtiMaxRows: number;
 
     constructor(private readonly configService: ConfigService<EnvironmentVariables, true>) {
         this.resolvedAuthHmacSecret = this.resolveAuthHmacSecret();
@@ -65,6 +78,12 @@ export class AppConfigService {
         // surface as a clear boot error rather than a deferred 5xx at runtime.
         this.resolvedAuthLoginScopes = this.parseAuthLoginScopes();
         this.resolvedAuthBootstrapSecret = this.resolveAuthBootstrapSecret(this.resolvedAuthHmacSecret);
+        // M11a W1.6 — token TTL parsed before prune-after so the floor check
+        // has a real value to compare against; misconfigured floor is a fatal
+        // boot error (ADR 0031 §2.2).
+        this.resolvedAuthTokenTtlSec = this.parsePositiveIntEnv(AUTH_TOKEN_TTL_SEC_ENV, AUTH_TOKEN_TTL_SEC_DEFAULT);
+        this.resolvedRevokedJtiPruneAfterSec = this.resolveRevokedJtiPruneAfterSec(this.resolvedAuthTokenTtlSec);
+        this.resolvedRevokedJtiMaxRows = this.parsePositiveIntEnv(REVOKED_JTI_MAX_ROWS_ENV, REVOKED_JTI_MAX_ROWS_DEFAULT);
     }
 
     get nodeEnv(): NodeEnvEnum {
@@ -213,6 +232,21 @@ export class AppConfigService {
         return this.resolvedAuthLoginScopes;
     }
 
+    // M11a W1.6 (ADR 0031). Token TTL (the issuer's hard ceiling) + prune
+    // after (when the row becomes eligible for deletion) + the row-count
+    // unbounded-growth alert threshold. Boot fails if prune_after < TTL + 1h.
+    get authTokenTtlSec(): number {
+        return this.resolvedAuthTokenTtlSec;
+    }
+
+    get revokedJtiPruneAfterSec(): number {
+        return this.resolvedRevokedJtiPruneAfterSec;
+    }
+
+    get revokedJtiMaxRows(): number {
+        return this.resolvedRevokedJtiMaxRows;
+    }
+
     private resolveAuthHmacSecret(): string {
         const raw = process.env[AUTH_HMAC_SECRET_ENV];
 
@@ -358,6 +392,56 @@ export class AppConfigService {
 
         if (parsed.length === 0) {
             return AUTH_LOGIN_DEFAULT_SCOPES;
+        }
+
+        return parsed;
+    }
+
+    // M11a W1.6 (ADR 0031 §2.2). Reads AUTH_REVOKED_JTI_PRUNE_AFTER_SEC and
+    // boot-fails when below the floor `tokenTtlSec + 1h`. A misconfigured
+    // floor risks pruning a still-valid token's revocation entry.
+    private resolveRevokedJtiPruneAfterSec(tokenTtlSec: number): number {
+        const floor = tokenTtlSec + AUTH_REVOKED_JTI_PRUNE_SAFETY_MARGIN_SEC;
+        const raw = process.env[AUTH_REVOKED_JTI_PRUNE_AFTER_SEC_ENV];
+
+        if (raw === undefined || raw.length === 0) {
+            if (AUTH_REVOKED_JTI_PRUNE_AFTER_SEC_DEFAULT < floor) {
+                throw new Error(
+                    `${AUTH_REVOKED_JTI_PRUNE_AFTER_SEC_ENV} default ${AUTH_REVOKED_JTI_PRUNE_AFTER_SEC_DEFAULT}s is below floor ` +
+                        `${floor}s (=${AUTH_TOKEN_TTL_SEC_ENV}+${AUTH_REVOKED_JTI_PRUNE_SAFETY_MARGIN_SEC}s) — see ADR 0031 §2.2`,
+                );
+            }
+
+            return AUTH_REVOKED_JTI_PRUNE_AFTER_SEC_DEFAULT;
+        }
+
+        const parsed = Number.parseInt(raw, 10);
+
+        if (Number.isNaN(parsed) || parsed <= 0) {
+            throw new Error(`${AUTH_REVOKED_JTI_PRUNE_AFTER_SEC_ENV} must be a positive integer; got '${raw}'`);
+        }
+
+        if (parsed < floor) {
+            throw new Error(
+                `${AUTH_REVOKED_JTI_PRUNE_AFTER_SEC_ENV}=${parsed}s is below floor ${floor}s ` +
+                    `(=${AUTH_TOKEN_TTL_SEC_ENV}+${AUTH_REVOKED_JTI_PRUNE_SAFETY_MARGIN_SEC}s) — see ADR 0031 §2.2`,
+            );
+        }
+
+        return parsed;
+    }
+
+    private parsePositiveIntEnv(envName: string, defaultValue: number): number {
+        const raw = process.env[envName];
+
+        if (raw === undefined || raw.length === 0) {
+            return defaultValue;
+        }
+
+        const parsed = Number.parseInt(raw, 10);
+
+        if (Number.isNaN(parsed) || parsed <= 0) {
+            throw new Error(`${envName} must be a positive integer; got '${raw}'`);
         }
 
         return parsed;

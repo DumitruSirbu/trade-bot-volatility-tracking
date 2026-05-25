@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
 
-import { AUTH_SECRET_PROVIDER, IAuthSecretProvider } from '../../auth/AuthModule';
+import { DERIVED_KEY_SERVICE, IDerivedKeyService } from '../../auth/DerivedKeyService';
 
 // M9 W4 (ADR 0022 §2.5). Opaque, HMAC-tamper-guarded cursor codec for the read
 // API's cursor pagination.
@@ -17,11 +17,13 @@ import { AUTH_SECRET_PROVIDER, IAuthSecretProvider } from '../../auth/AuthModule
 // controllers treat null as "start of page" rather than throwing — that keeps
 // the client surface forgiving while still rejecting tampering.
 //
-// Why bind to the auth signing secret: the engine already provisions one
-// 32-byte HMAC secret (ADR 0020 §2.1). A separate cursor secret would add an
-// operator-facing knob with zero security benefit — both rotate together on a
-// secret rotation. The codec depends on the `IAuthSecretProvider` port so the
-// future Vault/SSM adapter swap (ADR 0020 §2.4) propagates here for free.
+// Why HKDF-derived sub-key: the engine provisions one 32-byte master HMAC
+// secret (ADR 0020 §2.1), and M11a W1.7 derives a per-domain sub-key for
+// cursor signing via HKDF-Expand with info='cursor v1' (see DerivedKeyService).
+// Domain separation lets a future operational audit of the cursor MAC surface
+// inspect a key that does NOT also sign JWTs. Rotation is still atomic on
+// AUTH_HMAC_SECRET change (both sub-keys rotate together at restart, same
+// property as the pre-W1.7 path); a graceful overlap window is M11b scope.
 //
 // Limits:
 //   - max cursor length cap (decoded payload) guards against memory abuse on
@@ -45,7 +47,7 @@ export interface ICursorTuple {
 
 @Injectable()
 export class CursorCodec {
-    constructor(@Inject(AUTH_SECRET_PROVIDER) private readonly secrets: IAuthSecretProvider) {}
+    constructor(@Inject(DERIVED_KEY_SERVICE) private readonly derivedKeys: IDerivedKeyService) {}
 
     encode(tuple: ICursorTuple): string {
         const payload = base64UrlEncode(Buffer.from(JSON.stringify({ id: tuple.id, ts: tuple.ts.toISOString() }), 'utf8'));
@@ -83,7 +85,7 @@ export class CursorCodec {
     }
 
     private signPayload(payload: string): string {
-        const mac = createHmac('sha256', this.secrets.getSigningSecret()).update(payload).digest();
+        const mac = createHmac('sha256', this.derivedKeys.getCursorKey()).update(payload).digest();
 
         return base64UrlEncode(mac);
     }

@@ -41,6 +41,15 @@ class StubSecretProvider {
     getSigningSecret(): Buffer {
         return Buffer.alloc(32, 0xab);
     }
+
+    // M11a W1.7 — CursorCodec now consumes IDerivedKeyService.
+    getCursorKey(): Buffer {
+        return Buffer.alloc(32, 0xab);
+    }
+
+    getAuthKey(): Buffer {
+        return Buffer.alloc(32, 0xab);
+    }
 }
 
 function buildPosition(overrides: Partial<PositionEntity> = {}): PositionEntity {
