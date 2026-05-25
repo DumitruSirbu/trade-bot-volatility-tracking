@@ -158,7 +158,8 @@ structured logs (M0) → Telegram alerts + kill switch (M9) → read-only React
 dashboard (M10). Everything is containerized; the stack deploys to a single cloud
 (AWS or GCP). The **engine must run as an always-on container** (it holds a
 persistent Binance WebSocket and in-memory state — never scale-to-zero). The
-dashboard talks to an authenticated read API. Full topology in `M11-go-live-hardening.md`.
+dashboard talks to an authenticated read API. Full topology in `M11b-cloud-go-live.md`
+(local-soak prerequisite in `M11a-local-soak.md`; both summarised in `M11-go-live-hardening.md`).
 
 ## Milestones
 
@@ -175,7 +176,9 @@ dashboard talks to an authenticated read API. Full topology in `M11-go-live-hard
 | M8 | Strategy versioning & comparison | `M8-versioning-comparison.md` |
 | M9 | Observability, control & read API | `M9-observability-control.md` |
 | M10 | Dashboard (React, containerized) | `M10-dashboard.md` |
-| M11 | Go-live hardening | `M11-go-live-hardening.md` |
+| M11 | Go-live hardening (index — split into M11a + M11b) | `M11-go-live-hardening.md` |
+| M11a | Local soak hardening (Binance demo trading, $0 infra) | `M11a-local-soak.md` |
+| M11b | Cloud go-live & scaling (gated by M11a soak exit criteria) | `M11b-cloud-go-live.md` |
 | M12 | Analysis MCP (phase 2) | `M12-analysis-mcp.md` |
 | M13 | Agentic weekly loop (phase 2) | `M13-agentic-weekly-loop.md` |
 | M14 | CI review gate (phase 2) | `M14-ci-review-gate.md` |
