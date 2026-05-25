@@ -8,10 +8,9 @@
  * BAD_SIGNATURE.
  *
  * NOTE: AuthFailureReasonEnum.BAD_SIGNATURE exists in the shared package
- * (M11a W1.5). The wire reason for a tampered token is still MALFORMED per the
- * ADR (the promotion to wire happens when bot-shared-maintainer publishes the
- * enum member and the engine promotes it). The current implementation keeps the
- * discriminator in a side-channel (getEngineReason). Tests reflect this state.
+ * (M11a W1.5, commit e14b098) and the engine now promotes it onto the wire.
+ * Tampered signatures surface as BAD_SIGNATURE on the wire; EXPIRED / MALFORMED
+ * (missing, two-segment, wrong-alg) reasons keep their previous wire values.
  */
 
 import { AuthFailureReasonEnum } from '@bot/shared';
@@ -49,7 +48,7 @@ function tamperSignature(token: string): string {
 
 describe('BAD_SIGNATURE split — adversarial (M11a W1.5)', () => {
     describe('tampered signature', () => {
-        it('verify returns MALFORMED reason on the wire (stable external shape)', () => {
+        it('verify returns BAD_SIGNATURE reason on the wire (promoted from engine discriminator)', () => {
             // BUILD
             const service = buildTokenService();
             const token = issueToken(service);
@@ -58,10 +57,10 @@ describe('BAD_SIGNATURE split — adversarial (M11a W1.5)', () => {
             // OPERATE
             const result = service.verify(tampered, new Date());
 
-            // CHECK — wire reason stays MALFORMED (ADR: BAD_SIGNATURE is engine-internal)
+            // CHECK — wire reason is BAD_SIGNATURE now that the shared enum member exists
             expect((result as { error: string; reason: string }).error).toBe('AUTH_FAILED');
             expect((result as { reason: AuthFailureReasonEnum }).reason).toBe(
-                AuthFailureReasonEnum.MALFORMED,
+                AuthFailureReasonEnum.BAD_SIGNATURE,
             );
         });
 

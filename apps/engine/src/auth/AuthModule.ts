@@ -195,20 +195,15 @@ export class AuthTokenService {
         const actualBuf = Buffer.from(signatureSeg, 'utf8');
 
         if (expectedBuf.byteLength !== actualBuf.byteLength || !timingSafeEqual(expectedBuf, actualBuf)) {
-            // M11a W1.5 — signature mismatch is operationally distinct from
-            // structural malformation: it carries a security signal ("token
-            // tampered or signed under a rotated/foreign secret") whereas
-            // EXPIRED / MISSING / MALFORMED are operational. We mark the
-            // failure with `engineReason=BAD_SIGNATURE` on the local log line,
-            // metric, and audit row so an audit reader can distinguish the
-            // two without changing the wire enum (the `BAD_SIGNATURE` enum
-            // member must be added to `@bot/shared` AuthFailureReasonEnum by
-            // bot-shared-maintainer — flagged in the W1 hand-off). On the wire
-            // we still surface MALFORMED so the dashboard / CLI keep a stable
-            // shape; the security signal lives in the side-channels.
-            this.logger.warn('auth.verify.failure reason=MALFORMED engineReason=BAD_SIGNATURE signatureMismatch=true');
+            // M11a W1.5 follow-up — `AuthFailureReasonEnum.BAD_SIGNATURE` now
+            // exists in `@bot/shared` (commit e14b098). Promote the engine
+            // discriminator onto the wire so signature-verification failures
+            // surface as BAD_SIGNATURE instead of MALFORMED. The non-enumerable
+            // `engineReason` is retained for backward-compatible audit/metric
+            // routing.
+            this.logger.warn('auth.verify.failure reason=BAD_SIGNATURE engineReason=BAD_SIGNATURE signatureMismatch=true');
 
-            return failureWithSignal(AuthFailureReasonEnum.MALFORMED, 'BAD_SIGNATURE');
+            return failureWithSignal(AuthFailureReasonEnum.BAD_SIGNATURE, 'BAD_SIGNATURE');
         }
 
         let parsed: IJwtPayload;
