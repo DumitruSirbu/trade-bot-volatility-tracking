@@ -172,7 +172,19 @@ describe('M6 R1.2.2 — phase4a exclusion keyed on state (ADR 0014 §4a revised)
         const snapshotWriter = { writeNow: jest.fn().mockResolvedValue(null) } as unknown as AccountSnapshotWriter;
         const accountSnapshots = { findLatest: jest.fn().mockResolvedValue(null) } as unknown as AccountSnapshotRepository;
 
-        const boot = new EngineBootstrapService(positionsRepo, recon, monitor, instrumentor, retainer, riskGate, snapshotWriter, accountSnapshots);
+        const boot = new EngineBootstrapService(
+            positionsRepo,
+            recon,
+            monitor,
+            instrumentor,
+            retainer,
+            riskGate,
+            snapshotWriter,
+            accountSnapshots,
+            // M11a R2d Item 3 — non-PAPER stub so phase 2-3 PAPER branch is inert.
+            { exchangeEnv: 'testnet' } as never,
+            { forceTick: jest.fn().mockResolvedValue({ tickAtMs: 0, driftCount: 0, inMemoryCount: 0, persistedCount: 0 }) } as never,
+        );
         return { boot, setOpenExposure };
     }
 
@@ -402,7 +414,9 @@ describe('M6 R1.2.4 — ReconciliationService case-(f) UNKNOWN_INTENT_OUTCOME', 
         const events = new EventEmitter2();
         const emitSpy = jest.spyOn(events, 'emit');
         const service = new ReconciliationService(
-            exchangeClient,
+            exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions,
             transactions,
             positionService,
@@ -616,7 +630,9 @@ describe('M6 R1.2.5 — ReconciliationService.handleProtectiveOrderDriftIfNeeded
         const events = new EventEmitter2();
         const emitSpy = jest.spyOn(events, 'emit');
         const service = new ReconciliationService(
-            exchangeClient,
+            exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions,
             transactions,
             positionService,

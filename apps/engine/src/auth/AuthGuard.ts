@@ -2,7 +2,8 @@ import { AuthFailureReasonEnum, AuthScopeEnum, IAuthFailure, IAuthSubject } from
 import { CanActivate, ExecutionContext, Inject, Injectable, Logger, SetMetadata, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
-import { AuthTokenService, IRevokedJtiRepositoryPort, REVOKED_JTI_REPOSITORY } from './AuthModule';
+import { AuthTokenService } from './AuthModule';
+import { IRevokedJtiRepositoryPort, REVOKED_JTI_REPOSITORY } from './authTokens';
 import { AUTH_BEARER_PREFIX, REQUIRED_SCOPES_METADATA_KEY } from './const/authConsts';
 import { IAuthenticatedRequest } from './interface/IAuthenticatedRequest';
 

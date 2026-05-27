@@ -1,7 +1,7 @@
 import { PositionSideEnum, PositionSlotEnum, ProtectiveOrderTypeEnum } from '@bot/shared';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 
-import { EXCHANGE_CLIENT, IExchangeClient } from '../../exchange/interface';
+import { ENGINE_EXECUTION_CLIENT, IEngineExecutionClient } from '../../exchange/interface';
 import { formatMoney, MoneyValue } from '../../common/utils/money';
 import {
     BINANCE_CLOSE_POSITION_PLACEHOLDER_AMOUNT,
@@ -39,7 +39,12 @@ export class ProtectiveOrderAttacher {
     private readonly logger = new Logger(ProtectiveOrderAttacher.name);
 
     constructor(
-        @Inject(EXCHANGE_CLIENT) private readonly exchangeClient: IExchangeClient,
+        // M11a R4 Item 4C — migrated to inject via the
+        // `ENGINE_EXECUTION_CLIENT` port (same env-conditional dispatch as
+        // ExchangeOrderSubmitter). Under PAPER this routes protective-order
+        // submission through PaperExecutionClient's engine-shape `createOrder`
+        // instead of the unreachable `CcxtExecutionClient` concrete.
+        @Inject(ENGINE_EXECUTION_CLIENT) private readonly exchangeClient: IEngineExecutionClient,
         private readonly clientOrderIdFactory: ClientOrderIdFactory,
     ) {}
 

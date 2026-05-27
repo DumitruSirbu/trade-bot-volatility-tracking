@@ -10,4 +10,5 @@ export enum AlertTypeEnum {
     RECONCILIATION_DRIFT_UNRESOLVED = 'reconciliation_drift_unresolved',
     UNHANDLED_EXCEPTION = 'unhandled_exception',
     DAILY_PNL_SUMMARY = 'daily_pnl_summary',
+    BOOT_ENGINE_STARTED = 'boot_engine_started',
 }

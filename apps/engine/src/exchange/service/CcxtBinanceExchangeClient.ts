@@ -16,6 +16,7 @@ import type {
     Trade,
 } from 'ccxt';
 
+import { assertActiveLiveAccountStateCapability } from '../../paper-mode/security';
 import { AppConfigService } from '../../config/service';
 import {
     ENABLE_RATE_LIMIT,
@@ -82,12 +83,20 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
         this.selectEnvironmentUrls(this.appConfig.exchangeEnv);
     }
 
-    // M11a W1.1. Selects ccxt's URL set per `ExchangeEnvironmentEnum`:
+    // Selects ccxt's URL set per `ExchangeEnvironmentEnum` (ADR 0032 §D8, §D15):
     //   TESTNET -> setSandboxMode(true)            (testnet.binancefuture.com)
-    //   DEMO    -> enableDemoTrading(true)         (demo-fapi.binance.com)
+    //   PAPER   -> live URL block                  (fapi.binance.com — market data path
+    //                                               only; order intents are intercepted
+    //                                               by PaperExecutionClient and never
+    //                                               leave the process)
     //   LIVE    -> default URLs                    (fapi.binance.com)
-    // Single switch keeps the URL surface and the env decision in one place;
-    // any future env is fail-loud because of the exhaustive default.
+    //
+    // The previous DEMO branch invoked ccxt's `enableDemoTrading(true)`, which for USDT-M
+    // Futures is a rename of the testnet alias `demo-fapi.binance.com === testnet.binance
+    // future.com` and surfaces no `/sapi*` endpoints. The PAPER design replaces it with
+    // engine-local paper trading against live market data; `enableDemoTrading` is intentionally
+    // never called (the sentinel test in this module's __tests__ guards against silent
+    // resurrection). Any future env is fail-loud because of the exhaustive default.
     private selectEnvironmentUrls(env: ExchangeEnvironmentEnum): void {
         if (env === ExchangeEnvironmentEnum.TESTNET) {
             this.client.setSandboxMode(true);
@@ -96,13 +105,8 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
             return;
         }
 
-        if (env === ExchangeEnvironmentEnum.DEMO) {
-            // ccxt 4.5.x ships an `enableDemoTrading(true)` helper that swaps
-            // `urls.api` to the demo-fapi.binance.com / demo-api.binance.com
-            // host set (binance.js §enableDemoTrading). Paper fills against
-            // live order-book depth — the M11a soak target.
-            this.client.enableDemoTrading(true);
-            this.logger.warn('Binance USDT-M client initialised in DEMO mode (demo-fapi.binance.com)');
+        if (env === ExchangeEnvironmentEnum.PAPER) {
+            this.logger.warn('Binance USDT-M client initialised in PAPER mode (fapi.binance.com — engine-local paper fills)');
 
             return;
         }
@@ -126,8 +130,8 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
         const hasCredentials = Boolean(this.appConfig.exchangeApiKey) && Boolean(this.appConfig.exchangeApiSecret);
 
         if (!hasCredentials) {
-            // M11a W1.1 — profile string carries the resolved enum value so the
-            // exception body is unambiguous (testnet | demo | live).
+            // Profile string carries the resolved enum value so the exception
+            // body is unambiguous (testnet | paper | live).
             throw new ExchangeCredentialsException(this.appConfig.exchangeEnv);
         }
     }
@@ -138,7 +142,19 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
         return Object.values(markets).map((market) => this.toMarketInfo(market as MarketInterface));
     }
 
+    // M11a R2a (ADR 0032 §3 D14). The four account-state methods on this class
+    // are reachable only from the whitelisted entry points (the LIVE/TESTNET
+    // `ExchangeAccountStateSource` port adapter, `KeyPermissionAssertionService`,
+    // and the future `PaperExchangeNullityProbe`). Each whitelisted caller wraps
+    // its invocation in `runWithLiveAccountStateCapability(...)`; this assertion
+    // throws `UnauthorizedLiveAccountStateCallException` for any call arriving
+    // without an active capability tag. The static module-graph sentinel
+    // (R2a Item 5) is the first line of defence; this runtime guard catches
+    // escape hatches the static walk cannot see (ModuleRef.get, forwardRef,
+    // useFactory(injector)).
     async fetchBalance(): Promise<IBalanceSnapshot[]> {
+        assertActiveLiveAccountStateCapability('fetchBalance');
+
         const balances = await this.callExchange('fetchBalance', () => this.client.fetchBalance());
 
         return this.toBalanceSnapshots(balances);
@@ -180,71 +196,13 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
         return trades.map((trade) => this.toTradeSnapshot(symbol, trade));
     }
 
-    async createOrder(request: ICreateOrderRequest): Promise<IExchangeOrderSnapshot> {
-        const params: Record<string, unknown> = { ...(request.params ?? {}), clientOrderId: request.clientOrderId };
-
-        // Decimal → float conversion at the ccxt boundary. ccxt's createOrder signature
-        // accepts `number` and there is no decimal overload; this is the ONLY place in the
-        // engine where float touches money/qty (per docs/best-practices/code-conventions.md
-        // "Money is decimal" — `Number(decimalString)` is permissible AT the boundary, never
-        // upstream). Both amount and price strings come from ExecutionService already
-        // quantized against tickSize/stepSize at the upstream layer; the `Number()` cast is
-        // therefore lossless for the precisions Binance USDT-M Futures actually accepts
-        // (≤ 12 significant digits across tier-1/2/3 symbols). Anything more precise would
-        // be rejected by Binance's PRICE_FILTER / LOT_SIZE filters before lossy float
-        // arithmetic could matter — fail fast at the venue rather than silently round.
-        const price = request.price === null || request.price === undefined ? undefined : Number(request.price);
-        const amount = Number(request.amount);
-
-        const order = await this.callExchange(`createOrder:${request.symbol}:${request.clientOrderId}`, () =>
-            this.client.createOrder(request.symbol, request.type as OrderType, request.side as OrderSide, amount, price, params),
-        );
-
-        return this.toOrderSnapshot(order);
-    }
-
-    async fetchOrderByClientId(symbol: string, clientOrderId: string): Promise<IExchangeOrderSnapshot | null> {
-        try {
-            // Binance USDT-M Futures looks up by origClientOrderId; ccxt unifies both naming
-            // variants via `clientOrderId` in params. Id positional arg is required by ccxt's
-            // signature but ignored when origClientOrderId is supplied.
-            const order = await this.client.fetchOrder('', symbol, { clientOrderId, origClientOrderId: clientOrderId });
-
-            return this.toOrderSnapshot(order);
-        } catch (cause) {
-            if (this.isOrderNotFound(cause)) {
-                return null;
-            }
-
-            const sanitizedCause = sanitizeExchangeError(cause);
-            this.logger.error(`ccxt fetchOrderByClientId:${symbol}:${clientOrderId} failed: ${sanitizedCause}`);
-
-            throw new ExchangeRequestException(`fetchOrderByClientId:${symbol}:${clientOrderId}`, sanitizedCause);
-        }
-    }
-
-    async cancelOrderByClientId(symbol: string, clientOrderId: string): Promise<IExchangeOrderSnapshot> {
-        const order = await this.callExchange(`cancelOrderByClientId:${symbol}:${clientOrderId}`, () =>
-            this.client.cancelOrder('', symbol, { clientOrderId, origClientOrderId: clientOrderId }),
-        );
-
-        return this.toOrderSnapshot(order);
-    }
-
-    private isOrderNotFound(cause: unknown): boolean {
-        // ccxt translates Binance -2013 "Order does not exist" into OrderNotFound (subclass
-        // of ExchangeError). The class name check is safer than message matching because the
-        // localized message string can change between ccxt releases.
-        const name = cause instanceof Error ? cause.constructor.name : '';
-
-        return name === 'OrderNotFound';
-    }
-
     // M6 W4a (ADR 0010 §2 step 1, §7): exchange-side truth read by ReconciliationService.
     // ccxt's `fetchPositions` returns one entry per `(symbol, positionSide)` with `contracts`
     // possibly zero (some venues report all hedged-mode slots even when flat). We filter
     // zero-qty entries at the boundary so the reconciliation tick never has to.
     async fetchPositions(): Promise<readonly IPositionSnapshot[]> {
+        assertActiveLiveAccountStateCapability('fetchPositions');
+
         const positions = await this.callExchange('fetchPositions', () => this.client.fetchPositions());
 
         return positions.map((position) => this.toPositionSnapshot(position)).filter((snapshot) => this.isNonZeroPositionQty(snapshot));
@@ -260,15 +218,112 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
     // call, easily covering the 30s reconciliation cadence (1 funding event per 8h
     // per symbol).
     async fetchFundingHistory(symbol: string, sinceMs: number): Promise<readonly IFundingPaymentSnapshot[]> {
+        assertActiveLiveAccountStateCapability('fetchFundingHistory');
+
         const rows = await this.callExchange(`fetchFundingHistory:${symbol}`, () => this.client.fetchFundingHistory(symbol, sinceMs));
 
         return rows.map((row) => this.toFundingPaymentSnapshot(row));
     }
 
     async fetchOpenOrders(): Promise<readonly IOpenOrderSnapshot[]> {
+        assertActiveLiveAccountStateCapability('fetchOpenOrders');
+
         const orders = await this.callExchange('fetchOpenOrders', () => this.client.fetchOpenOrders());
 
         return orders.map((order) => this.toOpenOrderSnapshot(order));
+    }
+
+    // ─── Order-command facade surface (CcxtExecutionClient consumer) ─────
+    //
+    // M11a R2a HIGH H2 (ADR 0032 §3 D2). The previous `internalRawClient` /
+    // `internalCallExchange` / `internalNormaliseOrder` getters leaked the
+    // raw ccxt client across the class boundary and bypassed the D14
+    // capability guard. They are now PRIVATE; `CcxtExecutionClient` consumes
+    // the typed facades below, each of which routes through the
+    // `callExchange` rate-limit boundary and returns an engine-shape snapshot.
+    //
+    // No other class may consume these facades directly. The provider graph
+    // keeps `CcxtBinanceExchangeClient` confined to `ExchangeModule`; only
+    // `CcxtExecutionClient` (also in `ExchangeModule`) calls them.
+
+    async submitOrder(request: ICreateOrderRequest): Promise<IExchangeOrderSnapshot> {
+        const params: Record<string, unknown> = { ...(request.params ?? {}), clientOrderId: request.clientOrderId };
+
+        // Decimal -> float conversion at the ccxt boundary. ccxt's createOrder signature
+        // accepts `number` and there is no decimal overload; this is the ONLY place in the
+        // engine where float touches money/qty (per docs/best-practices/code-conventions.md
+        // "Money is decimal" — `Number(decimalString)` is permissible AT the boundary, never
+        // upstream). Both amount and price strings come from ExecutionService already
+        // quantized against tickSize/stepSize at the upstream layer; the `Number()` cast is
+        // therefore lossless for the precisions Binance USDT-M Futures actually accepts.
+        const price = request.price === null || request.price === undefined ? undefined : Number(request.price);
+        const amount = Number(request.amount);
+
+        const order = await this.callExchange(`createOrder:${request.symbol}:${request.clientOrderId}`, () =>
+            this.client.createOrder(request.symbol, request.type as OrderType, request.side as OrderSide, amount, price, params),
+        );
+
+        return this.toOrderSnapshot(order);
+    }
+
+    async fetchOrderByClientId(symbol: string, clientOrderId: string): Promise<IExchangeOrderSnapshot | null> {
+        // Binance USDT-M Futures looks up by origClientOrderId; ccxt unifies both naming
+        // variants via `clientOrderId` in params. Id positional arg is required by ccxt's
+        // signature but ignored when origClientOrderId is supplied.
+        //
+        // `OrderNotFound` is a legitimate not-an-error outcome (the engine asks the
+        // exchange "do you know this clientOrderId?" and 'no' is an acceptable answer).
+        // We special-case at the raw-ccxt edge so `callExchange`'s domain-wrap does not
+        // turn this into an ExchangeRequestException the caller would have to grep for.
+        const order = await this.callExchange(`fetchOrderByClientId:${symbol}:${clientOrderId}`, async () => {
+            try {
+                return await this.client.fetchOrder('', symbol, { clientOrderId, origClientOrderId: clientOrderId });
+            } catch (cause) {
+                if (this.isOrderNotFound(cause)) {
+                    return null;
+                }
+
+                throw cause;
+            }
+        });
+
+        if (order === null) {
+            return null;
+        }
+
+        return this.toOrderSnapshot(order);
+    }
+
+    async cancelOrderByClientId(symbol: string, clientOrderId: string): Promise<IExchangeOrderSnapshot> {
+        const order = await this.callExchange(`cancelOrderByClientId:${symbol}:${clientOrderId}`, () =>
+            this.client.cancelOrder('', symbol, { clientOrderId, origClientOrderId: clientOrderId }),
+        );
+
+        return this.toOrderSnapshot(order);
+    }
+
+    async cancelAllOrdersForSymbol(symbol: string): Promise<void> {
+        await this.callExchange(`cancelAllOrders:${symbol}`, () => this.client.cancelAllOrders(symbol));
+    }
+
+    // `fetchOpenOrders(symbol?)` — symbol-filtered variant for the shared
+    // port. Differs from `IExchangeClient.fetchOpenOrders()` (no symbol) by
+    // narrowing at the ccxt boundary. Routes through the same callExchange +
+    // capability assertion as the no-symbol read so the D14 guarantee holds
+    // regardless of which overload the caller picks.
+    async fetchOpenOrdersForSymbol(symbol?: string): Promise<readonly IExchangeOrderSnapshot[]> {
+        assertActiveLiveAccountStateCapability('fetchOpenOrdersForSymbol');
+
+        const tag = symbol === undefined ? 'fetchOpenOrders' : `fetchOpenOrders:${symbol}`;
+        const orders = await this.callExchange(tag, () => this.client.fetchOpenOrders(symbol));
+
+        return orders.map((order) => this.toOrderSnapshot(order));
+    }
+
+    private isOrderNotFound(cause: unknown): boolean {
+        const name = cause instanceof Error ? cause.constructor.name : '';
+
+        return name === 'OrderNotFound';
     }
 
     // M11a W1.2 (ADR 0028 §2.2). Two ccxt calls merged into one boundary type
@@ -276,20 +331,21 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
     // ExchangeRequestException; the caller maps that into assertion-failure
     // (ADR §2.5).
     async fetchKeyPermissions(): Promise<IKeyPermissionSnapshot> {
-        const [restrictions, ipRestriction] = await Promise.all([
-            this.callExchange('sapiGetAccountApiRestrictions', () => this.callSapiGetAccountApiRestrictions()),
-            this.callExchange('sapiGetAccountApiRestrictionsIpRestriction', () => this.callSapiGetAccountApiRestrictionsIpRestriction()),
-        ]);
+        // Binance discontinued GET /sapi/v1/account/apiRestrictions/ipRestriction
+        // in 2021-11-17 (changelog). The ccxt stub still exists but the live
+        // server returns -1102 "accountApiKey should not null" on every call,
+        // and there is no surviving self-readable endpoint that returns the
+        // actual IP allow-list. The permissions endpoint
+        // (/sapi/v1/account/apiRestrictions) returns ipRestrict: boolean
+        // which the allowlist predicate uses to confirm a whitelist IS
+        // configured; verifying the actual IP set is operator-runbook scope.
+        const restrictions = await this.callExchange('sapiGetAccountApiRestrictions', () => this.callSapiGetAccountApiRestrictions());
 
-        return this.toKeyPermissionSnapshot(restrictions, ipRestriction);
+        return this.toKeyPermissionSnapshot(restrictions, null);
     }
 
     private async callSapiGetAccountApiRestrictions(): Promise<Record<string, unknown>> {
         return this.callSapiMethod<Record<string, unknown>>('sapiGetAccountApiRestrictions');
-    }
-
-    private async callSapiGetAccountApiRestrictionsIpRestriction(): Promise<Record<string, unknown>> {
-        return this.callSapiMethod<Record<string, unknown>>('sapiGetAccountApiRestrictionsIpRestriction');
     }
 
     // ccxt's binanceusdm exposes spot-side restriction endpoints via implicit
@@ -358,7 +414,12 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
         const colonIndex = tag.indexOf(':');
         const operation = colonIndex === -1 ? tag : tag.slice(0, colonIndex);
         const symbol = colonIndex === -1 ? null : tag.slice(colonIndex + 1);
-        const isOrderOp = operation === 'createOrder' || operation === 'cancelOrder' || operation === 'cancelOrderByClientId';
+        // R2a-fix-wave-2 Item 3: `cancelAllOrders` must route via fail-fast
+        // mode too — under a kill-switch burst with a saturated rate-limit
+        // bucket, an `await` (30s) would stall the unwind exactly when
+        // fail-fast is needed. The facade tags ops as `cancelAllOrders:<symbol>`.
+        const isOrderOp =
+            operation === 'createOrder' || operation === 'cancelOrder' || operation === 'cancelOrderByClientId' || operation === 'cancelAllOrders';
 
         return buildRateLimitedCall({
             operation,
@@ -612,6 +673,7 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
             status: order.status ?? 'open',
             type: order.type ?? '',
             side: order.side ?? '',
+            reduceOnly: this.resolveReduceOnly(order),
             price: this.numberToString(order.price),
             average: this.numberToString(order.average),
             amount: this.numberToString(order.amount),
@@ -637,7 +699,7 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
     // M11a W1.2 (ADR 0028 §2.2). Per-field provider table: every field has an
     // explicit source endpoint + conservative default (missing-fields-fail-
     // allowlist). The mapper drops every field not in IKeyPermissionSnapshot.
-    private toKeyPermissionSnapshot(restrictions: Record<string, unknown>, ipRestriction: Record<string, unknown>): IKeyPermissionSnapshot {
+    private toKeyPermissionSnapshot(restrictions: Record<string, unknown>, ipRestriction: Record<string, unknown> | null): IKeyPermissionSnapshot {
         const enableSpotAndMargin = this.boolFromPayload(restrictions, 'enableSpotAndMarginTrading', false);
         const enableSpotAlias = this.boolFromPayload(restrictions, 'enableSpot', false);
 
@@ -646,18 +708,30 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
             enableFutures: this.boolFromPayload(restrictions, 'enableFutures', false),
             // ADR §2.2: enableSpot = logical OR of the two field names.
             enableSpot: enableSpotAndMargin || enableSpotAlias,
-            // Capabilities expected `false` default to `true` when the field
-            // is missing — so a missing field fails the allowlist (ADR §2.2).
-            enableWithdrawals: this.boolFromPayload(restrictions, 'enableWithdrawals', true),
-            enableInternalTransfer: this.boolFromPayload(restrictions, 'enableInternalTransfer', true),
-            permitsUniversalTransfer: this.boolFromPayload(restrictions, 'permitsUniversalTransfer', true),
-            enableMargin: this.boolFromPayload(restrictions, 'enableMargin', true),
-            enableVanillaOptions: this.boolFromPayload(restrictions, 'enableVanillaOptions', true),
-            enableSubAccountManagement: this.boolFromPayload(restrictions, 'enableSubAccountManagement', true),
-            // ipRestrict = logical AND across both endpoints (conservative if
-            // either source disagrees).
-            ipRestrict: this.boolFromPayload(restrictions, 'ipRestrict', false) && this.boolFromPayload(ipRestriction, 'ipRestrict', false),
-            ipAllowList: this.parseIpAllowList(ipRestriction),
+            // M11a post-R4 live smoke: Binance's /sapi/v1/account/apiRestrictions
+            // response for SUB-ACCOUNT keys omits fields that don't apply to
+            // sub-accounts (no UI to set them; Binance enforces structurally).
+            // Originally these defaulted to `true` ("missing = fail") for the
+            // master-account shape. For PAPER's Fallback Profile sub-account
+            // key, that's overly strict — the fields can't be set even if you
+            // wanted to. Treat absence as `false` (structurally safe per
+            // Binance's sub-account model); the runtime safety teeth come from
+            // D13's nullity probe per ADR 0032 §D8, not the boot-time predicate.
+            enableWithdrawals: this.boolFromPayload(restrictions, 'enableWithdrawals', false),
+            enableInternalTransfer: this.boolFromPayload(restrictions, 'enableInternalTransfer', false),
+            permitsUniversalTransfer: this.boolFromPayload(restrictions, 'permitsUniversalTransfer', false),
+            enableMargin: this.boolFromPayload(restrictions, 'enableMargin', false),
+            enableVanillaOptions: this.boolFromPayload(restrictions, 'enableVanillaOptions', false),
+            // `enableSubAccountManagement` is not a documented field of
+            // /sapi/v1/account/apiRestrictions. Sub-account keys cannot manage
+            // other sub-accounts (Binance structurally rejects). Default false.
+            enableSubAccountManagement: this.boolFromPayload(restrictions, 'enableSubAccountManagement', false),
+            // Binance discontinued the per-key ipRestriction endpoint in 2021;
+            // only the permissions endpoint (`restrictions`) exposes ipRestrict.
+            // ipAllowList is no longer self-readable — empty here; operator
+            // runbook verifies the actual set via Binance UI.
+            ipRestrict: this.boolFromPayload(restrictions, 'ipRestrict', false),
+            ipAllowList: ipRestriction === null ? [] : this.parseIpAllowList(ipRestriction),
             tradingAuthorityExpirationTime: this.parseTradingAuthorityExpiration(restrictions),
             // boundary-clock read (audit-only, never used as a freshness gate).
             fetchedAtMs: Date.now(),

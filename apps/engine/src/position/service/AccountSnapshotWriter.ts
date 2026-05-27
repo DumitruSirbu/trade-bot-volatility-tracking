@@ -1,11 +1,12 @@
-import { IPriceUpdateEvent, PositionStateEnum, TransactionTypeEnum } from '@bot/shared';
+import { ExchangeEnvironmentEnum, IAccountStateSource, IPriceUpdateEvent, PositionStateEnum, TransactionTypeEnum } from '@bot/shared';
 import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Interval } from '@nestjs/schedule';
 
 import { PRICE_UPDATE_EVENT } from '../../common/const';
 import { Money, MoneyValue } from '../../common/utils/money';
-import { EXCHANGE_CLIENT, IExchangeClient } from '../../exchange/interface';
+import { AppConfigService } from '../../config/service';
+import { ACCOUNT_STATE_SOURCE } from '../../exchange/interface';
 import { RiskGateService } from '../../risk/service/RiskGateService';
 import { ACCOUNT_SNAPSHOT_INTERVAL_MS, SAME_MINUTE_BUCKET_MS, SETTLE_CURRENCY } from '../const';
 import { AccountSnapshotEntity } from '../entity';
@@ -68,9 +69,15 @@ export class AccountSnapshotWriter {
     // §6 same-minute skip — scheduler ticks within the same minute as a
     // recent write are skipped. -1 sentinel = "no snapshot written yet."
     private lastWrittenMinuteBucket = -1;
+    // M11a R2a Item 2 (BLOCKER B2). One-shot INFO log so the skip-in-PAPER
+    // message lands once per process, not every interval tick.
+    private paperSkipLogged = false;
 
     constructor(
-        @Inject(EXCHANGE_CLIENT) private readonly exchangeClient: IExchangeClient,
+        // M11a R2a.4 (ADR 0032 §3 D14): rebound from EXCHANGE_CLIENT to
+        // ACCOUNT_STATE_SOURCE so PAPER mode reads simulated balances
+        // (PaperAccountStateSource) instead of touching the live exchange.
+        @Inject(ACCOUNT_STATE_SOURCE) private readonly accountState: IAccountStateSource,
         private readonly positions: PositionRepository,
         private readonly transactions: TransactionRepository,
         private readonly snapshots: AccountSnapshotRepository,
@@ -80,6 +87,12 @@ export class AccountSnapshotWriter {
         // read-only no-op at construction time.
         @Inject(forwardRef(() => RiskGateService))
         private readonly riskGate: RiskGateService,
+        // M11a R2a BLOCKER B2 (ADR 0032 §3). Env-gates the periodic snapshot
+        // writer AND the boot-time phase-7 `writeNow` insert under PAPER.
+        // R2b wires `PaperAccountStateService` and a sibling
+        // `paper_account_snapshots` writer that goes through the three-table
+        // atomic-write path (D16). Until then PAPER is a no-op (logged once).
+        private readonly appConfig: AppConfigService,
     ) {}
 
     // ADR 0012 §6 — primary periodic writer. Honors the same-minute skip rule;
@@ -133,6 +146,23 @@ export class AccountSnapshotWriter {
     // ─── internals ─────────────────────────────────────────────────────────
 
     private async writeSnapshot(nowMs: number, trigger: SnapshotTrigger): Promise<AccountSnapshotEntity | null> {
+        // M11a R2a Item 2 (BLOCKER B2 — ADR 0032 §3). PAPER mode has no live
+        // wallet to snapshot and writes to `paper_account_snapshots` (D16)
+        // are owned by R2b's atomic three-table path. Until then the writer
+        // is a no-op so `accountState.fetchBalance()` is not called against
+        // the empty `PaperAccountStateSource` stub (the call itself is
+        // harmless — returns []; the skip is for clarity in logs and to
+        // avoid emitting a misleading `account_snapshot written balance=0`
+        // line every interval).
+        if (this.appConfig.exchangeEnv === ExchangeEnvironmentEnum.PAPER) {
+            if (!this.paperSkipLogged) {
+                this.logger.log(`account_snapshot writer paused in PAPER mode (trigger=${trigger}); awaiting R2b PaperAccountStateService`);
+                this.paperSkipLogged = true;
+            }
+
+            return null;
+        }
+
         if (this.running) {
             this.logger.debug(`snapshot skipped: previous write still running (trigger=${trigger})`);
 
@@ -190,7 +220,7 @@ export class AccountSnapshotWriter {
     }
 
     private async fetchUsdtBalance(): Promise<MoneyValue> {
-        const balances = await this.exchangeClient.fetchBalance();
+        const balances = await this.accountState.fetchBalance();
         const usdt = balances.find((b) => b.asset === SETTLE_CURRENCY);
 
         if (usdt === undefined) {

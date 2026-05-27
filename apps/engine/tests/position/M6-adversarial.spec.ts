@@ -403,7 +403,9 @@ describe('2. Reconciliation adversarials', () => {
         const emitSpy = jest.spyOn(events, 'emit');
 
         const service = new ReconciliationService(
-            exchangeClient,
+            exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions,
             transactions,
             positionService,
@@ -1051,7 +1053,9 @@ describe('5. Funding ingestion adversarials', () => {
         const events = new EventEmitter2();
 
         const service = new ReconciliationService(
-            exchangeClient,
+            exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions,
             transactions,
             positionService,
@@ -1353,7 +1357,7 @@ describe('7. AccountSnapshotWriter adversarials', () => {
             isRecoveryReady: jest.fn().mockReturnValue(opts.gateReady !== false),
         } as unknown as RiskGateService;
 
-        const writer = new AccountSnapshotWriter(exchangeClient, positions, transactions, snapshots, riskGate);
+        const writer = new AccountSnapshotWriter(exchangeClient as never, positions, transactions, snapshots, riskGate, { exchangeEnv: 'testnet' } as never);
 
         return { writer, exchangeClient, positions, transactions, snapshots, riskGate };
     }
@@ -1484,7 +1488,19 @@ describe('8. EngineBootstrapService adversarials', () => {
             findLatest: jest.fn().mockResolvedValue(null),
         } as unknown as AccountSnapshotRepository;
 
-        const boot = new EngineBootstrapService(positionRepo, reconciliation, monitor, instrumentor, retainer, riskGate, snapshotWriter, snapshotRepo);
+        const boot = new EngineBootstrapService(
+            positionRepo,
+            reconciliation,
+            monitor,
+            instrumentor,
+            retainer,
+            riskGate,
+            snapshotWriter,
+            snapshotRepo,
+            // M11a R2d Item 3 — non-PAPER stub so phase 2-3 PAPER branch is inert.
+            { exchangeEnv: 'testnet' } as never,
+            { forceTick: jest.fn().mockResolvedValue({ tickAtMs: 0, driftCount: 0, inMemoryCount: 0, persistedCount: 0 }) } as never,
+        );
 
         return { boot, positionRepo, reconciliation, monitor, instrumentor, retainer, riskGate, snapshotWriter, snapshotRepo };
     }
@@ -1655,7 +1671,9 @@ describe('9. Crash-window adversarials (ADR 0014)', () => {
         const events = new EventEmitter2();
 
         const service = new ReconciliationService(
-            exchangeClient,
+            exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions,
             transactions,
             positionService,
@@ -1755,7 +1773,22 @@ describe('9. Crash-window adversarials (ADR 0014)', () => {
             const snapWriter = { writeNow: jest.fn().mockResolvedValue(null) } as unknown as AccountSnapshotWriter;
             const ev = new EventEmitter2();
 
-            return new ReconciliationService(exchangeClient, posRepo, txRepo, posService, rg, monitor, retainer, sv, haltFlag, instr, snapWriter, ev);
+            return new ReconciliationService(
+                exchangeClient as never,
+                exchangeClient as never,
+                { exchangeEnv: 'testnet' } as never,
+                posRepo,
+                txRepo,
+                posService,
+                rg,
+                monitor,
+                retainer,
+                sv,
+                haltFlag,
+                instr,
+                snapWriter,
+                ev,
+            );
         };
 
         const svc1 = makeHarness();

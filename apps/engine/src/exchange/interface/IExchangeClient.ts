@@ -2,8 +2,6 @@ import { IKeyPermissionSnapshot } from '@bot/shared';
 
 import {
     IBalanceSnapshot,
-    ICreateOrderRequest,
-    IExchangeOrderSnapshot,
     IFundingPaymentSnapshot,
     IFundingRateSnapshot,
     IMarketInfo,
@@ -45,19 +43,12 @@ export interface IExchangeClient {
 
     watchTrades(symbol: string): Promise<ITradeSnapshot[]>;
 
-    // --- M5 order surface ---
-    //
-    // The ONLY methods that touch the exchange order API. Every caller must be inside
-    // ExecutionModule (ADR 0005/0006 reviewer must-fix). Strategies, controllers, dashboards,
-    // and reconciliation (M6) never call these directly — they go through ExecutionService.
-    //
-    // The `clientOrderId` in createOrder is the deterministic bot-controlled key (ADR 0006 §1);
-    // fetchOrder looks an order up by it for the timeout-recovery protocol (ADR 0006 §3).
-    createOrder(request: ICreateOrderRequest): Promise<IExchangeOrderSnapshot>;
-
-    fetchOrderByClientId(symbol: string, clientOrderId: string): Promise<IExchangeOrderSnapshot | null>;
-
-    cancelOrderByClientId(symbol: string, clientOrderId: string): Promise<IExchangeOrderSnapshot>;
+    // M11a R2a.3 (ADR 0032 §3 D2). The order-command surface (`createOrder` /
+    // `fetchOrderByClientId` / `cancelOrderByClientId`) was extracted to
+    // `CcxtExecutionClient` so the shared `IExecutionClient` port can swap a
+    // `PaperExecutionClient` in PAPER mode. `IExchangeClient` now owns only
+    // connection management, market-data, key permissions, and the residual
+    // account-state surface used by the two D14 whitelisted callers.
 
     // --- M6 W4a reconciliation surface (ADR 0010 §2, §7) ---
     //

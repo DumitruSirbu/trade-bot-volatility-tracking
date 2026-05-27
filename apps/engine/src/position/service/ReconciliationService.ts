@@ -2,8 +2,13 @@ import {
     CoinTierEnum,
     CorrelationModeEnum,
     DriftCaseEnum,
+    ExchangeEnvironmentEnum,
     ExitReasonEnum,
     FlowTypeEnum,
+    IAccountStateSource,
+    IFunding,
+    IOrder,
+    IPosition,
     IPositionAdoptedEvent,
     IPositionAdoptionVanishedEvent,
     IReconciliationDriftDetectedEvent,
@@ -27,9 +32,11 @@ import { ORDER_INTENT_APPROVED_EVENT, ORDER_INTENT_UNKNOWN_EVENT } from '../../c
 import { IOrderIntentUnknownEvent } from '../../common/interface';
 import { HaltFlagService } from '../../common/service/HaltFlagService';
 import { Money, MoneyValue, formatMoney, parseMoney } from '../../common/utils/money';
+import { AppConfigService } from '../../config/service';
 import { PROTECTIVE_CLIENT_ORDER_ID_SL_SUFFIX, PROTECTIVE_CLIENT_ORDER_ID_TP_SUFFIX } from '../../execution/const';
 import { LocalProtectiveMonitor } from '../../execution/service/LocalProtectiveMonitor';
-import { EXCHANGE_CLIENT, IExchangeClient, IFundingPaymentSnapshot, IOpenOrderSnapshot, IPositionSnapshot } from '../../exchange/interface';
+import { ACCOUNT_STATE_SOURCE } from '../../exchange/interface';
+import { CcxtExecutionClient } from '../../exchange/service/CcxtExecutionClient';
 import { SubscriptionRetainer } from '../../market-data/service/SubscriptionRetainer';
 import { COOLDOWN_AFTER_LOSS_MS } from '../../risk/const';
 import { IOrderIntent, IOrderIntentApprovedEvent, IRiskGateContext } from '../../risk/interface';
@@ -128,6 +135,9 @@ export class ReconciliationService {
     private lastTickAtMs = 0;
     private lastPass: IReconciliationPass | null = null;
     private foreignPolicy: ForeignPositionPolicy = DEFAULT_FOREIGN_POSITION_POLICY;
+    // M11a R2a Item 2 (BLOCKER B2 + HIGH H3). One-shot INFO log so the
+    // skip-in-PAPER message lands once per process, not every 30s.
+    private paperSkipLogged = false;
 
     // M6 R2.1.4. Per-process dedup for case-(b) MANUAL_ADOPTED_UNMANAGED-vanished
     // alerts. Each adopted position that vanishes from the exchange emits
@@ -141,7 +151,33 @@ export class ReconciliationService {
     private readonly adoptionVanishedAlerted = new Set<number>();
 
     constructor(
-        @Inject(EXCHANGE_CLIENT) private readonly exchangeClient: IExchangeClient,
+        // M11a R2a BLOCKER B1 (ADR 0032 §3 D14). All account-state reads are
+        // bound to the shared `IAccountStateSource` port so PAPER mode
+        // reconciles against `PaperAccountStateSource` and the live exchange
+        // is never touched. Case-(e) PROTECTIVE_ORDER_DRIFT now consumes the
+        // shared `IOrder` DTO (which carries `reduceOnly` since the shared
+        // pre-staged wave landed); the previous `EXCHANGE_CLIENT` injection
+        // is removed.
+        //
+        // The `EXCHANGE_CLIENT` rebind also closes the latent LIVE/TESTNET
+        // bug where the D14 capability guard rejected the direct
+        // `fetchOpenOrders` call (no active capability frame) and case-(e)
+        // silently no-op'd.
+        //
+        // Case-(f) UNKNOWN_INTENT_OUTCOME still resolves an order by
+        // clientOrderId through `CcxtExecutionClient` (the M11a R2a-extracted
+        // order-command surface). PAPER mode never reaches this path: the
+        // PAPER env-gate in `runTickNow` short-circuits the tick before any
+        // unknown-intent state can be processed (Item 2). R2c migrates the
+        // call to the shared `IExecutionClient` port once the broader M5
+        // execution migration lands.
+        @Inject(ACCOUNT_STATE_SOURCE) private readonly accountState: IAccountStateSource,
+        private readonly ccxtExecutionClient: CcxtExecutionClient,
+        // M11a R2a BLOCKER B2 + HIGH H3 (ADR 0032 §3). Env-gates the entire
+        // periodic reconciliation tick under PAPER. R2d wires
+        // `PaperReconciliationAdapter` against the simulator's projected
+        // state; until then PAPER reconciliation is a no-op (logged once).
+        private readonly appConfig: AppConfigService,
         private readonly positions: PositionRepository,
         private readonly transactions: TransactionRepository,
         private readonly positionService: PositionService,
@@ -311,6 +347,22 @@ export class ReconciliationService {
     // The single private entry point. The two public entry points differ only in
     // whether they consult the MIN_INTERVAL_MS floor — both end here.
     private async runTickNow(nowMs: number): Promise<IReconciliationPass> {
+        // M11a R2a Item 2 (BLOCKER B2 + HIGH H3 — ADR 0032 §3). PAPER mode
+        // has no live exchange to reconcile against; running the live
+        // reconciliation sweep would touch `fapi.binance.com` and break the
+        // "engine-local" property of PAPER. R2d wires
+        // `PaperReconciliationAdapter` against the in-memory simulator state
+        // + the persisted projection. Until then, the periodic tick AND the
+        // boot/test `forceTick` path are no-ops under PAPER.
+        if (this.appConfig.exchangeEnv === ExchangeEnvironmentEnum.PAPER) {
+            if (!this.paperSkipLogged) {
+                this.logger.log('Live-exchange reconciliation skipped in PAPER mode; awaiting R2d PaperReconciliationAdapter');
+                this.paperSkipLogged = true;
+            }
+
+            return this.emptyPass(nowMs);
+        }
+
         if (this.running) {
             this.logger.debug('tick skipped: previous pass still running');
 
@@ -508,7 +560,7 @@ export class ReconciliationService {
     // `liquidationPrice` (parsed to MoneyValue or null) to the instrumentor's
     // in-memory cache. The instrumentor's `setLiquidationPrice` is a safe no-op
     // for untracked positionIds (closed / never-opened in this process).
-    private propagateLiquidationPrices(dbPositions: readonly PositionEntity[], exByKey: Map<string, IPositionSnapshot>): void {
+    private propagateLiquidationPrices(dbPositions: readonly PositionEntity[], exByKey: Map<string, IPosition>): void {
         for (const position of dbPositions) {
             const snapshot = exByKey.get(this.positionKey(position));
 
@@ -609,9 +661,9 @@ export class ReconciliationService {
         return latest.createdAt.getTime() + 1;
     }
 
-    private async fetchFundingHistorySafe(symbol: string, sinceMs: number): Promise<readonly IFundingPaymentSnapshot[]> {
+    private async fetchFundingHistorySafe(symbol: string, sinceMs: number): Promise<readonly IFunding[]> {
         try {
-            return await this.exchangeClient.fetchFundingHistory(symbol, sinceMs);
+            return await this.accountState.fetchFundingHistory(symbol, sinceMs);
         } catch (cause) {
             this.logger.error(`fetchFundingHistory:${symbol} since=${sinceMs} failed: ${this.describe(cause)} - skipped this tick`);
 
@@ -634,7 +686,7 @@ export class ReconciliationService {
     // in the DB; today `applyReduceFillToPosition` lookups by (symbol, slot) and would
     // fail. Adopting first + flattening from the adopted row is the pragmatic engineering
     // path. Surfacing the executor gap for a future wave.
-    private async handleExchangeNotInDb(snapshot: IPositionSnapshot, nowMs: number, counters: Record<DriftCaseEnum, number>): Promise<void> {
+    private async handleExchangeNotInDb(snapshot: IPosition, nowMs: number, counters: Record<DriftCaseEnum, number>): Promise<void> {
         counters[DriftCaseEnum.EXCHANGE_NOT_IN_DB]++;
 
         const side = this.normaliseSide(snapshot.side);
@@ -688,7 +740,7 @@ export class ReconciliationService {
     // null if the manual_adopted sentinel strategy_versions row is missing (contract
     // bug — log and skip; W8 boot can re-attempt). The row's positionSlot is set so
     // a follow-up flatten can locate it via (symbol, slot).
-    private async adoptForeignPosition(snapshot: IPositionSnapshot, side: PositionSideEnum, nowMs: number): Promise<PositionEntity | null> {
+    private async adoptForeignPosition(snapshot: IPosition, side: PositionSideEnum, nowMs: number): Promise<PositionEntity | null> {
         const sentinel = await this.strategyVersions.findByNameAndVersion(MANUAL_ADOPTED_STRATEGY_NAME, MANUAL_ADOPTED_STRATEGY_VERSION);
 
         if (sentinel === null) {
@@ -731,7 +783,7 @@ export class ReconciliationService {
     // ReconciliationOutcomeEnum does NOT define a FLATTENED value today. Surfacing
     // the gap; if a downstream alert wants to distinguish "we flattened a foreign
     // position" vs. "we found one already gone" the shared enum needs a FLATTENED entry.
-    private async flattenAdoptedForeignPosition(position: PositionEntity, snapshot: IPositionSnapshot, nowMs: number): Promise<void> {
+    private async flattenAdoptedForeignPosition(position: PositionEntity, snapshot: IPosition, nowMs: number): Promise<void> {
         if (this.haltFlag.isHalted()) {
             this.logger.warn(`case-a flatten suppressed by halt flag for positionId=${position.id} ${position.symbol} - next tick retries`);
 
@@ -936,12 +988,7 @@ export class ReconciliationService {
     //   2. adjustQty on PositionService (atomic single UPDATE + position.qty.adjusted event).
     // Order matters: the exposure decrement uses the pre-mutation entryPrice (no risk
     // of a stale row read since both calls receive the same dbQty/exchangeQty deltas).
-    private async handleMatchedPair(
-        position: PositionEntity,
-        snapshot: IPositionSnapshot,
-        nowMs: number,
-        counters: Record<DriftCaseEnum, number>,
-    ): Promise<void> {
+    private async handleMatchedPair(position: PositionEntity, snapshot: IPosition, nowMs: number, counters: Record<DriftCaseEnum, number>): Promise<void> {
         const exchangeQty = parseMoney(snapshot.qty);
         const delta = exchangeQty.minus(position.qty);
 
@@ -986,7 +1033,7 @@ export class ReconciliationService {
     // Case (d) — W4a high-severity alert. Full split-handler (case-a flatten +
     // case-b precise close) lands in W4b. ADR 0010 §1d: "almost certainly a
     // strategy or risk-gate bug, not a normal drift."
-    private handleSideMismatch(position: PositionEntity, exchangeSnapshot: IPositionSnapshot, nowMs: number, counters: Record<DriftCaseEnum, number>): void {
+    private handleSideMismatch(position: PositionEntity, exchangeSnapshot: IPosition, nowMs: number, counters: Record<DriftCaseEnum, number>): void {
         counters[DriftCaseEnum.SIDE_MISMATCH]++;
 
         this.emitDriftDetected({
@@ -1012,7 +1059,7 @@ export class ReconciliationService {
     // (W1 schema columns), and emit a PROTECTIVE_FALLBACK outcome.
     private async handleProtectiveOrderDriftIfNeeded(
         position: PositionEntity,
-        openOrders: readonly IOpenOrderSnapshot[],
+        openOrders: readonly IOrder[],
         nowMs: number,
         counters: Record<DriftCaseEnum, number>,
     ): Promise<void> {
@@ -1093,7 +1140,7 @@ export class ReconciliationService {
     // authoritative path).
     private async handleUnknownIntentOutcome(
         position: PositionEntity,
-        exchangeMatch: IPositionSnapshot | null,
+        exchangeMatch: IPosition | null,
         nowMs: number,
         counters: Record<DriftCaseEnum, number>,
     ): Promise<void> {
@@ -1127,7 +1174,7 @@ export class ReconciliationService {
 
         let orderSnapshot;
         try {
-            orderSnapshot = await this.exchangeClient.fetchOrderByClientId(position.symbol, tx.clientOrderId);
+            orderSnapshot = await this.ccxtExecutionClient.fetchOrderByClientId(position.symbol, tx.clientOrderId);
         } catch (cause) {
             this.logger.warn(`case-f fetchOrderByClientId failed for positionId=${position.id} clientOrderId=${tx.clientOrderId}: ${this.describe(cause)}`);
 
@@ -1207,7 +1254,7 @@ export class ReconciliationService {
     // the same UPDATE as the state — ADR-0009 §6.1 dual-write atomicity.
     private async transitionOutOfReconciling(
         position: PositionEntity,
-        exchangeMatch: IPositionSnapshot | null,
+        exchangeMatch: IPosition | null,
         nowMs: number,
         orderStatus: string,
         clientOrderId: string,
@@ -1246,10 +1293,10 @@ export class ReconciliationService {
         );
     }
 
-    // Parses `IPositionSnapshot.qty` (decimal-as-string) into MoneyValue. Returns
+    // Parses `IPosition.qty` (decimal-as-string) into MoneyValue. Returns
     // null when the snapshot is absent or the qty is unparseable; either condition
     // is treated as "no exchange exposure" by the case-(f) close path.
-    private extractExchangeQty(snapshot: IPositionSnapshot | null): MoneyValue | null {
+    private extractExchangeQty(snapshot: IPosition | null): MoneyValue | null {
         if (snapshot === null) {
             return null;
         }
@@ -1328,9 +1375,16 @@ export class ReconciliationService {
 
     // ────────── helpers ──────────────────────────────────────────────────────────
 
-    private async fetchExchangePositionsSafe(): Promise<readonly IPositionSnapshot[]> {
+    private async fetchExchangePositionsSafe(): Promise<readonly IPosition[]> {
         try {
-            return await this.exchangeClient.fetchPositions();
+            // M11a R2a Item 5 (logic R2a). Returns the shared `IPosition` DTO
+            // directly — structurally identical to the engine's
+            // `IPosition` (both carry
+            // symbol/side/qty/entryPrice/markPrice/liquidationPrice/marginType/leverage/timestampMs)
+            // but the cast indirection through `IPosition` is
+            // removed so downstream parsers consume the shared DTO field
+            // names directly.
+            return await this.accountState.fetchPositions();
         } catch (cause) {
             this.logger.error(`fetchPositions failed: ${this.describe(cause)} - tick continues with empty exchange snapshot`);
 
@@ -1338,9 +1392,17 @@ export class ReconciliationService {
         }
     }
 
-    private async fetchOpenOrdersSafe(): Promise<readonly IOpenOrderSnapshot[]> {
+    private async fetchOpenOrdersSafe(): Promise<readonly IOrder[]> {
         try {
-            return await this.exchangeClient.fetchOpenOrders();
+            // M11a R2a BLOCKER B1 (ADR 0032 §3 D14). Reads route through the
+            // shared `IAccountStateSource` port — `ExchangeAccountStateSource`
+            // wraps the call in `runWithLiveAccountStateCapability` so the
+            // D14 runtime guard accepts the call in LIVE/TESTNET.
+            // `PaperAccountStateSource` returns the simulated open orders in
+            // PAPER (R2c plumbs the simulator-side ledger). Shared `IOrder`
+            // carries `reduceOnly` so case-(e) can keep its prefix-suffix
+            // matching for protective-drift detection.
+            return await this.accountState.fetchOpenOrders();
         } catch (cause) {
             this.logger.error(`fetchOpenOrders failed: ${this.describe(cause)} - case (e) protective drift will be skipped this tick`);
 
@@ -1404,7 +1466,7 @@ export class ReconciliationService {
         return `${position.symbol}|${position.side}`;
     };
 
-    private snapshotKey = (snapshot: IPositionSnapshot): string => {
+    private snapshotKey = (snapshot: IPosition): string => {
         return `${snapshot.symbol}|${this.normaliseSide(snapshot.side)}`;
     };
 

@@ -280,7 +280,9 @@ function buildReconHarness(opts: { dbPositions?: PositionEntity[]; exchangePosit
     const snapshotWriter = { writeNow: jest.fn().mockResolvedValue(null) } as never;
 
     const service = new ReconciliationService(
-        exchangeClient as unknown as IExchangeClient,
+        exchangeClient as never,
+        exchangeClient as never,
+        { exchangeEnv: 'testnet' } as never,
         positions as unknown as PositionRepository,
         transactions as unknown as TransactionRepository,
         positionService as unknown as PositionService,

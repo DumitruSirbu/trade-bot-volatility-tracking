@@ -82,6 +82,7 @@ export const OPERATION_REQUEST_WEIGHTS: Readonly<Record<string, number>> = {
     createOrder: 1,
     cancelOrder: 1,
     cancelOrderByClientId: 1,
+    cancelAllOrders: 1,
     sapiGetAccountApiRestrictions: 1,
     sapiGetAccountApiRestrictionsIpRestriction: 1,
     // WS calls do not consume REST weight but the helper still routes through

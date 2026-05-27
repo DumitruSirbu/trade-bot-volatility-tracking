@@ -15,7 +15,7 @@ const LIVE_GO_AHEAD_MAX_BYTES = 4096;
 // intent of the two-token gate.
 const FILE_MODE_NON_OWNER_MASK = 0o077;
 
-// M11a W1.1 (ADR 0028 / M11a §W0.1). Two-token live-mode boot guard.
+// Two-token live-mode boot guard (ADR 0028).
 //
 // When EXCHANGE_ENV=LIVE, the engine refuses to start unless BOTH:
 //   - LIVE_GO_AHEAD_TOKEN_FILE is set and points to a readable local file;
@@ -25,8 +25,9 @@ const FILE_MODE_NON_OWNER_MASK = 0o077;
 // Rationale: a single env variable can be edited in one place. The two-token
 // dance forces an out-of-band proof-of-intent (operator dropped a file on
 // disk) plus an in-config commitment (the hash baked in at deploy). Either
-// half alone is not enough. TESTNET / DEMO are no-ops — this gate only fires
-// for LIVE.
+// half alone is not enough. TESTNET / PAPER are no-ops — this gate only fires
+// for LIVE. PAPER's safety teeth live in the D8 allowlist (a tradeable key on
+// PAPER fails boot) plus D6/D7 boot-mode HMAC chain — see ADR 0032 §D9.
 //
 // Pure / single-purpose: just verifies; does not log fingerprints or alert.
 // The caller (boot orchestrator) writes the audit trail.

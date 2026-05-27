@@ -40,7 +40,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { Money } from '../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
-import { IExchangeClient, IOpenOrderSnapshot, IPositionSnapshot } from '../../src/exchange/interface';
+import { IOpenOrderSnapshot, IPositionSnapshot } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { PositionEntity } from '../../src/position/entity';
 import { PositionRepository } from '../../src/position/repository/PositionRepository';
@@ -59,6 +59,15 @@ import { StrategyVersionRepository } from '../../src/strategy/repository/Strateg
 
 interface IHarness {
     service: ReconciliationService;
+    // M11a R2a Item 5 (logic R2a M4): mocks split per injected port.
+    // `accountState` (IAccountStateSource port) backs the case-(a)/(b)/(c)/(d)/(e)
+    // reads (`fetchPositions`, `fetchOpenOrders`, `fetchFundingHistory`).
+    // `ccxtExecutionClient` (concrete) backs case-(f) `fetchOrderByClientId`.
+    // The previous shared `exchangeClient` mock is kept as a thin facade
+    // forwarding to both for assertion-call-count compatibility, but the
+    // structural separation makes intent obvious.
+    accountState: { fetchPositions: jest.Mock; fetchOpenOrders: jest.Mock; fetchFundingHistory: jest.Mock };
+    ccxtExecutionClient: { fetchOrderByClientId: jest.Mock };
     exchangeClient: { fetchPositions: jest.Mock; fetchOpenOrders: jest.Mock; fetchOrderByClientId: jest.Mock; fetchFundingHistory: jest.Mock };
     positions: { findOpen: jest.Mock; createOpen: jest.Mock; save: jest.Mock; findLastClosedBySymbol: jest.Mock };
     transactions: { findByClientOrderId: jest.Mock };
@@ -134,12 +143,20 @@ function buildHarness(opts: IBuildOpts = {}): IHarness {
     const openOrders = opts.openOrders ?? [];
     const dbPositions = opts.dbPositions ?? [];
 
-    const exchangeClient = {
-        fetchPositions: opts.fetchPositionsThrows ? jest.fn().mockRejectedValue(new Error('venue offline')) : jest.fn().mockResolvedValue(exchangePositions),
-        fetchOpenOrders: jest.fn().mockResolvedValue(openOrders),
-        fetchOrderByClientId: jest.fn().mockResolvedValue(null),
-        fetchFundingHistory: jest.fn().mockResolvedValue([]),
-    };
+    // M11a R2a Item 5 (logic R2a M4): per-port mocks. `accountState` backs
+    // the IAccountStateSource port reads; `ccxtExecutionClient` backs the
+    // concrete-class injection used by case-(f). The legacy `exchangeClient`
+    // alias maps the same jest mocks through a single object for the existing
+    // assertion call-count checks (`harness.exchangeClient.fetchPositions
+    // .mock.calls.length`).
+    const fetchPositions = opts.fetchPositionsThrows ? jest.fn().mockRejectedValue(new Error('venue offline')) : jest.fn().mockResolvedValue(exchangePositions);
+    const fetchOpenOrders = jest.fn().mockResolvedValue(openOrders);
+    const fetchFundingHistory = jest.fn().mockResolvedValue([]);
+    const fetchOrderByClientId = jest.fn().mockResolvedValue(null);
+
+    const accountState = { fetchPositions, fetchOpenOrders, fetchFundingHistory };
+    const ccxtExecutionClient = { fetchOrderByClientId };
+    const exchangeClient = { fetchPositions, fetchOpenOrders, fetchOrderByClientId, fetchFundingHistory };
 
     const positions = {
         findOpen: jest.fn().mockResolvedValue(dbPositions),
@@ -187,8 +204,14 @@ function buildHarness(opts: IBuildOpts = {}): IHarness {
     const haltFlag = new HaltFlagService();
     const instrumentor = { setLiquidationPrice: jest.fn() } as never;
     const snapshotWriter = { writeNow: jest.fn().mockResolvedValue(null) } as never;
+    // M11a R2a BLOCKER B2 (ADR 0032 §3). TESTNET env so the PAPER env-gate
+    // in `runTickNow` does NOT short-circuit. PAPER-specific behaviour is
+    // covered by `ReconciliationService.paperGuard.spec.ts`.
+    const appConfig = { exchangeEnv: 'testnet' } as never;
     const service = new ReconciliationService(
-        exchangeClient as unknown as IExchangeClient,
+        accountState as never,
+        ccxtExecutionClient as never,
+        appConfig,
         positions as unknown as PositionRepository,
         transactions as unknown as TransactionRepository,
         positionService as unknown as PositionService,
@@ -202,7 +225,21 @@ function buildHarness(opts: IBuildOpts = {}): IHarness {
         events,
     );
 
-    return { service, exchangeClient, positions, transactions, positionService, riskGate, monitor, retainer, strategyVersions, events, emitSpy };
+    return {
+        service,
+        accountState,
+        ccxtExecutionClient,
+        exchangeClient,
+        positions,
+        transactions,
+        positionService,
+        riskGate,
+        monitor,
+        retainer,
+        strategyVersions,
+        events,
+        emitSpy,
+    };
 }
 
 function getDriftEvents(emitSpy: jest.SpyInstance): IReconciliationDriftDetectedEvent[] {

@@ -4,6 +4,7 @@ import { AuthScopeEnum, ExchangeEnvironmentEnum } from '@bot/shared';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import { TransitionTokenFileEnvName, TransitionTokenHashEnvName } from '../../boot-mode-history/const';
 import { EnvironmentVariables } from '../EnvironmentVariables';
 import { ExecutionModeEnum, LogLevelEnum, NodeEnvEnum } from '../enum';
 
@@ -134,6 +135,60 @@ export class AppConfigService {
         return this.configService.get('LIVE_GO_AHEAD_TOKEN_HASH', { infer: true });
     }
 
+    // Boot-mode transition tokens (ADR 0032 §D6 / §D7). The BootModeChainService
+    // looks each pair up by env-var name from the TRANSITION_ENV_VARS table;
+    // these name-keyed helpers keep the config-read posture identical to
+    // LiveGoAheadVerifier (typed access through AppConfigService — no direct
+    // process.env reads in services).
+    get testnetToPaperTokenFile(): string | undefined {
+        return this.configService.get('TESTNET_TO_PAPER_TOKEN_FILE', { infer: true });
+    }
+
+    get testnetToPaperTokenHash(): string | undefined {
+        return this.configService.get('TESTNET_TO_PAPER_TOKEN_HASH', { infer: true });
+    }
+
+    get paperToLiveTokenFile(): string | undefined {
+        return this.configService.get('PAPER_TO_LIVE_TOKEN_FILE', { infer: true });
+    }
+
+    get paperToLiveTokenHash(): string | undefined {
+        return this.configService.get('PAPER_TO_LIVE_TOKEN_HASH', { infer: true });
+    }
+
+    // Name-keyed accessors used by BootModeChainService, which routes through
+    // the TRANSITION_ENV_VARS table to keep the transition matrix declarative.
+    // Each env-var name is whitelisted against the typed getters above so a
+    // mistyped name returns undefined rather than reaching the raw env. Adding
+    // a new transition requires extending both the schema and this switch.
+    readTransitionTokenFile(envVarName: TransitionTokenFileEnvName): string | undefined {
+        switch (envVarName) {
+            case 'TESTNET_TO_PAPER_TOKEN_FILE':
+                return this.testnetToPaperTokenFile;
+            case 'PAPER_TO_LIVE_TOKEN_FILE':
+                return this.paperToLiveTokenFile;
+            default:
+                // `satisfies never` fails compilation if the union grows
+                // without this switch being extended; the runtime throw
+                // guards against an `as`-bypass at a future call site
+                // falling through to implicit `undefined`.
+                throw new Error(`Unhandled transition env name: ${envVarName satisfies never}`);
+        }
+    }
+
+    readTransitionTokenHash(envVarName: TransitionTokenHashEnvName): string | undefined {
+        switch (envVarName) {
+            case 'TESTNET_TO_PAPER_TOKEN_HASH':
+                return this.testnetToPaperTokenHash;
+            case 'PAPER_TO_LIVE_TOKEN_HASH':
+                return this.paperToLiveTokenHash;
+            default:
+                // See readTransitionTokenFile for the rationale on the
+                // `satisfies never` compile-time guard.
+                throw new Error(`Unhandled transition env name: ${envVarName satisfies never}`);
+        }
+    }
+
     get telegramBotToken(): string | undefined {
         return this.configService.get('TELEGRAM_BOT_TOKEN', { infer: true });
     }
@@ -184,6 +239,23 @@ export class AppConfigService {
 
     get isExecutionLive(): boolean {
         return this.executionMode === ExecutionModeEnum.LIVE;
+    }
+
+    // ADR 0032 §D11 — PAPER soak cold-start equity (USDT). See env-schema
+    // comment for default + restricted-profile rationale.
+    get paperStartingEquityUsdt(): number {
+        return this.configService.get('PAPER_STARTING_EQUITY_USDT', { infer: true });
+    }
+
+    // ADR 0032 §D13 — PAPER nullity-probe cadence + backoff ceiling. R2d
+    // surfaces these env-vars so the operator can tune cadence under a
+    // future symbol-fan-out widening without a code change.
+    get paperNullityProbeIntervalMs(): number {
+        return this.configService.get('PAPER_NULLITY_PROBE_INTERVAL_MS', { infer: true });
+    }
+
+    get paperNullityProbeBackoffMaxMs(): number {
+        return this.configService.get('PAPER_NULLITY_PROBE_BACKOFF_MAX_MS', { infer: true });
     }
 
     // M9 (ADR 0020 §2.4) — HS256 signing secret. Required in production; a

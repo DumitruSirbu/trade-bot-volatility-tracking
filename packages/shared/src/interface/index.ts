@@ -49,3 +49,14 @@ export {
 	IVirtualMutationResult,
 } from './IVirtualPositionLedger.js';
 export { IShadowDecision } from './IShadowDecision.js';
+export { IOrder } from './IOrder.js';
+export { IPosition } from './IPosition.js';
+export { IBalance } from './IBalance.js';
+export { IFunding } from './IFunding.js';
+export { IOrderIntent } from './IOrderIntent.js';
+export { IFillSnapshot } from './IFillSnapshot.js';
+export { IFillIntent } from './IFillIntent.js';
+export { IFillSeed } from './IFillSeed.js';
+export { IFillPosition } from './IFillPosition.js';
+export { ISimulatedFillCore } from './ISimulatedFillCore.js';
+export { IIntraBarStopResult } from './IIntraBarStopResult.js';

@@ -1,5 +1,5 @@
 export enum ExchangeEnvironmentEnum {
 	TESTNET = 'testnet',
-	DEMO = 'demo',
+	PAPER = 'paper',
 	LIVE = 'live',
 }

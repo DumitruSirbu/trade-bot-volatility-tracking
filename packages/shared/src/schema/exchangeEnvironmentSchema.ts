@@ -6,7 +6,7 @@ import { ExchangeEnvironmentEnum } from '../enum/ExchangeEnvironmentEnum.js';
 export const exchangeEnvironmentSchema = z
 	.nativeEnum(ExchangeEnvironmentEnum)
 	.refine((val) => val !== undefined && val !== null, {
-		message: 'EXCHANGE_ENV must be set to one of: testnet, demo, live',
+		message: 'EXCHANGE_ENV must be set to one of: testnet, paper, live',
 	});
 
 export type IExchangeEnvironment = z.infer<typeof exchangeEnvironmentSchema>;

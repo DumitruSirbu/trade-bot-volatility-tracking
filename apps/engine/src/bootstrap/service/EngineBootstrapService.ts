@@ -1,9 +1,11 @@
-import { PositionStateEnum, ProtectiveOrderTypeEnum, RetainReasonEnum } from '@bot/shared';
+import { ExchangeEnvironmentEnum, PositionStateEnum, ProtectiveOrderTypeEnum, RetainReasonEnum } from '@bot/shared';
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 
 import { Money, MoneyValue } from '../../common/utils/money';
+import { AppConfigService } from '../../config/service';
 import { LocalProtectiveMonitor } from '../../execution/service/LocalProtectiveMonitor';
 import { SubscriptionRetainer } from '../../market-data/service/SubscriptionRetainer';
+import { PaperReconciliationAdapter } from '../../paper-mode/service/PaperReconciliationAdapter';
 import { PositionEntity } from '../../position/entity';
 import { AccountSnapshotRepository } from '../../position/repository/AccountSnapshotRepository';
 import { PositionRepository } from '../../position/repository/PositionRepository';
@@ -61,6 +63,19 @@ export class EngineBootstrapService implements OnApplicationBootstrap {
         private readonly riskGate: RiskGateService,
         private readonly snapshotWriter: AccountSnapshotWriter,
         private readonly accountSnapshots: AccountSnapshotRepository,
+        // M11a R2d Item 3 (ADR 0032 §D12 + amended ADR 0014 phase 1).
+        // PAPER branch of phase 2-3 reads from `paper_account_state` via
+        // `PaperReconciliationAdapter` instead of the live exchange. The
+        // existing live `ReconciliationService.forceTick` already env-gates
+        // to a no-op under PAPER; the additional paper-adapter call here
+        // drives the in-memory-vs-persisted diff into the boot pipeline so
+        // a crash-and-restart with diverged state halts the engine BEFORE
+        // phase 9 opens the orchestrator. PaperAccountStateService's own
+        // `OnApplicationBootstrap` hook hydrates the in-memory store from
+        // `paper_account_state` first; this adapter call then reconciles
+        // that hydration against the persisted projection.
+        private readonly appConfig: AppConfigService,
+        private readonly paperReconciliation: PaperReconciliationAdapter,
     ) {}
 
     // NestJS lifecycle entry point. Fires after every module's `onModuleInit`
@@ -142,6 +157,19 @@ export class EngineBootstrapService implements OnApplicationBootstrap {
         this.logger.log('phase 2-3: boot drift sweep (reconciliation forceTick)');
 
         await this.reconciliation.forceTick(nowMs);
+
+        // M11a R2d Item 3 (ADR 0032 §D12 + amended ADR 0014 phase 1). PAPER
+        // boot path: the live `ReconciliationService.forceTick` above is a
+        // no-op (env-gated since R2a Item 2). The paper-state reconciliation
+        // — in-memory `PaperAccountStateService` vs persisted
+        // `paper_account_state` — runs here so any divergence introduced by
+        // a crash mid-mutation halts the engine BEFORE the orchestrator opens
+        // (phase 9). Under LIVE/TESTNET the adapter's forceTick short-
+        // circuits (env-gated).
+        if (this.appConfig.exchangeEnv === ExchangeEnvironmentEnum.PAPER) {
+            this.logger.log('phase 2-3: PAPER branch — invoking PaperReconciliationAdapter.forceTick');
+            await this.paperReconciliation.forceTick(nowMs);
+        }
     }
 
     // ─── phase 4 ───────────────────────────────────────────────────────────

@@ -1,11 +1,17 @@
 # ADR 0028 — Key-permission assertion port (M11a)
 
-**Status:** Accepted (M11a W0 design wave)
-**Date:** 2026-05-25
+**Status:** Accepted (M11a W0 design wave); amended 2026-05-26 by the M11a paper-mode addendum (R0.2) to reflect the `DEMO` → `PAPER` course correction.
+**Date:** 2026-05-25 (amended 2026-05-26)
 **Milestone:** M11a — Local soak hardening
-**Depends on:** M11a W0.1 (`ExchangeEnvironmentEnum`), M11a W0.3 (`ILiveModeProfile`), ADR 0024 (Telegram alerts), ADR 0025 (startup schema-validation gate).
-**Consumed by:** M11a W0.2 (shared interface + DTO), M11a W1.2 (`verifyKeyPermissionsOrAbort` on boot).
+**Depends on:** M11a W0.1 (`ExchangeEnvironmentEnum`), M11a W0.3 (`ILiveModeProfile`), ADR 0024 (Telegram alerts), ADR 0025 (startup schema-validation gate). Sibling: ADR 0032 (PAPER mode architecture).
+**Consumed by:** M11a W0.2 (shared interface + DTO), M11a W1.2 (`verifyKeyPermissionsOrAbort` on boot), M11a R1.4 (PAPER mode-aware branch).
 **Round-2 security escalation:** allowlist-not-denylist semantics.
+
+## Amendment log
+
+- **2026-05-27 (post-R4 live-smoke):** §2.2 and §2.4 amended to reflect bugs caught in smoke: (1) `/sapi/v1/account/apiRestrictions/ipRestriction` endpoint was **discontinued by Binance on 2021-11-17** — removed from provider table; only surviving `/sapi/v1/account/apiRestrictions` is now documented. (2) Sub-account vs master-account response shape divergence: Binance omits sub-account-irrelevant fields (`enableSubAccountManagement`, `enableWithdrawals`, `enableInternalTransfer`, `enableMargin`, `enableVanillaOptions`, `permitsUniversalTransfer`) from sub-account key responses. §2.4 defaults updated: sub-account-irrelevant fields now default to `false` (was `true`); `tradingAuthorityExpirationTime` marked optional (null acceptable when Binance omits for sub-accounts). Trade-off documented: this lowers safety floor for LIVE if Binance master-account response shape ever omits a field; **Pre-M11b validation required** before LIVE go-live (verify LIVE master-account response includes all expected fields per Binance docs). Amendment-log entry added.
+- **2026-05-26 (R0.4, Fallback Profile promotion):** §2.4 amended to document the operative Fallback Profile (dedicated zero-balance sub-account with `enableFutures: true`, resolved by gbt R2-M1 endpoint-accessibility blocker). Cross-reference ADR 0032 §D8 for the full specification. Added note that R1.4 will reconcile the mismatch between the predicate's `mode = 'paper'` baseline and the operative profile.
+- **2026-05-26 (R0.2, paper-mode addendum):** §2.3 rewritten — `DEMO` is renamed to `PAPER`; the prior claim that "demo trading reaches `fapi.binance.com`" is removed (it conflated Binance USDT-M Futures demo trading with the testnet alias `demo-fapi.binance.com`). §2.4 extended with a `mode: 'paper' | 'live'` parameter (D8) so PAPER **rejects** `enableFutures: true` while sharing the rest of the allowlist with LIVE. §2.5 records that `LIVE_GO_AHEAD_TOKEN` is LIVE-only (D9) — PAPER's read-only-only assertion is its safety teeth. PAPER calls live `/sapi`; only TESTNET skips.
 
 ## 1. Context
 
@@ -122,15 +128,15 @@ interface IExchangeClient {
 | `enableReading` | `sapiGetAccountApiRestrictions.enableReading` | `false` |
 | `enableFutures` | `sapiGetAccountApiRestrictions.enableFutures` | `false` |
 | `enableSpot` | `sapiGetAccountApiRestrictions.enableSpotAndMarginTrading OR sapiGetAccountApiRestrictions.enableSpot` | `false` (so a key that lacks the field treats spot as off; the allowlist still passes because the expected value is `false`) |
-| `enableWithdrawals` | `sapiGetAccountApiRestrictions.enableWithdrawals` | `true` — **conservative default**: assume the key has withdrawals if the payload omitted the field (this fails the allowlist and forces operator inspection) |
-| `enableInternalTransfer` | `sapiGetAccountApiRestrictions.enableInternalTransfer` | `true` (conservative) |
-| `permitsUniversalTransfer` | `sapiGetAccountApiRestrictions.permitsUniversalTransfer` | `true` (conservative) |
-| `enableMargin` | `sapiGetAccountApiRestrictions.enableMargin` | `true` (conservative) |
-| `enableVanillaOptions` | `sapiGetAccountApiRestrictions.enableVanillaOptions` | `true` (conservative) |
-| `enableSubAccountManagement` | `sapiGetAccountApiRestrictions.enableSubAccountManagement` | `true` (conservative) |
-| `ipRestrict` | `sapiGetAccountApiRestrictions.ipRestrict AND sapiGetAccountApiRestrictionsIpRestriction.ipRestrict` | `false` (conservative — fails allowlist) |
-| `ipAllowList` | `sapiGetAccountApiRestrictionsIpRestriction.ipList` (strings, IPv4 / IPv6 / CIDR) | `[]` (conservative — fails allowlist) |
-| `tradingAuthorityExpirationTime` | `sapiGetAccountApiRestrictions.tradingAuthorityExpirationTime` (epoch ms or `-1` per Binance docs) | `null` (treated as expired in §2.4) |
+| `enableWithdrawals` | `sapiGetAccountApiRestrictions.enableWithdrawals` | `false` — **amended post-smoke**: Binance omits this field for sub-account keys (they structurally cannot have withdrawals). Master-account keys always include the field; sub-account keys omit it. Omitted ≠ unsafe for sub-accounts. |
+| `enableInternalTransfer` | `sapiGetAccountApiRestrictions.enableInternalTransfer` | `false` — **amended post-smoke**: omitted for sub-accounts; default changed from `true` to `false` to match sub-account structural constraint. |
+| `permitsUniversalTransfer` | `sapiGetAccountApiRestrictions.permitsUniversalTransfer` | `false` — **amended post-smoke**: omitted for sub-accounts; default changed from `true`. |
+| `enableMargin` | `sapiGetAccountApiRestrictions.enableMargin` | `false` — **amended post-smoke**: omitted for sub-accounts; default changed from `true`. |
+| `enableVanillaOptions` | `sapiGetAccountApiRestrictions.enableVanillaOptions` | `false` — **amended post-smoke**: omitted for sub-accounts; default changed from `true`. |
+| `enableSubAccountManagement` | `sapiGetAccountApiRestrictions.enableSubAccountManagement` | **REMOVED** — not a real `/sapi/v1/account/apiRestrictions` response field; engine added speculatively. Not validated in allowlist. |
+| `ipRestrict` | `sapiGetAccountApiRestrictions.ipRestrict` only (DEPRECATED: second endpoint `/sapi/v1/account/apiRestrictions/ipRestriction` was discontinued by Binance 2021-11-17 and no longer called) | `false` (conservative — fails allowlist) |
+| `ipAllowList` | Surviving endpoint's `sapiGetAccountApiRestrictions` does **not** expose the IP list. Only Binance UI exposes actual IPs. | `[]` (conservative — fails allowlist). Operator verifies IP allow-list via Binance UI per runbook. |
+| `tradingAuthorityExpirationTime` | `sapiGetAccountApiRestrictions.tradingAuthorityExpirationTime` (epoch ms or `-1` per Binance docs) | `null` — **amended post-smoke**: marked optional (null accepted when Binance omits for sub-accounts). Treated as expired in §2.4 when null or in the past. |
 
 **Default-when-missing rule:** for capabilities the allowlist expects to be
 `false`, missing-means-`true`. For capabilities the allowlist expects to be
@@ -147,17 +153,22 @@ ADR cannot enforce. If a future operational requirement forces non-expiring
 keys, it lands as a new explicit `tradingAuthorityNeverExpires: true` flag on
 the snapshot and a separate ADR amendment — not by silently accepting `-1`.
 
-### 2.3 TESTNET exemption
+### 2.3 TESTNET exemption (PAPER and LIVE both call live `/sapi`)
 
 The Binance testnet at `testnet.binancefuture.com` returns HTTP 404 / 401 / a
 permission-error for `sapiGetAccountApiRestrictions` because the spot endpoints
-do not exist on the futures testnet host. The assertion must be exempted, not
-reimplemented, on TESTNET.
+do not exist on the futures testnet host. ccxt's `enableDemoTrading(true)`
+swaps `urls.api` to a `urls.demo` block that is an **alias of the testnet
+host** (`demo-fapi.binance.com === testnet.binancefuture.com` for USDT-M
+Futures — confirmed against the Binance developer docs and ccxt 4.5.54
+source). There is no separate Binance-hosted paper-trading endpoint for
+USDT-M Futures. The assertion is therefore exempted on TESTNET only; PAPER
+and LIVE both call live `/sapi`.
 
-**Exemption shape:**
+**Exemption shape (post-amendment):**
 
 - `verifyKeyPermissionsOrAbort()` reads `ExchangeEnvironmentEnum` (W0.1) via
-  `AppConfigService`. Switch:
+  `AppConfigService`. Three branches:
 
   - `ExchangeEnvironmentEnum.TESTNET` → the function does **not** call
     `fetchKeyPermissions()` at all. It logs a single line at WARN level
@@ -165,40 +176,54 @@ reimplemented, on TESTNET.
     writes one `control_audit` row with `action='KEY_PERMISSION_ASSERTION_SKIPPED'`,
     `reason='TESTNET_EXEMPT'`, and returns. No Telegram alert (testnet boots
     are routine and an alert would train operators to ignore it).
-  - `ExchangeEnvironmentEnum.DEMO` and `ExchangeEnvironmentEnum.LIVE` →
-    identical behaviour. Both call `fetchKeyPermissions()` and apply §2.4
-    verbatim. **There is no DEMO/LIVE branch.** Demo trading reaches
-    `fapi.binance.com` (live order books, paper fills) and the spot
-    restriction endpoints answer identically for a demo key as for a live key.
+  - `ExchangeEnvironmentEnum.PAPER` → calls `fetchKeyPermissions()` against
+    the **live** `/sapi` host (PAPER is engine-local paper trading — market
+    data hits live `fapi.binance.com` and the configured PAPER key signs
+    the same `/sapi` reads a LIVE key does). Applies §2.4 with
+    `mode = 'paper'`: PAPER **rejects** `enableFutures: true`. Same IP-restrict
+    and non-expired trading-authority requirements as LIVE. The fallback
+    profile in ADR 0032 §D8 (zero-balance dedicated sub-account with
+    `enableFutures: true`) is the documented exception — applied only when
+    endpoint-accessibility verification rules it required, and additionally
+    asserted by the D13 nullity probe at runtime.
+  - `ExchangeEnvironmentEnum.LIVE` → calls `fetchKeyPermissions()` and
+    applies §2.4 with `mode = 'live'` verbatim. The two-token
+    `LIVE_GO_AHEAD_TOKEN` gate (W0.1) is additionally required for LIVE,
+    not for PAPER (see §2.5 and D9 in ADR 0032).
 
 **Misconfig defence (cross-cutting with W0.1):** the exemption is keyed
 **only** on `ExchangeEnvironmentEnum.TESTNET`. The enum is loaded once at boot
 via `AppConfigService`, validated against the live-go-ahead two-token rule
 from W0.1, and **not re-read** by the assertion. A misconfigured operator
 flipping `EXCHANGE_ENV` post-boot cannot extend the exemption, because the
-engine restarts under the new value and W0.1's two-token gate fires.
+engine restarts under the new value and the relevant token gate fires (LIVE's
+`LIVE_GO_AHEAD_TOKEN`, or D7's transition-matrix token for PAPER↔TESTNET↔LIVE
+crossings recorded in `boot_mode_history`; see ADR 0032 §D6/§D7).
 Additionally, `verifyKeyPermissionsOrAbort()` MUST cross-check that the
 resolved environment string baked into the boot Telegram alert (W0.1) matches
 the value the assertion read; any mismatch is itself an abort. This catches
 the failure mode "config loaded TESTNET but a hot-reload mutated the enum
 in-process."
 
-### 2.4 Allowlist predicate
+### 2.4 Allowlist predicate (mode-aware, per D8 & Fallback Profile)
 
 Single boolean expression — the entire predicate fits on screen so a security
 reviewer audits it in one read. Implemented as a pure function in `packages/
 shared/` consuming `IKeyPermissionSnapshot` + a `nowMs: number` argument
-(injectable for test, never reads `Date.now()` inside the function — keeps the
-predicate deterministic per the project's purity rule):
++ a `mode: 'paper' | 'live'` selector (injectable for test, never reads
+`Date.now()` inside the function — keeps the predicate deterministic per
+the project's purity rule). The `mode` parameter is the **only** shape
+difference between PAPER and LIVE allowlists; every other clause is shared:
 
 ```ts
 function isKeyPermissionSnapshotAcceptable(
   snapshot: IKeyPermissionSnapshot,
   nowMs: number,
+  options: { mode: 'paper' | 'live' },
 ): boolean {
   return (
     snapshot.enableReading === true &&
-    snapshot.enableFutures === true &&
+    snapshot.enableFutures === (options.mode === 'live') &&  // PAPER baseline rejects enableFutures: true
     snapshot.enableSpot === false &&
     snapshot.enableWithdrawals === false &&
     snapshot.enableInternalTransfer === false &&
@@ -213,6 +238,29 @@ function isKeyPermissionSnapshotAcceptable(
   );
 }
 ```
+
+**Per-mode interpretation:**
+
+- **`mode = 'live'`** — `enableFutures === true` (the key must be tradeable).
+  All other clauses identical to the original LIVE predicate.
+- **`mode = 'paper'`** — `enableFutures === false` (a tradeable key paired
+  with PAPER is a **hard error**, not silent permission — the safety teeth
+  PAPER substitutes for the missing `LIVE_GO_AHEAD_TOKEN` gate per §2.5).
+  IP-restrict + non-empty allow-list + non-expired trading authority remain
+  required: a read-only key on unrestricted IP is still a credential-replay
+  risk against the account-state endpoints.
+
+**Operative Fallback Profile (gbt R2-M1 resolved).** Endpoint-accessibility
+verification (ADR 0032 §D8, resolved 2026-05-26) determined that Binance's
+signed `/fapi` endpoints required by D13's nullity probe require the
+`enableFutures` permission. The operative PAPER mode runs under a **dedicated
+zero-balance sub-account** with `enableFutures: true`, gated by D13's
+extended runtime invariants (zero balance, zero positions, zero open orders,
+no transfer permissions, IP-restrict, non-expired trading authority).
+See ADR 0032 §D8 for the full Fallback Profile specification and D13 for
+the sub-account invariants. R1.4 will reconcile the mismatch between this
+predicate's `mode = 'paper' → enableFutures: false` baseline and the
+operative `enableFutures: true` Fallback Profile.
 
 **Why allowlist, not denylist** (round-2 security):
 
@@ -233,11 +281,34 @@ function isKeyPermissionSnapshotAcceptable(
 
 The predicate **only** uses the snapshot — no environment variable, no
 operator-toggleable override. There is intentionally **no escape hatch in
-config to disable the assertion**. The only way to boot DEMO/LIVE without
+config to disable the assertion**. The only way to boot PAPER/LIVE without
 passing is to take a code path off (which a code review catches) or to lie
 about `ExchangeEnvironmentEnum` (which W0.1's two-token gate catches).
 
-### 2.5 Failure path
+### 2.5 `LIVE_GO_AHEAD_TOKEN` scope (D9 — PAPER does not require it)
+
+The two-token `LIVE_GO_AHEAD_TOKEN` gate from W0.1 is **LIVE-only**. PAPER
+does not call it and `LiveGoAheadVerifier` is not invoked on PAPER boots
+(per ADR 0032 §D9 — locked decision, not an open question).
+
+Rationale: PAPER never reaches real-money execution because order intents
+are intercepted by `PaperExecutionClient` and routed to
+`PaperFillSimulator` (ADR 0032 §D2/§D15). The safety teeth that prevent
+"PAPER is silently treated as LIVE" therefore live in this ADR's
+`mode = 'paper'` predicate — a tradeable key paired with PAPER fails the
+allowlist and halts boot — combined with the D6 `boot_mode_history`
+HMAC-chain mode-switch predicate. A `LIVE_GO_AHEAD_TOKEN` requirement on
+PAPER would add no safety beyond the allowlist gate (a leaked PAPER key
+cannot place real orders even if PAPER boot succeeded with a misconfigured
+mode), and would train operators to handle the go-ahead token routinely —
+defeating its purpose as a deliberate friction step before live exposure.
+
+A future reader must not re-introduce a PAPER token gate by analogy to
+LIVE. The transition matrix in ADR 0032 §D7 is the correct primitive for
+gating PAPER↔LIVE crossings (each crossing carries its own single-use
+transition token recorded in `boot_mode_chain_rotations`).
+
+### 2.6 Failure path
 
 `verifyKeyPermissionsOrAbort()` is called from the engine's bootstrap before
 any module that touches the exchange (ExchangeModule constructor, ExecutionService,
@@ -249,7 +320,7 @@ ReconciliationService). The expected boot order is:
 4. ExchangeModule + downstream wiring.
 
 On failure (predicate returns `false`, or `fetchKeyPermissions()` throws, or
-the TESTNET/DEMO/LIVE cross-check from §2.3 fails):
+the TESTNET/PAPER/LIVE cross-check from §2.3 fails):
 
 - **Process exits with non-zero status.** Not a logged-and-continue, not a
   "halt the trade loop but stay up." The engine refuses to be a long-running
@@ -261,7 +332,7 @@ the TESTNET/DEMO/LIVE cross-check from §2.3 fails):
 
   ```
   KEY PERMISSION ASSERTION FAILED — engine refuses to start.
-  Env: DEMO|LIVE
+  Env: PAPER|LIVE
   Key fingerprint: <first4>...<last4>
   Reasons: <comma-separated list of failing predicate clauses>
   ```
@@ -308,8 +379,8 @@ and tries again on the next supervisor cycle.
   to the allowlist (e.g. when Binance ships a new capability the operator
   decides to allow-false) is a three-line edit: extend the DTO, extend the
   predicate, extend the mapper. A reviewer sees all three sites in one diff.
-- **TESTNET / DEMO / LIVE divergence is one switch in one function.** Audit
-  is straightforward; the "did demo just get treated as testnet" failure
+- **TESTNET / PAPER / LIVE divergence is one switch in one function.** Audit
+  is straightforward; the "did PAPER just get treated as testnet" failure
   mode is a single-line check (§2.3 cross-check against the W0.1 boot
   alert).
 - **Audit trail records every assertion outcome** — including the testnet
@@ -324,7 +395,7 @@ and tries again on the next supervisor cycle.
   this ADR adds one more pre-flight check after that gate. The two run in
   series (schema then key-permissions), never in parallel.
 - **No silent override path.** There is intentionally no env var to skip
-  the assertion on DEMO/LIVE. An operator who needs to debug a misconfigured
+  the assertion on PAPER/LIVE. An operator who needs to debug a misconfigured
   key changes the code (and that change goes through the review wave).
 
 ## 4. Alternatives considered

@@ -1,6 +1,6 @@
 import { ExchangeEnvironmentEnum } from '@bot/shared';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
 
 import { ExecutionModeEnum, LogLevelEnum, NodeEnvEnum } from './enum';
 
@@ -62,11 +62,12 @@ export class EnvironmentVariables {
     @IsString()
     EXCHANGE_API_SECRET?: string;
 
-    // M11a W1.1 — primary exchange-environment selector. NO default — boot
-    // refuses to start when unset, so an operator must opt in explicitly.
-    // Valid values: 'testnet' | 'demo' | 'live'. The legacy EXCHANGE_TESTNET
-    // boolean (below) is retained read-only for the CcxtBinanceExchangeClient's
-    // pre-M11a code path; new code branches on EXCHANGE_ENV exclusively.
+    // ADR 0032 — primary exchange-environment selector. NO default
+    // — boot refuses to start when unset, so an operator must opt in
+    // explicitly. Valid values: 'testnet' | 'paper' | 'live'. The legacy
+    // EXCHANGE_TESTNET boolean (below) is retained read-only for the
+    // CcxtBinanceExchangeClient's pre-M11a code path; new code branches on
+    // EXCHANGE_ENV exclusively.
     @IsEnum(ExchangeEnvironmentEnum)
     EXCHANGE_ENV!: ExchangeEnvironmentEnum;
 
@@ -81,6 +82,29 @@ export class EnvironmentVariables {
     @IsOptional()
     @IsString()
     LIVE_GO_AHEAD_TOKEN_HASH?: string;
+
+    // Transition-token inputs for the boot_mode_history HMAC chain
+    // (ADR 0032 §D6 / §D7). Each transition is single-use and gated by a
+    // separate file + hash pair. Hash fields are hex-encoded SHA-256 — 64
+    // hex chars. Both unset means the transition is unavailable; an attempt
+    // to traverse it aborts the engine with the security exit code.
+    @IsOptional()
+    @IsString()
+    TESTNET_TO_PAPER_TOKEN_FILE?: string;
+
+    @IsOptional()
+    @IsString()
+    @Matches(/^[a-fA-F0-9]{64}$/, { message: 'TESTNET_TO_PAPER_TOKEN_HASH must be a 64-character hex SHA-256' })
+    TESTNET_TO_PAPER_TOKEN_HASH?: string;
+
+    @IsOptional()
+    @IsString()
+    PAPER_TO_LIVE_TOKEN_FILE?: string;
+
+    @IsOptional()
+    @IsString()
+    @Matches(/^[a-fA-F0-9]{64}$/, { message: 'PAPER_TO_LIVE_TOKEN_HASH must be a 64-character hex SHA-256' })
+    PAPER_TO_LIVE_TOKEN_HASH?: string;
 
     // Safety: only the exact string 'false' selects LIVE endpoints. A typo
     // ('flase'), an empty value, or a missing var defaults to testnet (true) so a
@@ -159,4 +183,34 @@ export class EnvironmentVariables {
     @Transform(({ value }) => (String(value).toLowerCase().trim() === ExecutionModeEnum.LIVE ? ExecutionModeEnum.LIVE : ExecutionModeEnum.DRY_RUN))
     @IsEnum(ExecutionModeEnum)
     EXECUTION_MODE: ExecutionModeEnum = ExecutionModeEnum.DRY_RUN;
+
+    // ADR 0032 §D11 — PAPER starting equity in USDT. Defaults to $500 to
+    // match the live restricted-profile lower bound (security round 2 L2 —
+    // keeps trust-posture-relevant magic numbers at the config boundary). The
+    // PaperAccountStateService seeds `balanceUsdt` and `peakEquity` to this
+    // value on a fresh soak; subsequent boots restore from
+    // paper_account_snapshots so this value only takes effect at cold start.
+    @Transform(({ value }) => Number.parseFloat(String(value)))
+    @IsNumber()
+    @Min(0)
+    PAPER_STARTING_EQUITY_USDT: number = 500;
+
+    // M11a R2d Item 2 (ADR 0032 §D13). Cadence (ms) at which
+    // `PaperExchangeNullityProbe` issues a `fetchOpenOrders` +
+    // `fetchPositions` pair against the live Binance sub-account holding the
+    // PAPER key. Pinned at 60_000 ms per the D13 cadence specification; the
+    // token-bucket budget reserves 2 calls/minute × symbol-fan-out for this
+    // probe in the restricted profile.
+    @Transform(({ value }) => Number.parseInt(String(value), 10))
+    @IsInt()
+    @Min(1000)
+    PAPER_NULLITY_PROBE_INTERVAL_MS: number = 60_000;
+
+    // M11a R2d Item 2 (ADR 0032 §D13). Maximum exponential-backoff ceiling
+    // (ms) after 5 consecutive transport failures. Capped at 1 hour per the
+    // D13 failure-class taxonomy so a Binance outage cannot halt the soak.
+    @Transform(({ value }) => Number.parseInt(String(value), 10))
+    @IsInt()
+    @Min(60_000)
+    PAPER_NULLITY_PROBE_BACKOFF_MAX_MS: number = 3_600_000;
 }

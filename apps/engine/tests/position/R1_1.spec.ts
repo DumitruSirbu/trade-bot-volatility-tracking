@@ -113,7 +113,9 @@ function buildReconHarness(opts: { positions?: PositionEntity[]; exchangePositio
     const emitSpy = jest.spyOn(events, 'emit');
 
     const service = new ReconciliationService(
-        exchangeClient,
+        exchangeClient as never,
+        exchangeClient as never,
+        { exchangeEnv: 'testnet' } as never,
         positions,
         transactions,
         positionService as unknown as PositionService,
@@ -245,7 +247,9 @@ describe('M6 R1.1.3 — case-(a) flatten emits ReconciliationOutcomeEnum.FLATTEN
         const emitSpy = jest.spyOn(events, 'emit');
 
         const service = new ReconciliationService(
-            exchangeClient,
+            exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions,
             { findByClientOrderId: jest.fn(), findLatestFundingByPosition: jest.fn().mockResolvedValue(null) } as never,
             positionService as never,

@@ -125,6 +125,13 @@ function buildHarness(opts: IHarnessOpts = {}): IHarness {
         riskGate as unknown as RiskGateService,
         snapshotWriter as unknown as AccountSnapshotWriter,
         snapshots as unknown as AccountSnapshotRepository,
+        // M11a R2d Item 3 (ADR 0032 §D12). PAPER branch of phase 2-3 needs
+        // AppConfigService (env discriminator) + PaperReconciliationAdapter
+        // (the in-memory-vs-persisted diff). LIVE/TESTNET branch in these
+        // tests bypasses both — stub with a non-PAPER env so the branch is
+        // structurally inert.
+        { exchangeEnv: 'testnet' } as never,
+        { forceTick: jest.fn().mockResolvedValue({ tickAtMs: 0, driftCount: 0, inMemoryCount: 0, persistedCount: 0 }) } as never,
     );
 
     return { boot, positions, recon, monitor, instrumentor, retainer, riskGate, snapshotWriter, snapshots };

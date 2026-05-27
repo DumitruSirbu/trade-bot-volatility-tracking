@@ -1,12 +1,16 @@
 /**
- * Adversarial tests for KeyPermissionAssertionService (M11a W1.2 — ADR 0028).
+ * Adversarial tests for KeyPermissionAssertionService (M11a R1.4 — ADR 0028
+ * R0.2 + ADR 0032 §D8 Fallback Profile LOCKED).
  *
- * Covers: TESTNET skip path, DEMO failure path with process.exit mock, failing
- * predicate clauses, snapshot redaction invariants, audit row contents, Telegram
- * alert clause-names-only requirement.
+ * Covers: TESTNET skip path, PAPER failure path with process.exit mock,
+ * Fallback Profile reconciliation (PAPER and LIVE both require
+ * enableFutures: true), failing predicate clauses, snapshot redaction
+ * invariants, audit row contents, Telegram alert clause-names-only
+ * requirement, alert title carries env=paper|live so the operator can
+ * distinguish profiles.
  */
 
-import { AlertSeverityEnum, ExchangeEnvironmentEnum, HaltAuditActionEnum, IKeyPermissionSnapshot } from '@bot/shared';
+import { ExchangeEnvironmentEnum, HaltAuditActionEnum, IKeyPermissionSnapshot } from '@bot/shared';
 
 import { KeyPermissionAssertionService } from '../KeyPermissionAssertionService';
 import { LiveGoAheadVerifier } from '../LiveGoAheadVerifier';
@@ -135,12 +139,12 @@ describe('KeyPermissionAssertionService — adversarial', () => {
         });
     });
 
-    // ── W1.2: DEMO path with acceptable snapshot ─────────────────────────────
+    // ── R1.4: PAPER path with acceptable snapshot ────────────────────────────
 
-    describe('DEMO env — acceptable snapshot passes without failure', () => {
+    describe('PAPER env — acceptable snapshot passes without failure', () => {
         it('resolves without writing FAILED audit row when snapshot is acceptable', async () => {
             // BUILD
-            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.DEMO, buildAcceptableSnapshot());
+            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.PAPER, buildAcceptableSnapshot());
 
             // OPERATE
             await service.runAssertion(Date.now());
@@ -155,11 +159,11 @@ describe('KeyPermissionAssertionService — adversarial', () => {
 
     // ── W1.2: enableWithdrawals=true causes failure ──────────────────────────
 
-    describe('DEMO env — enableWithdrawals=true causes failure', () => {
+    describe('PAPER env — enableWithdrawals=true causes failure', () => {
         it('calls process.exit(1) and writes FAILED audit row', async () => {
             // BUILD
             const badSnapshot = buildAcceptableSnapshot({ enableWithdrawals: true });
-            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.DEMO, badSnapshot);
+            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
 
             // OPERATE + CHECK
             await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit called with code 1');
@@ -178,7 +182,7 @@ describe('KeyPermissionAssertionService — adversarial', () => {
                 ipAllowList: ['192.168.1.1', '10.0.0.1'],
                 tradingAuthorityExpirationTime: FUTURE_EXPIRY_MS,
             });
-            const { service, alerts } = buildMocks(ExchangeEnvironmentEnum.DEMO, badSnapshot);
+            const { service, alerts } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
 
             // OPERATE
             await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
@@ -206,7 +210,7 @@ describe('KeyPermissionAssertionService — adversarial', () => {
         it('null expiration time (ADR 0028 §2.2 -1 mapped to null) fails the predicate', async () => {
             // BUILD — the mapper converts -1 to null before handing to the service
             const badSnapshot = buildAcceptableSnapshot({ tradingAuthorityExpirationTime: null });
-            const { service } = buildMocks(ExchangeEnvironmentEnum.DEMO, badSnapshot);
+            const { service } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
 
             // OPERATE + CHECK
             await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
@@ -216,7 +220,7 @@ describe('KeyPermissionAssertionService — adversarial', () => {
             // BUILD
             const pastMs = Date.now() - 1000;
             const badSnapshot = buildAcceptableSnapshot({ tradingAuthorityExpirationTime: pastMs });
-            const { service } = buildMocks(ExchangeEnvironmentEnum.DEMO, badSnapshot);
+            const { service } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
 
             // OPERATE + CHECK
             await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
@@ -226,7 +230,7 @@ describe('KeyPermissionAssertionService — adversarial', () => {
             // BUILD — boundary: the predicate requires > not >=
             const nowMs = Date.now();
             const badSnapshot = buildAcceptableSnapshot({ tradingAuthorityExpirationTime: nowMs });
-            const { service } = buildMocks(ExchangeEnvironmentEnum.DEMO, badSnapshot);
+            const { service } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
 
             // OPERATE + CHECK
             await expect(service.runAssertion(nowMs)).rejects.toThrow('process.exit');
@@ -239,7 +243,7 @@ describe('KeyPermissionAssertionService — adversarial', () => {
         it('calls process.exit(1) when ipAllowList is empty', async () => {
             // BUILD
             const badSnapshot = buildAcceptableSnapshot({ ipAllowList: [] });
-            const { service } = buildMocks(ExchangeEnvironmentEnum.DEMO, badSnapshot);
+            const { service } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
 
             // OPERATE + CHECK
             await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
@@ -252,7 +256,7 @@ describe('KeyPermissionAssertionService — adversarial', () => {
         it('calls process.exit(1) when ipRestrict is false', async () => {
             // BUILD
             const badSnapshot = buildAcceptableSnapshot({ ipRestrict: false });
-            const { service } = buildMocks(ExchangeEnvironmentEnum.DEMO, badSnapshot);
+            const { service } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
 
             // OPERATE + CHECK
             await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
@@ -265,7 +269,7 @@ describe('KeyPermissionAssertionService — adversarial', () => {
         it('exits with code 1 when fetchKeyPermissions throws a network error', async () => {
             // BUILD
             const networkError = new Error('ECONNREFUSED');
-            const { service } = buildMocks(ExchangeEnvironmentEnum.DEMO, networkError);
+            const { service } = buildMocks(ExchangeEnvironmentEnum.PAPER, networkError);
 
             // OPERATE + CHECK
             await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
@@ -275,7 +279,7 @@ describe('KeyPermissionAssertionService — adversarial', () => {
         it('still fires Telegram alert when fetchKeyPermissions throws', async () => {
             // BUILD
             const networkError = new Error('timeout');
-            const { service, alerts } = buildMocks(ExchangeEnvironmentEnum.DEMO, networkError);
+            const { service, alerts } = buildMocks(ExchangeEnvironmentEnum.PAPER, networkError);
 
             // OPERATE
             await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
@@ -298,7 +302,7 @@ describe('KeyPermissionAssertionService — adversarial', () => {
                 ipAllowList: ['203.0.113.42'],
                 tradingAuthorityExpirationTime: FUTURE_EXPIRY_MS,
             });
-            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.DEMO, badSnapshot);
+            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
 
             // OPERATE
             await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
@@ -318,7 +322,7 @@ describe('KeyPermissionAssertionService — adversarial', () => {
                 enableWithdrawals: true,
                 tradingAuthorityExpirationTime: specificExpiry,
             });
-            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.DEMO, badSnapshot);
+            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
 
             // OPERATE
             await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
@@ -333,7 +337,7 @@ describe('KeyPermissionAssertionService — adversarial', () => {
         it('audit row reason preserves boolean capability names', async () => {
             // BUILD
             const badSnapshot = buildAcceptableSnapshot({ enableWithdrawals: true, ipRestrict: false });
-            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.DEMO, badSnapshot);
+            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
 
             // OPERATE
             await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
@@ -353,7 +357,7 @@ describe('KeyPermissionAssertionService — adversarial', () => {
         it('process.exit(1) is called exactly once on failure', async () => {
             // BUILD
             const badSnapshot = buildAcceptableSnapshot({ enableMargin: true });
-            const { service } = buildMocks(ExchangeEnvironmentEnum.DEMO, badSnapshot);
+            const { service } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
 
             // OPERATE
             await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
@@ -361,6 +365,117 @@ describe('KeyPermissionAssertionService — adversarial', () => {
             // CHECK
             expect(processExitSpy).toHaveBeenCalledTimes(1);
             expect(processExitSpy).toHaveBeenCalledWith(1);
+        });
+    });
+
+    // ── R1.4: Fallback Profile reconciliation (ADR 0032 §D8 LOCKED) ────────
+
+    describe('Fallback Profile — PAPER and LIVE both require enableFutures: true', () => {
+        it('PAPER with enableFutures=false fails the predicate (Fallback Profile)', async () => {
+            // BUILD — the sub-account-zero-balance Fallback Profile requires
+            // enableFutures: true for /fapi access. A PAPER key with
+            // enableFutures=false would have been correct under the original
+            // D8 design but is now a hard error under the operative profile.
+            const badSnapshot = buildAcceptableSnapshot({ enableFutures: false });
+            const { service } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
+
+            // OPERATE + CHECK
+            await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
+        });
+
+        it('LIVE with enableFutures=false fails the predicate (unchanged from W1.2)', async () => {
+            // BUILD
+            const badSnapshot = buildAcceptableSnapshot({ enableFutures: false });
+            const { service } = buildMocks(ExchangeEnvironmentEnum.LIVE, badSnapshot);
+
+            // OPERATE + CHECK
+            await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
+        });
+
+        it('PAPER with enableFutures=true + remaining Fallback Profile flags passes', async () => {
+            // BUILD — confirms the Fallback Profile happy path
+            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.PAPER, buildAcceptableSnapshot({ enableFutures: true }));
+
+            // OPERATE
+            await service.runAssertion(Date.now());
+
+            // CHECK — no FAILED audit row written
+            const failedCalls = (auditRepo.appendKeyPermissionAudit as jest.Mock).mock.calls.filter(
+                ([params]: [{ action: HaltAuditActionEnum }]) => params.action === HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_FAILED,
+            );
+            expect(failedCalls).toHaveLength(0);
+        });
+    });
+
+    // ── R1.4: alert title distinguishes PAPER from LIVE ─────────────────────
+
+    describe('failure alert title carries env so operator can distinguish PAPER vs LIVE', () => {
+        it('PAPER failure → alert title contains env=paper', async () => {
+            // BUILD
+            const badSnapshot = buildAcceptableSnapshot({ enableWithdrawals: true });
+            const { service, alerts } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
+
+            // OPERATE
+            await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
+
+            // CHECK
+            const failureTitles = (alerts.publish as jest.Mock).mock.calls
+                .map(([p]: [{ title: string }]) => p.title)
+                .filter((t: string) => typeof t === 'string' && t.includes('ASSERTION FAILED'));
+            expect(failureTitles.length).toBeGreaterThan(0);
+            expect(failureTitles.some((t: string) => t.includes('env=paper'))).toBe(true);
+        });
+
+        it('LIVE failure → alert title contains env=live', async () => {
+            // BUILD
+            const badSnapshot = buildAcceptableSnapshot({ enableWithdrawals: true });
+            const { service, alerts } = buildMocks(ExchangeEnvironmentEnum.LIVE, badSnapshot);
+
+            // OPERATE
+            await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
+
+            // CHECK
+            const failureTitles = (alerts.publish as jest.Mock).mock.calls
+                .map(([p]: [{ title: string }]) => p.title)
+                .filter((t: string) => typeof t === 'string' && t.includes('ASSERTION FAILED'));
+            expect(failureTitles.length).toBeGreaterThan(0);
+            expect(failureTitles.some((t: string) => t.includes('env=live'))).toBe(true);
+        });
+    });
+
+    // ── R1: audit row `reason` field carries the env=<paper|live> prefix ─────
+
+    describe('failure audit row reason carries env prefix', () => {
+        it('PAPER failure → audit row reason starts with env=paper', async () => {
+            // BUILD
+            const badSnapshot = buildAcceptableSnapshot({ enableWithdrawals: true });
+            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
+
+            // OPERATE
+            await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
+
+            // CHECK
+            const calls = (auditRepo.appendKeyPermissionAudit as jest.Mock).mock.calls;
+            const failureCalls = calls.filter(([p]: [{ action: HaltAuditActionEnum }]) => p.action === HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_FAILED);
+            expect(failureCalls.length).toBeGreaterThan(0);
+            const reason: string = failureCalls[0][0].reason;
+            expect(reason.startsWith('env=paper')).toBe(true);
+        });
+
+        it('LIVE failure → audit row reason starts with env=live', async () => {
+            // BUILD
+            const badSnapshot = buildAcceptableSnapshot({ enableWithdrawals: true });
+            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.LIVE, badSnapshot);
+
+            // OPERATE
+            await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
+
+            // CHECK
+            const calls = (auditRepo.appendKeyPermissionAudit as jest.Mock).mock.calls;
+            const failureCalls = calls.filter(([p]: [{ action: HaltAuditActionEnum }]) => p.action === HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_FAILED);
+            expect(failureCalls.length).toBeGreaterThan(0);
+            const reason: string = failureCalls[0][0].reason;
+            expect(reason.startsWith('env=live')).toBe(true);
         });
     });
 });

@@ -28,6 +28,7 @@ export function buildOrderSnapshot(overrides: Partial<IExchangeOrderSnapshot> = 
         status: 'closed',
         type: 'limit',
         side: 'sell',
+        reduceOnly: false,
         price: '30000',
         average: '30000',
         amount: '0.01',

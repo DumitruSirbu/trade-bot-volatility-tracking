@@ -78,7 +78,11 @@ function buildWriterHarness(opts: IWriterHarnessOpts = {}) {
 
     // M6 W8.5: gate-ready by default so existing W7 scheduledTick semantics are preserved.
     const riskGate = { isRecoveryReady: jest.fn().mockReturnValue(true) } as never;
-    const writer = new AccountSnapshotWriter(exchangeClient, positions, transactions, snapshots, riskGate);
+    // M11a R2a BLOCKER B2 — TESTNET env so the PAPER env-gate does NOT
+    // short-circuit. PAPER-specific behaviour is covered by
+    // `AccountSnapshotWriter.paperGuard.spec.ts`.
+    const appConfig = { exchangeEnv: 'testnet' } as never;
+    const writer = new AccountSnapshotWriter(exchangeClient as never, positions, transactions, snapshots, riskGate, appConfig);
 
     return { writer, fetchBalance, findOpen, findByPosition, save };
 }
@@ -397,6 +401,8 @@ describe('ReconciliationService — liquidation-price propagation to instrumento
 
         const service = new ReconciliationService(
             exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions as never,
             transactions as never,
             positionService as never,
@@ -463,6 +469,8 @@ describe('ReconciliationService — liquidation-price propagation to instrumento
 
         const service = new ReconciliationService(
             exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions as never,
             transactions as never,
             positionService as never,
@@ -521,6 +529,8 @@ describe('ReconciliationService — drift-forced snapshot (W7 item 2; ADR 0012 �
 
         const service = new ReconciliationService(
             exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions as never,
             { findByClientOrderId: jest.fn(), findLatestFundingByPosition: jest.fn().mockResolvedValue(null) } as never,
             positionService as never,
@@ -561,6 +571,8 @@ describe('ReconciliationService — drift-forced snapshot (W7 item 2; ADR 0012 �
 
         const service = new ReconciliationService(
             exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions as never,
             { findByClientOrderId: jest.fn(), findLatestFundingByPosition: jest.fn().mockResolvedValue(null) } as never,
             { transition: jest.fn(), adjustQty: jest.fn(), recordFunding: jest.fn(), finalizeRealizedPnl: jest.fn() } as never,

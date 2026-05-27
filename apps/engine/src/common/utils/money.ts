@@ -65,3 +65,32 @@ export function compareMoney(left: MoneyValue, right: MoneyValue): number {
 export function isGreaterThanMoney(left: MoneyValue, right: MoneyValue): boolean {
     return left.greaterThan(right);
 }
+
+// Accounting-Decimal context: ROUND_HALF_EVEN (banker's rounding). Use for
+// PnL, fees, funding, and any other accounting math where truncating would
+// systematically bias the result. The dedicated context keeps the existing
+// `Money` constructor's ROUND_DOWN behaviour (safe for risk sizing —
+// truncating never overshoots a cap) untouched.
+//
+// M11a R4 Item 3C: introduced so PaperFundingAccrualService routes funding
+// math through ROUND_HALF_EVEN per the explicit warning at the top of this
+// file. The previous `multiplyMoney(positionNotional, rate)` call inherited
+// ROUND_DOWN from the global Money context and biased funding debits low
+// for shorts — a sub-tick distortion at the per-event level, but cumulative
+// over a soak.
+const Accounting = Decimal.clone({
+    precision: MONEY_PRECISION,
+    rounding: Decimal.ROUND_HALF_EVEN,
+});
+
+export function multiplyMoneyAccounting(left: MoneyValue, right: MoneyValue): MoneyValue {
+    // Re-coerce through the Accounting constructor so the multiply runs
+    // under ROUND_HALF_EVEN. The result is parsed back through `parseMoney`
+    // so the returned value sits inside the standard Money context for
+    // downstream addMoney / formatMoney / column writes — the ROUND_HALF_EVEN
+    // semantics only affect the multiply itself, not subsequent ops.
+    const a = new Accounting(left.toFixed());
+    const b = new Accounting(right.toFixed());
+
+    return parseMoney(a.times(b).toFixed());
+}

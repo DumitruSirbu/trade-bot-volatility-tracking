@@ -5,7 +5,7 @@ import { Cron } from '@nestjs/schedule';
 import { ALERT_SINK, IAlertSink } from '../alert/sink/AlertSinkModule';
 import { CLOCK, IClock } from '../common/clock/Clock';
 import { AppConfigService } from '../config/service';
-import { IRevokedJtiRepositoryPort, REVOKED_JTI_REPOSITORY } from './AuthModule';
+import { IRevokedJtiRepositoryPort, REVOKED_JTI_REPOSITORY } from './authTokens';
 
 // M11a W1.6 (ADR 0031). Hourly cron-driven prune of the `revoked_jti` table.
 //

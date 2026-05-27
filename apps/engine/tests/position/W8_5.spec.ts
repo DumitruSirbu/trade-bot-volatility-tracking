@@ -96,7 +96,9 @@ describe('ReconciliationService.scheduledTick — boot-race guard (M6 W8.5)', ()
         const events = new EventEmitter2();
 
         const service = new ReconciliationService(
-            exchangeClient,
+            exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions,
             transactions,
             positionService,
@@ -152,7 +154,7 @@ describe('AccountSnapshotWriter.scheduledTick — boot-race guard (M6 W8.5)', ()
         const buildSnapshot = jest.fn().mockImplementation((row) => row);
         const snapshots = { save, buildSnapshot } as unknown as AccountSnapshotRepository;
         const riskGate = { isRecoveryReady: jest.fn().mockReturnValue(gateReady) } as unknown as RiskGateService;
-        const writer = new AccountSnapshotWriter(exchangeClient, positions, transactions, snapshots, riskGate);
+        const writer = new AccountSnapshotWriter(exchangeClient as never, positions, transactions, snapshots, riskGate, { exchangeEnv: 'testnet' } as never);
 
         return { writer, fetchBalance, save };
     }

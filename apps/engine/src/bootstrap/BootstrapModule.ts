@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 
 import { AlertModule } from '../alert/AlertModule';
+import { BootModeHistoryModule } from '../boot-mode-history/BootModeHistoryModule';
 import { ControlModule } from '../control/ControlModule';
 import { ExchangeModule } from '../exchange/ExchangeModule';
 import { ExecutionModule } from '../execution/ExecutionModule';
 import { MarketDataModule } from '../market-data/MarketDataModule';
+import { PaperModeModule } from '../paper-mode/PaperModeModule';
 import { PositionModule } from '../position/PositionModule';
 import { RiskModule } from '../risk/RiskModule';
 import { HaltStateRestoreService } from './HaltStateRestoreService';
@@ -16,20 +18,14 @@ import { EngineBootstrapService } from './service';
 // Composition-root module for the engine's boot pipeline.
 //
 // **PHASE 0 — SCHEMA_VALIDATION (M9 W1, ADR 0025).**
-// `SchemaValidationService` is registered FIRST so its `onApplicationBootstrap`
-// hook fires before `EngineBootstrapService`'s. NestJS initialises providers
-// inside a module in declaration order and dispatches lifecycle hooks in the
-// same order, so the schema gate runs strictly before phases 1-9.
-//
-// Boot-pipeline reshuffle (M9 W1): BootstrapModule keeps its position as the
-// LAST import of `AppModule` (so phases 1-9 still fire after every other
-// module's `onModuleInit` completes). What changes is the in-module ordering:
-// `SchemaValidationService` is declared BEFORE `EngineBootstrapService` in the
-// providers list, so its `onApplicationBootstrap` hook fires first inside this
-// module. The schema gate runs against `DataSource` (already wired by
-// DatabaseModule earlier in the import graph) and BEFORE phases 1-9 produce
-// or consume any persistence write. On hard fail the gate calls
-// `process.exit(1)`, so phases 1-9 never begin.
+// `SchemaValidationService` uses the `OnModuleInit` hook (not
+// `OnApplicationBootstrap`). NestJS dispatches every `OnModuleInit` callback
+// strictly BEFORE any `OnApplicationBootstrap` callback fires globally, so the
+// schema gate runs before phases 1-9 AND before `BootModeChainService` (which
+// lives in `BootModeHistoryModule` and runs in `OnApplicationBootstrap`).
+// Without the lifecycle split, `BootModeHistoryModule`'s hooks would fire
+// before `BootstrapModule`'s — Nest invokes hooks bottom-up through the import
+// graph — which would order chain verification ahead of schema validation.
 //
 // **PHASES 1-9** are owned by `EngineBootstrapService` (ADR 0014). The
 // service is lifted out of `position/service/` so it sits structurally above
@@ -39,21 +35,37 @@ import { EngineBootstrapService } from './service';
 // `AlertModule` is imported so the schema gate can publish a
 // `BOOT_SCHEMA_GATE_FAILED` payload through the `IAlertSink` port even before
 // the Telegram sender lands in W6. The W1 default is a logger-backed no-op.
-// `HaltStateRestoreService` is declared BETWEEN `SchemaValidationService`
-// (PHASE 0) and `EngineBootstrapService` (PHASES 1-9) so its
-// `onApplicationBootstrap` fires after the schema gate validates
-// `control_audit` exists and BEFORE phases 1-9 open subscriptions / the
-// orchestrator. NestJS dispatches lifecycle hooks in provider declaration
-// order inside a module.
+//
+// `BootModeChainService` is registered + exported by `BootModeHistoryModule`
+// and is NOT re-declared here. Re-declaring would create a second injector-
+// scoped instance whose `OnApplicationBootstrap` hook would fire a second
+// boot-mode chain append — double-instantiation is what masked the wiring
+// bug that produced the original `TransitionTokenVerifier` UnknownDependencies
+// error. Hook ordering inside the OnApplicationBootstrap phase is:
+//
+//   `BootModeHistoryModule` deps fire first (imported here) → so
+//   `BootModeChainService` runs before any provider declared in this module.
+//   Within this module the order is declaration-order:
+//   `KeyPermissionAssertionService` → `HaltStateRestoreService` →
+//   `EngineBootstrapService`. (`SchemaValidationService` already ran in
+//   `OnModuleInit`; `LiveGoAheadVerifier` has no lifecycle hook.)
+//
+// Net order: Schema(MI) → BootModeChain(AB) → KeyPermAssert(AB) →
+// HaltStateRestore(AB) → EngineBootstrap(AB).
 @Module({
-    imports: [AlertModule, ControlModule, ExchangeModule, PositionModule, ExecutionModule, RiskModule, MarketDataModule],
-    // M11a W1.2 — KeyPermissionAssertionService is declared AFTER
-    // SchemaValidationService so its OnApplicationBootstrap hook fires once
-    // the `control_audit` schema has been verified, and BEFORE
-    // HaltStateRestoreService + EngineBootstrapService so a misconfigured key
-    // refuses to boot before any subscription / phase-1 read happens.
+    imports: [
+        AlertModule,
+        BootModeHistoryModule,
+        ControlModule,
+        ExchangeModule,
+        PaperModeModule,
+        PositionModule,
+        ExecutionModule,
+        RiskModule,
+        MarketDataModule,
+    ],
     providers: [SchemaValidationService, LiveGoAheadVerifier, KeyPermissionAssertionService, HaltStateRestoreService, EngineBootstrapService],
-    // M9 W4 — `SchemaValidationService.lastValidationResult()` backs `GET /v1/health`'s
+    // `SchemaValidationService.lastValidationResult()` backs `GET /v1/health`'s
     // `schemaValid` flag in ReadApiModule. The provider stays singleton-scoped here.
     exports: [SchemaValidationService],
 })

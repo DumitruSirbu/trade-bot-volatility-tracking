@@ -13,6 +13,7 @@ import {
     OrderPolicyEnum,
     RegimeLabelEnum,
     classifyFlowType,
+    type ITierSlippageParams,
 } from '@bot/shared';
 import { Injectable, Logger } from '@nestjs/common';
 
@@ -35,9 +36,7 @@ import { BacktestInstrumentAdapter } from '../adapter/BacktestInstrumentAdapter'
 import { BacktestPositionAdapter } from '../adapter/BacktestPositionAdapter';
 import { BacktestRiskStateAdapter } from '../adapter/BacktestRiskStateAdapter';
 import { BACKTEST_WARMUP_BAR_COUNT } from '../const/backtestConsts';
-import { FillSimulator, IFillRequest } from '../fill/FillSimulator';
-import { simulateIntrabarStop } from '../fill/IntrabarStopSimulator';
-import { ITierSlippageParams } from '../fill/TierSlippageModel';
+import { HistoricalFillAdapter, IFillRequest } from '../fill/HistoricalFillAdapter';
 import { assertNoLookAhead } from '../guard/CausalityGuard';
 import { BacktestBook } from '../state/BacktestBook';
 import { BacktestEquityCurve } from '../state/BacktestEquityCurve';
@@ -318,7 +317,7 @@ export class BacktestRunnerService {
         const riskStateAdapter = new BacktestRiskStateAdapter(book);
         const instrumentAdapter = new BacktestInstrumentAdapter(book);
         const reservationLedger = new ReservationLedger();
-        const fillSim = new FillSimulator();
+        const fillSim = new HistoricalFillAdapter();
 
         const tierSlippageParams: ITierSlippageParams = {
             slippage_tier1_pct: params.slippage_tier1_pct,
@@ -705,7 +704,7 @@ export class BacktestRunnerService {
 
         const stopLoss = new Money(position.stopLossUsdt);
         const takeProfit = new Money(position.takeProfitUsdt);
-        const stopResult = simulateIntrabarStop(position.side, stopLoss, takeProfit, ticks, bar.high, bar.low, bar.openTimeMs);
+        const stopResult = ctx.runState.fillSim.simulateIntrabarStop(position.side, stopLoss, takeProfit, ticks, bar.high, bar.low, bar.openTimeMs);
 
         if (stopResult.hit === null) {
             return;
@@ -979,7 +978,7 @@ interface IRunState {
     readonly riskStateAdapter: BacktestRiskStateAdapter;
     readonly instrumentAdapter: BacktestInstrumentAdapter;
     readonly reservationLedger: ReservationLedger;
-    readonly fillSim: FillSimulator;
+    readonly fillSim: HistoricalFillAdapter;
     readonly tierSlippageParams: ITierSlippageParams;
 }
 

@@ -2,7 +2,7 @@ import { OrderPolicyEnum, PositionSideEnum } from '@bot/shared';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { ExchangeRejectClass, ExchangeRequestException } from '../../exchange/exception';
-import { EXCHANGE_CLIENT, ICreateOrderRequest, IExchangeClient, IExchangeOrderSnapshot } from '../../exchange/interface';
+import { ENGINE_EXECUTION_CLIENT, ICreateOrderRequest, IEngineExecutionClient, IExchangeOrderSnapshot } from '../../exchange/interface';
 import {
     BINANCE_REJECT_CLASSIFICATION,
     CCXT_ORDER_SIDE_BUY,
@@ -67,7 +67,14 @@ export class ExchangeOrderSubmitter {
     private readonly logger = new Logger(ExchangeOrderSubmitter.name);
 
     constructor(
-        @Inject(EXCHANGE_CLIENT) private readonly exchangeClient: IExchangeClient,
+        // M11a R4 Item 4C — migrated to inject via the
+        // `ENGINE_EXECUTION_CLIENT` port. Under LIVE/TESTNET this resolves
+        // to `CcxtExecutionClient` (engine-shape API on top of ccxt); under
+        // PAPER it resolves to `PaperExecutionClient`'s engine-shape methods
+        // which route through the simulator. The prior concrete-class
+        // injection made `PaperExecutionClient` structurally unreachable
+        // under PAPER and broke the soak's ability to actually trade.
+        @Inject(ENGINE_EXECUTION_CLIENT) private readonly exchangeClient: IEngineExecutionClient,
         private readonly fillAccumulator: FillAccumulator,
     ) {}
 

@@ -1,5 +1,5 @@
 import { AlertSeverityEnum, AlertTypeEnum, IAlertPayload } from '@bot/shared';
-import { Inject, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
@@ -19,7 +19,15 @@ import { TICK_AGGREGATE_PARTITION_PREFIX, TICK_AGGREGATE_TABLE } from '../market
 // mechanism and a missing partition is a recoverable operational concern.
 //
 // Re-entrant-safe: the cached result short-circuits a second
-// `onApplicationBootstrap` call (e.g. in tests that boot the module twice).
+// `onModuleInit` call (e.g. in tests that boot the module twice).
+//
+// Lifecycle choice — `OnModuleInit` (not `OnApplicationBootstrap`): NestJS
+// dispatches every `OnModuleInit` callback strictly before any
+// `OnApplicationBootstrap` callback, regardless of which module declared the
+// provider. That global ordering is what lets the schema gate run before
+// `BootModeChainService.onApplicationBootstrap` (declared in
+// `BootModeHistoryModule`, which `BootstrapModule` imports — so its hooks
+// would otherwise fire first inside the AppBootstrap phase).
 
 export interface IRequiredTable {
     readonly table: string;
@@ -62,9 +70,78 @@ export const REQUIRED_SCHEMA_MANIFEST: ReadonlyArray<IRequiredTable> = [
     { table: 'account_snapshots', requiredColumns: ['account_snapshots_id', 'ts', 'balance', 'equity'] },
     { table: 'control_audit', requiredColumns: ['control_audit_id', 'occurred_at', 'actor_sub', 'action', 'new_state'] },
     { table: 'revoked_jti', requiredColumns: ['jti', 'revoked_at', 'revoked_by'] },
-    // M11a W1.9 — persisted LoginRateLimiter state. Boot fails if the table
-    // is missing so a restart cannot silently re-open the brute-force window.
+    // Persisted LoginRateLimiter state. Boot fails if the table is missing so
+    // a restart cannot silently re-open the brute-force window.
     { table: 'login_rate_limit_state', requiredColumns: ['source_ip', 'scope', 'timestamps_ms', 'updated_at'] },
+    // Boot-mode HMAC chain (ADR 0032 §D6 / §D7). Boot fails if
+    // either table is missing because BootModeChainService cannot verify
+    // chain integrity (security-critical predicate per ADR 0032).
+    {
+        table: 'boot_mode_history',
+        requiredColumns: ['boot_mode_history_id', 'seq', 'booted_at', 'row_kind', 'exchange_env', 'this_row_hmac'],
+    },
+    {
+        table: 'boot_mode_chain_rotations',
+        requiredColumns: ['boot_mode_chain_rotation_id', 'seq', 'rotated_at', 'from_env', 'to_env', 'pre_tip_hash', 'transition_token_hash', 'this_row_hmac'],
+    },
+    // M11a R2b wave A — PAPER persistence tables (ADR 0032 §5). A missing
+    // table here means PAPER mode cannot persist position / equity state;
+    // boot must fail rather than start a soak that silently loses data.
+    {
+        table: 'paper_account_state',
+        requiredColumns: ['paper_account_state_id', 'client_order_id', 'symbol', 'side', 'entry_price', 'size', 'leverage', 'opened_at', 'mode'],
+    },
+    {
+        table: 'paper_account_state_history',
+        requiredColumns: [
+            'paper_account_state_history_id',
+            'client_order_id',
+            'symbol',
+            'side',
+            'entry_price',
+            'exit_price',
+            'size',
+            'realised_pnl',
+            'fees',
+            'funding_accrued',
+            'slippage',
+            'close_reason',
+            'opened_at',
+            'closed_at',
+            'mode',
+        ],
+    },
+    {
+        table: 'paper_account_state_meta',
+        requiredColumns: [
+            'paper_account_state_meta_id',
+            'soak_start_id',
+            'soak_start_ts',
+            'seed_version_label',
+            'hkdf_info_version',
+            'simulator_config_hash',
+            'bootstrap_at_start_fingerprint',
+        ],
+    },
+    {
+        table: 'paper_account_snapshots',
+        requiredColumns: [
+            'paper_account_snapshot_id',
+            'taken_at',
+            'balance',
+            'equity',
+            'realised_pnl_cumulative',
+            'funding_accrued_cumulative',
+            'unrealised_pnl_total',
+            'peak_equity',
+            'open_positions_count',
+            'mode',
+        ],
+    },
+    {
+        table: 'paper_simulator_idempotency',
+        requiredColumns: ['paper_simulator_idempotency_id', 'event_id', 'order_intent_id', 'version_namespace', 'simulated_fill_id', 'simulated_fill_payload'],
+    },
 ];
 
 export const SCHEMA_GATE_TITLE = 'Engine refused to boot: schema gate failed';
@@ -72,7 +149,7 @@ export const SCHEMA_GATE_TITLE = 'Engine refused to boot: schema gate failed';
 const PARTITION_DATE_FORMAT_LENGTH = 8;
 
 @Injectable()
-export class SchemaValidationService implements OnApplicationBootstrap {
+export class SchemaValidationService implements OnModuleInit {
     private readonly logger = new Logger(SchemaValidationService.name);
 
     private cachedOutcome: 'pending' | 'passed' | 'failed' = 'pending';
@@ -82,7 +159,7 @@ export class SchemaValidationService implements OnApplicationBootstrap {
         @Inject(ALERT_SINK) private readonly alerts: IAlertSink,
     ) {}
 
-    async onApplicationBootstrap(): Promise<void> {
+    async onModuleInit(): Promise<void> {
         await this.validate(new Date());
     }
 

@@ -81,6 +81,7 @@ export interface IExchangeOrderSnapshot {
     status: string;
     type: string;
     side: string;
+    reduceOnly: boolean;
     price: string | null;
     average: string | null;
     amount: string | null;

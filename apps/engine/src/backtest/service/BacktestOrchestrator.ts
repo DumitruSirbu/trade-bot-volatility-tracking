@@ -34,8 +34,8 @@ import { BacktestInstrumentAdapter } from '../adapter/BacktestInstrumentAdapter'
 import { BacktestPositionAdapter } from '../adapter/BacktestPositionAdapter';
 import { BacktestRiskStateAdapter } from '../adapter/BacktestRiskStateAdapter';
 import { BACKTEST_ORDER_POLICY_ROUTER } from '../const/backtestTokens';
-import { FillSimulator, IFillRequest } from '../fill/FillSimulator';
-import { ITierSlippageParams } from '../fill/TierSlippageModel';
+import { HistoricalFillAdapter, IFillRequest } from '../fill/HistoricalFillAdapter';
+import { type ITierSlippageParams } from '@bot/shared';
 import { IOrderPolicyRouter } from '../interface';
 import { BacktestBook } from '../state/BacktestBook';
 import { BacktestPnLLedger } from '../state/BacktestPnLLedger';
@@ -63,7 +63,7 @@ export interface IBacktestOrchestratorContext {
     readonly riskStateAdapter: BacktestRiskStateAdapter;
     readonly instrumentAdapter: BacktestInstrumentAdapter;
     readonly reservationLedger: ReservationLedger;
-    readonly fillSim: FillSimulator;
+    readonly fillSim: HistoricalFillAdapter;
     readonly ticks: TickAggregateEntity[];
     readonly bookSnapshot: BookSnapshotEntity | null;
     readonly strategy: IStrategy;
@@ -356,7 +356,7 @@ export class BacktestOrchestrator {
         event: IVolatilityDetectedEvent,
         signal: ISignal,
         decision: IApprovedRiskDecision,
-        fill: ReturnType<FillSimulator['simulateFill']>,
+        fill: ReturnType<HistoricalFillAdapter['simulateFill']>,
         ctx: IBacktestOrchestratorContext,
     ): IBacktestPosition {
         if (signal.proposedExit === null) {

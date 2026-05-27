@@ -534,7 +534,9 @@ describe('ReconciliationService funding ingestion (ADR 0012 §2)', () => {
         const events = new EventEmitter2();
 
         const service = new ReconciliationService(
-            exchangeClient as unknown as IExchangeClient,
+            exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions,
             transactions as unknown as TransactionRepository,
             positionService as unknown as PositionService,

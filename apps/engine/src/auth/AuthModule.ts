@@ -9,6 +9,7 @@ import { CLOCK, SystemClock } from '../common/clock/Clock';
 import { AppConfigModule } from '../config/AppConfigModule';
 import { AppConfigService } from '../config/service';
 import { AuthCorsInterceptor } from './AuthCorsInterceptor';
+import { AUTH_SECRET_PROVIDER, IAuthSecretProvider, IRevokedJtiRepositoryPort, REVOKED_JTI_REPOSITORY } from './authTokens';
 import { AUTH_HS256_HEADER_B64URL, AUTH_MIN_SECRET_BYTES, AUTH_TOKEN_DEFAULT_TTL_SEC } from './const/authConsts';
 import { DerivedKeyService, DERIVED_KEY_SERVICE } from './DerivedKeyService';
 import { RevokedJtiEntity } from './entity/RevokedJtiEntity';
@@ -29,28 +30,12 @@ import { RevokedJtiPruneScheduler } from './RevokedJtiPruneScheduler';
 // Tokens / ports
 // ---------------------------------------------------------------------------
 
-export const AUTH_SECRET_PROVIDER = Symbol('AUTH_SECRET_PROVIDER');
-export const REVOKED_JTI_REPOSITORY = Symbol('REVOKED_JTI_REPOSITORY');
-
-// The secret provider is a port (ADR 0020 §2.4) so M11 can swap the env
-// adapter for SSM / Vault / 1Password without touching the guard.
-export interface IAuthSecretProvider {
-    getSigningSecret(): Buffer;
-}
-
-// Persistence port — the service depends on this, not on TypeORM's Repository,
-// per code-conventions repository-pattern rule. Insert is upsert-safe so a
-// re-revoke returns successfully instead of throwing on the PK conflict.
-export interface IRevokedJtiRepositoryPort {
-    isRevoked(jti: string): Promise<boolean>;
-    revoke(jti: string, revokedBy: string, reason: string | null): Promise<void>;
-    // M11a W1.6 (ADR 0031). Deletes rows with `revoked_at < cutoff`. Returns
-    // the number of rows deleted so the scheduler can log + alert. Idempotent.
-    pruneOlderThan(cutoff: Date): Promise<number>;
-    // M11a W1.6 (ADR 0031 §2.4). Cheap COUNT(*) for the unbounded-growth
-    // alert. The hourly cadence + indexed PK makes this a small scan.
-    countAll(): Promise<number>;
-}
+// M11a triage — AUTH_SECRET_PROVIDER + REVOKED_JTI_REPOSITORY tokens and their
+// matching ports are re-exported from `./authTokens` to break circular imports
+// with DerivedKeyService (AUTH_SECRET_PROVIDER) and with
+// RevokedJtiPruneScheduler + AuthGuard (REVOKED_JTI_REPOSITORY). External
+// importers continue to resolve them from `./AuthModule` unchanged.
+export { AUTH_SECRET_PROVIDER, IAuthSecretProvider, IRevokedJtiRepositoryPort, REVOKED_JTI_REPOSITORY };
 
 // WS handshake contract consumed by W5. Pure function shape — takes a raw
 // token string, returns a typed result. No exception thrown so the gateway

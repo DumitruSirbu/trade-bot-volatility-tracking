@@ -355,7 +355,9 @@ describe('ReconciliationService case (b) precise (W4b)', () => {
         const events = new EventEmitter2();
         const emitSpy = jest.spyOn(events, 'emit');
         const service = new ReconciliationService(
-            exchangeClient,
+            exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions,
             transactions,
             positionService,
@@ -447,7 +449,9 @@ describe('ReconciliationService case (c) precise (W4b)', () => {
         const events = new EventEmitter2();
         const emitSpy = jest.spyOn(events, 'emit');
         const service = new ReconciliationService(
-            exchangeClient,
+            exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions,
             { findLatestFundingByPosition: jest.fn().mockResolvedValue(null) } as unknown as TransactionRepository,
             positionService,
@@ -544,7 +548,9 @@ describe('ReconciliationService case (a) flatten policy (W4b)', () => {
         const events = new EventEmitter2();
         const emitSpy = jest.spyOn(events, 'emit');
         const service = new ReconciliationService(
-            exchangeClient,
+            exchangeClient as never,
+            exchangeClient as never,
+            { exchangeEnv: 'testnet' } as never,
             positions,
             {} as TransactionRepository,
             positionService,

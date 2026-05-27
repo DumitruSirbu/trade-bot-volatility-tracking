@@ -1,22 +1,27 @@
 # M11a — Local soak hardening
 
-> ⚠️ **SUPERSESSION NOTICE.** Sections of this plan referring to **DEMO** mode
-> (`{enableReading, enableFutures}` key, "Binance demo trading", crash-recovery
-> against a Binance-hosted paper account, `BacktestRunnerService` reuse for
-> live fills) are **superseded** by
-> [`M11a-paper-mode-addendum.md`](./M11a-paper-mode-addendum.md). Binance
-> USDT-M Futures has no API-accessible paper-trading host distinct from
-> testnet; the addendum replaces DEMO with an engine-local **PAPER** mode
-> (live market data + local fill simulator + read-only-only key + dedicated
-> account-state port + two-call nullity probe + boot-mode HMAC chain). For
-> any agent dispatched against M11a, the addendum is the **source of
-> truth** until the scribe formally merges it back into this file (R4.2).
-> Specifically the addendum overrides W1.1, W1.2, W4.3 wording in this
-> plan; D1–D17 in the addendum are the locked decisions.
+**PAPER is not exchange demo trading (invariant)**
+
+This must be visible to every reader before they read anything else:
+
+**PAPER validates strategy / risk / operational behaviour against live
+market data. PAPER does not validate live exchange execution semantics.**
+
+That means PAPER does **not** test: Binance order acceptance, rejections,
+partial fills, cancel semantics, protective-order behaviour at the
+matching engine, rate-limit-ban responses against real orders, or any
+other property of the exchange's order lifecycle. Those properties still
+require TESTNET drills (see §"TESTNET pre-M11b drill" below).
+
+A successful PAPER soak is a **necessary but not sufficient** condition
+for M11b. Real-money go-live requires both PAPER's statistical/operational
+evidence and TESTNET's exchange-contract evidence.
+
+---
 
 **Goal:** Make the existing stack production-grade on a single trusted machine so
 the user can run a multi-week **PAPER** soak (engine-local paper trading against
-live market data; see addendum) at $0 infra cost and collect real signal on the
+live market data) at $0 infra cost and collect real signal on the
 strategies before any cloud spend.
 
 **Depends on:** M1–M10.
@@ -26,6 +31,435 @@ live edge worth paying ~$5–60/mo to host.
 **Review baseline:** architect / devops / security / logic review completed
 2026-05-25 against commit `4bfeab4`. All blocker + high findings are folded into
 the waves below; medium / low findings are tracked in the per-task notes.
+
+## PAPER-mode architecture (locked decisions D1–D17)
+
+The `PAPER` design is an engine-local paper-trading mode:
+
+- WebSocket connects to **live** `fapi.binance.com` for market data + funding
+  (real prices, real depth, real spread, real OI, real funding rates).
+- Orders are intercepted before reaching ccxt and routed to a local
+  `PaperFillSimulator`, which uses `FillSimulatorCore` (D15 — pure shared
+  module; M7 backtests use the same core via `HistoricalFillAdapter`,
+  PAPER uses `StreamingFillAdapter` on live event-time; causality test
+  asserts no future-tick read).
+- Account state (positions, balances, margin) is simulated locally in a new
+  `PaperAccountStateService`; never reads or writes a real Binance account.
+- Reconciliation in PAPER mode runs against the local simulated state plus a
+  periodic null-probe against the exchange (catches engine-internal drift
+  **and** the worst-case "did we accidentally leak an order" failure mode).
+- Key-permission assertion is **mode-aware** and **stricter** in PAPER than in
+  LIVE.
+
+### Locked decisions D1–D17
+
+#### D1 — `paper_account_state` is a dedicated table
+
+Reject the `mode` discriminator on `positions` alternative. Reasons:
+- PAPER retention follows a different policy from live positions.
+- Crash recovery's phase-1 reader is simpler with a dedicated table.
+- No risk of a PAPER position accidentally being read by a LIVE-mode read API
+  query.
+- `paper_account_state` writes are restricted to the engine DB role; the
+  read-API role gets `SELECT` only.
+
+#### D2 — `IExecutionClient` surface (frozen — order commands only)
+
+`IExecutionClient` is **order-command-only**. Methods:
+- `placeOrder(intent: IOrderIntent): Promise<IOrder>`
+- `cancelOrder(symbol: string, id: string): Promise<void>`
+- `cancelAllOrdersForSymbol(symbol: string): Promise<void>`
+- `fetchOrderStatus(symbol: string, id: string): Promise<IOrder>`
+- `fetchOpenOrders(symbol?: string): Promise<IOrder[]>` (here because
+  the engine treats it as part of the order-lifecycle surface — pair
+  with cancel/status)
+
+Two implementations:
+- `CcxtExecutionClient` (LIVE / TESTNET) — delegates to ccxt.
+- `PaperExecutionClient` (PAPER) — delegates to `PaperFillSimulator`.
+
+**Account-state reads (balance, positions, funding history) are NOT on
+`IExecutionClient`.** They live on `IAccountStateSource` per D14
+(`fetchBalance`, `fetchPositions`, `fetchOpenOrders`, `fetchFundingHistory`).
+
+#### D3 — PaperFillSimulator determinism
+
+Per-order PRNG seed schema (stateless derivation):
+```
+seed_master  = HKDF(bootstrap_secret, info='paper_simulator_seed v1')
+order_seed   = HMAC-SHA256(seed_master, event_id || symbol || order_intent_id || version_namespace)
+```
+
+`seed_master` is **never persisted**. It is re-derived at every boot from
+the bootstrap secret via HKDF. `order_seed` for any specific order is
+recomputed from the persisted decision row at any time. No long-lived
+secret-equivalent material lives in the database.
+
+**Idempotency ledger, not an event cursor.** A single market event can
+produce multiple order intents across active (v1 PAPER) and shadow (v2/v3)
+versions; event-level cursoring is too coarse and would collide. Replace
+with a `paper_simulator_idempotency` table keyed by
+`(event_id, order_intent_id, version_namespace)` recording the
+`simulated_fill_id` produced. On restart, the simulator looks up by key
+before rolling; if a fill already exists for the key, return it verbatim
+(byte-identical replay).
+
+**Retention floor pinned:** the idempotency ledger retains for **soak_duration + 30 days**.
+A SIGKILL replay after GC'd ledger rows would silently break replay
+determinism otherwise.
+
+#### D4 — Funding ordering and math
+
+`PaperFundingAccrualService` applies live funding rates to
+`PaperAccountStateService` positions at the **Binance-published funding
+timestamp**, not local processing time.
+
+**Sign convention pinned in account-PnL terms.** The convention follows the operator's intuition:
+a positive funding rate is paid by longs to shorts.
+
+```
+funding_pnl = -position_notional × funding_rate × side_sign
+  where side_sign(LONG)  = +1
+        side_sign(SHORT) = -1
+```
+
+Equivalently:
+- For `rate > 0`: long → funding_pnl is **negative** (long pays);
+  short → funding_pnl is **positive** (short receives).
+- For `rate < 0`: long receives, short pays.
+
+**Magnitude bound is a warning, not a hard reject.** Funding-rate ingest
+applies the rate to the position, writes an audit row, and emits a CRITICAL
+Telegram alert. A simulator that silently zeroes funding during a stress
+regime flatters expectancy at exactly the moment funding cost matters most
+for shorts.
+
+**Funding / PnL ordering inside a tick batch** is pinned: `apply_funding
+→ recompute_unrealised_pnl → evaluate_drawdown_abort`.
+
+**Funding force-flushes the MTM throttle.** A funding event arriving mid-throttle
+would otherwise wait up to 100 ms before being applied — and a coincident
+adverse mark could delay the abort by the same window. Funding event arrival
+is therefore a throttle-exemption trigger: immediate `apply_funding +
+recompute_unrealised + evaluate_abort`, regardless of throttle state.
+
+#### D5 — Mark-to-market cadence + drawdown denominator
+
+PaperAccountStateService unrealised PnL is recomputed on price updates for
+held symbols at a **throttled cadence**. Binance mark-price ticks fire
+multiple times per second under volatility; running MTM + drawdown abort
+on every raw tick would saturate the Node.js event loop.
+
+Throttle rule:
+- Coalesce updates per held symbol to at most **once per 100 ms**, OR
+  immediately when the cumulative price move since the last MTM exceeds
+  one tick size (whichever comes first). The 100 ms ceiling protects the
+  event loop; the tick-size early-trip protects abort-threshold latency
+  during fast moves.
+- Inside the throttle window, the latest tick is retained and applied
+  when the throttle fires (no dropped data, only deferred work).
+
+**Drawdown denominator pinned to running peak equity.**
+The drawdown abort threshold (15%) compares against `peak_equity`, not
+starting equity:
+```
+drawdown(t)    = (peak_equity(t) - equity(t)) / peak_equity(t)
+peak_equity(t) = max(equity(τ)) for τ ∈ [soak_start, t]
+peak_equity(0) = PAPER_STARTING_EQUITY_USDT   // cold start; not the first MTM tick
+```
+
+With D11's $500 starting equity and 0.25% risk per trade, peak-equity
+denominator means the abort fires on a true regime break, not on a routine
+losing streak from a high-water mark.
+
+#### D6 — Mode-switch predicate + integrity
+
+Predicate: **persisted last-known boot mode ≠ current `EXCHANGE_ENV`** →
+abort with a clear error. Recorded in a new `boot_mode_history` table
+written **at successful boot** (not at shutdown — crash-safety).
+
+The HMAC subkey derivation uses HKDF per-purpose subkeys so a leak of one
+key does not compromise others.
+
+**Threat model — tamper-evidence, not tamper-proofing.** The HMAC
+chains catch accidental corruption and unauthorized DB-only modification
+by a process that does not have the host's bootstrap secret. They do **not**
+protect against an attacker who gains host shell access.
+
+#### D7 — Mode-transition matrix (append-only, never truncate the chain)
+
+ADR 0032 includes the transition matrix; the operator must follow the
+documented drain procedure for each transition. **Undocumented transitions
+are rejected at boot**.
+
+**Chain rotation primitive: append-only typed rows.** Every legitimate
+transition is recorded as an **append-only typed row** that references the
+prior tip's HMAC, signed under the appropriate sub-key. The chain is
+**never truncated**.
+
+| From | To | Procedure |
+|------|----|-----------|
+| TESTNET | PAPER | Confirm `paper_account_state` empty; operator provides `TESTNET_TO_PAPER_TOKEN_FILE`; boot appends transition row; proceeds. |
+| TESTNET | LIVE | Operator provides both `TESTNET_TO_LIVE_TOKEN_FILE` **and** `LIVE_GO_AHEAD_TOKEN_FILE`; CRITICAL alert. |
+| PAPER | TESTNET | Reject unless `paper_account_state` empty; operator provides `PAPER_TO_TESTNET_TOKEN_FILE`; runbook documents cleanup step. |
+| PAPER | LIVE | Reject unless `paper_account_state` empty; operator provides `PAPER_TO_LIVE_TOKEN_FILE` **and** `LIVE_GO_AHEAD_TOKEN_FILE`; CRITICAL alert. |
+| LIVE | PAPER | Reject unless no open live positions; operator provides `LIVE_TO_PAPER_TOKEN_FILE`; CRITICAL alert. **Predicate must use transition-time `ExchangeAccountStateSource(prior_env_credentials)`.** |
+| LIVE | TESTNET | Reject. Use separate machine or execute documented destructive-wipe runbook (records `MACHINE_REPURPOSE_WIPE` row). |
+
+#### D8 — PAPER allowlist (full enumeration)
+
+The PAPER allowlist rejects `enableFutures: true` — a tradeable key paired
+with PAPER mode is a hard error:
+
+```ts
+isKeyPermissionSnapshotAcceptable(snapshot, nowMs, { mode: 'paper' })
+=> 
+  snapshot.enableReading === true
+  && snapshot.enableFutures === false
+  && snapshot.enableSpot === false
+  && snapshot.enableWithdrawals === false
+  && snapshot.enableInternalTransfer === false
+  && snapshot.permitsUniversalTransfer === false
+  && snapshot.enableMargin === false
+  && snapshot.enableVanillaOptions === false
+  && snapshot.enableSubAccountManagement === false
+  && snapshot.ipRestrict === true
+  && snapshot.ipAllowList.length > 0
+  && snapshot.tradingAuthorityExpirationTime !== null
+  && snapshot.tradingAuthorityExpirationTime > nowMs
+```
+
+**Endpoint-accessibility verification (blocker resolution — gbt R2-M1).**
+Some futures endpoints require `enableFutures: true`. Solution:
+**PAPER runs under a dedicated zero-balance sub-account** with `enableFutures: true`:
+
+- API key on a dedicated Binance sub-account whose sole purpose is to
+  host the PAPER probe key. The main account is never reachable via
+  this key.
+- Allowlist amended: `{enableReading: true, enableFutures: true}` on
+  this key — but **the engine refuses to boot if**:
+  - Sub-account balance ≠ 0 at boot or at any reconciliation tick.
+  - Sub-account has any open position at boot or at any tick.
+  - Key has any transfer permission — must remain false.
+  - IP allow-list is empty.
+  - Trading authority is expired or null.
+
+#### D9 — `LIVE_GO_AHEAD_TOKEN` is LIVE-only
+
+PAPER does **not** require the go-ahead token. The read-only-only assertion
+(D8) is PAPER's safety teeth.
+
+#### D10 — Closed-trade counting (full enumeration)
+
+| `closeReason` | Counts toward ≥80-trade floor? | Notes |
+|--------------|-------------------------------|-------|
+| `sl` | ✅ Yes | Stop-loss intra-bar fill. |
+| `tp` | ✅ Yes | Take-profit intra-bar fill. |
+| `intra_bar_stop` | ✅ Yes | Generic intra-bar protective stop. |
+| `force_close` | ❌ No (excluded) | M7 end-of-window. Surfaced separately. |
+| Operator drain | ❌ No (excluded) | Operator-initiated close during incident. |
+| Reconciliation-forced close | ❌ No (excluded) | Engine-internal cleanup. |
+
+Additionally:
+- A simulator decision with `missed: true` does **not** consume the
+  restricted profile's `max_trades_per_day: 3` slot.
+  Missed fills are observability only.
+- The soak evaluator emits a "excluded fills" report alongside the
+  primary trade count.
+
+#### D11 — PAPER starting equity
+
+PAPER starting equity defaults to **$500**. Surfaced as
+`PAPER_STARTING_EQUITY_USDT` env var, validated by Zod schema with `$500`
+as the default.
+
+#### D12 — Reconciliation in PAPER
+
+PaperReconciliationAdapter inherits the **same triggers** as M6 W4b live
+reconciliation — source swapped from exchange to PaperAccountStateService.
+
+**Drift action in PAPER is more severe than in LIVE.** In PAPER, any drift
+between in-memory `PaperAccountStateService` and the persisted
+`paper_account_state` rows is a production bug. Action: CRITICAL Telegram
+alert, audit row, halt new decision routing, await operator intervention.
+
+#### D13 — PaperExchangeNullityProbe (defence in depth)
+
+Independent of `PaperExecutionClient`'s internal invariants, the
+reconciliation cycle calls **both** `fetchOpenOrders()` **and**
+`fetchPositions()` against the live exchange and asserts both are empty.
+Two readers, not one, because `fetchOpenOrders` only sees resting orders
+— an accidental market-order fill closes immediately and leaves a position
+with no open order trace.
+
+**Dedicated PAPER sub-account, strongly preferred.** A dedicated Binance
+sub-account whose only role is to hold the read-only PAPER key trivially
+lets the probe assert **absolute nullity**: zero open orders AND zero
+positions across all symbols.
+
+**Capability preflight at PAPER boot:**
+- The engine performs one `fetchOpenOrders` + one `fetchPositions` call
+  against the configured PAPER key.
+- Three branches:
+  1. **Both succeed and both are empty** → probe is operational.
+  2. **Both succeed and non-empty engine-attributed entry exists** →
+     CRITICAL halt before soak starts.
+  3. **Either call returns 401/403/permission error** →
+     PAPER startup aborts. The probe cannot run with this key.
+
+**Runtime failure-class taxonomy:**
+- `Network / 5xx / timeout` → log and continue for up to 5 consecutive
+  failures. On the 6th, emit WARNING and switch to exponential backoff.
+  Binance outage cannot halt the soak.
+- `401 / 403 / permission / malformed credential` → CRITICAL halt.
+  The key changed mid-soak; soak result is invalidated.
+- `Non-empty engine-attributed response` →
+  CRITICAL halt + audit row.
+
+**Cadence:** Probe runs **once per minute** for each of
+`fetchOpenOrders` and `fetchPositions`.
+
+#### D14 — `IAccountStateSource` port (full surface, not only orders)
+
+Introduce `IAccountStateSource` as a second port:
+
+```
+IAccountStateSource {
+  fetchBalance(): Promise<Balance>
+  fetchPositions(symbol?): Promise<Position[]>
+  fetchOpenOrders(symbol?): Promise<Order[]>
+  fetchFundingHistory(symbol, since): Promise<Funding[]>
+}
+```
+
+Two implementations:
+- `ExchangeAccountStateSource` (LIVE / TESTNET) — delegates to ccxt.
+- `PaperAccountStateSource` (PAPER) — backed by `PaperAccountStateService`.
+
+`AccountSnapshotWriter`, reconciliation phase 1, funding cashflow readers,
+and the read-API account projections are bound to **this port**, not to
+`IExchangeClient`.
+
+**The exception list** (rows the LIVE ccxt account-state methods are still
+allowed to be called from in PAPER) is exactly two:
+1. `KeyPermissionAssertionService` (boot-time `/sapi` calls).
+2. `PaperExchangeNullityProbe` (D13).
+
+**Runtime guard, not only static graph.** Pair the static check with:
+1. **Capability-tagged proxy** on the two whitelisted methods using
+   `AsyncLocalStorage` to tag the call-stack origin.
+2. **ESLint rule** banning the strings outside the whitelisted file set.
+
+#### D15 — `PaperFillSimulator` is **not** `BacktestRunnerService` reuse
+
+**Decision: extract a pure shared fill library, two adapters.**
+
+```
+@bot/shared/fill-simulator/
+  FillSimulatorCore   // pure functions
+  HistoricalFillAdapter  // backtest: replay with complete tick paths
+  StreamingFillAdapter   // PAPER: live event-time
+```
+
+**SL/TP evaluation is event-driven, never timer-driven.**
+The `StreamingFillAdapter` evaluates intra-bar SL/TP triggers on **tick
+arrival** from the live WS feed, not via wall-clock `setTimeout`.
+
+**Causality test:** at time `t`, the streaming adapter cannot read tick /
+book-snapshot data with timestamp `> t`.
+
+**The M7 backtest is rerun against the extracted core** as the R0.5
+validation step — any divergence is a blocker.
+
+**Equivalence is numerical, not byte-for-byte.** The equivalence test
+asserts per-field numerical equality on `simulated_fill` rows with
+documented tolerance for fields where order-dependent serialization is
+unavoidable.
+
+#### D16 — Paper-state source-of-truth (per datum)
+
+| Datum | Source-of-truth in PAPER |
+|-------|--------------------------|
+| Open paper-position state | `paper_account_state` |
+| Closed paper-trade PnL | `paper_account_state_history` |
+| Fees / funding / slippage | columns on `paper_account_state_history` |
+| Risk-day trade count | computed from `paper_account_state_history.closed_at` per D10 |
+| Account equity curve | snapshot rows in `paper_account_snapshots` |
+| Read-API dashboard display | read from the four paper tables (separate read-API filter `mode=paper`) |
+| Soak-exit evaluator input | read from `paper_account_state_history` exclusively |
+
+**Unrealised PnL is derived, not state.** `unrealised_pnl` is computed on
+demand, never persisted. The `paper_account_state` table holds only state
+that is genuinely position-defining.
+
+**Atomicity guarantee.** Every paper fill writes to
+`paper_account_state` (current state mutation) + `paper_account_state_history`
+(closed-trade record if applicable) + `paper_state_audit`
+(HMAC-chained audit) in **one transaction**.
+
+#### D17 — Shadow randomness: independence + paired common-random-numbers
+
+**Decision: separate active execution from offline comparison.**
+
+- **Active PAPER execution** uses deterministic, idempotent per-version
+  order seeds. Each version's actual decisions are scored independently.
+
+- **Offline same-event strategy comparison** uses a **pre-registered
+  Common Random Numbers (CRN) scheme** keyed by
+  `(event_id, simulator_component, pair_id)`.
+
+**Per-soak CRN root:**
+```
+soak_start_id     = uuid generated at soak start
+bootstrap_at_start = bootstrap_secret captured at soak start (immutable for the soak)
+crn_root          = HKDF(bootstrap_at_start, info='paper_crn v1', salt=soak_start_id)
+crn_tape[i]       = HMAC(crn_root, event_id_i || simulator_component_i || pair_id_i)
+```
+
+`bootstrap_at_start` is **never persisted in plaintext**; only its
+fingerprint (e.g. SHA-256) goes into the audit row.
+
+**Commit-reveal audit-row pattern.** At soak start, write a single audit
+row to `paper_state_audit` under a dedicated subkey:
+```
+crn_commitment = HMAC(crn_root, soak_start_ts
+                              || bootstrap_at_start_fingerprint
+                              || symbol_universe_hash
+                              || pair_list_hash
+                              || PAPER_STARTING_EQUITY_USDT)
+```
+
+Only the commitment goes into the audit row pre-soak. The CRN tape itself
+is **not revealed mid-soak**. The tape is materialised by the evaluator
+post-soak from `crn_root`; the commitment row binds it.
+
+**Skip-case pairing.** v1 and v2 generally produce different order intents
+on the same event. The paired difference series must handle events where
+only one version traded.
+
+**Roll consumption rule.** Per `(event_id, simulator_component)`, the CRN
+roll is consumed by **whichever version trades**. If both trade, they
+consume the same roll (true pairing). If only one trades, the roll is
+consumed by the trader.
+
+**Two evaluator outputs + inconclusive truth table:**
+The soak-exit report produces two CIs on `E[v1] − E[v2]`:
+
+1. **Paired CRN CI**: same simulator rolls on the same events.
+2. **Independent-noise robustness CI**: each version's actual decisions
+   scored under independent rolls.
+
+Truth table for the "active version beats shadow v2/v3" criterion:
+
+| Paired CRN CI | Independent-noise CI | Result |
+|--------------|---------------------|--------|
+| Decisive, v1 wins | Decisive, v1 wins | **Pass.** |
+| Decisive, v1 wins | Decisive, v2 wins | **Fail.** |
+| Decisive, v1 wins | Inconclusive | **Inconclusive.** |
+| Inconclusive | Decisive | **Inconclusive.** |
+| Both inconclusive | — | **Inconclusive.** |
+
+---
 
 ## Why split M11
 
@@ -185,24 +619,28 @@ shape cannot express demo trading and cannot enforce the demo→live invariant.
 
 ### Exchange
 
-- **W1.1 — Binance demo-trading migration.** Switch `CcxtBinanceExchangeClient`
-  off `testnet.binancefuture.com` and onto Binance demo trading (paper fills
-  against live order books). Document the API-key procurement steps in the
-  runbook (W3). Retire the testnet path or keep it behind
-  `EXCHANGE_ENV=TESTNET` for regression only.
-  - *Output:* engine places paper orders against live order-book depth.
-- **W1.2 — Startup key-permission assertion (allowlist semantics).** Implement
-  `verifyKeyPermissionsOrAbort()` on engine boot. **Allowlist, not denylist:**
-  abort startup unless the snapshot is exactly `{ enableReading: true,
-  enableFutures: true }` and **every** other capability flag is false. In
-  addition, abort if `ipRestrict !== true`, `ipAllowList` is empty, or
-  `tradingAuthorityExpirationTime` is in the past or unset. Behaviour is
-  identical for DEMO and LIVE keys (TESTNET is exempt because Binance does not
-  surface restrictions on testnet keys; the exemption is logged loudly).
-  - *Output:* a key with any extra scope (withdraw, internal transfer, margin,
-    sub-account control, options, universal transfer) prevents the engine from
-    starting; an empty IP allow-list does the same; an expired
-    trading-authority does the same.
+- **W1.1 — PAPER mode engine-local paper trading.** Per D1–D17 above:
+  CcxtBinanceExchangeClient subscribes to **live** `fapi.binance.com` for
+  market data in PAPER mode. Orders are intercepted and routed to
+  `PaperFillSimulator` (D15) using the M7 fill-simulator core. Account state
+  is simulated locally by `PaperAccountStateService` (D16). Reconciliation
+  includes the nullity probe (D13) to catch accidental order leaks.
+  - *Output:* engine simulates fills locally against live order-book depth
+    via the shared `FillSimulatorCore`, never writes to a real Binance account.
+- **W1.2 — Startup key-permission assertion (mode-aware allowlist).** Implement
+  `verifyKeyPermissionsOrAbort()` on engine boot per D8. **Allowlist, not denylist:**
+  - **TESTNET:** skip (audit `KEY_PERMISSION_ASSERTION_SKIPPED`, no exchange call).
+  - **PAPER:** abort startup unless the snapshot has `{ enableReading: true,
+    enableFutures: false }` and **every** other capability flag is false. Abort
+    if `ipRestrict !== true`, `ipAllowList` is empty, or
+    `tradingAuthorityExpirationTime` is in the past or unset. (D8 Fallback
+    Profile: dedicated zero-balance sub-account with `enableFutures: true` is
+    permitted; the engine enforces sub-account invariants at D13 probe time.)
+  - **LIVE:** identical to current; abort if key has `enableFutures: false`.
+  - *Output:* a key with `enableFutures: true` in PAPER or `enableFutures: false`
+    in LIVE prevents startup; an empty IP allow-list does the same; an expired
+    trading-authority does the same (both modes share IP-restrict + authority
+    checks).
 - **W1.3 — WebSocket resilience verification.** Reconnect-with-backoff already
   exists (M1 `MarketDataModule` + M6 W2 `SubscriptionRetainer`). The M11a task
   is to **verify under simulated 10-minute drop**, confirm the existing Telegram
@@ -554,15 +992,78 @@ a code gap.
   (W1.8 bootstrap-secret rotation or JWT rotation) into a single operational
   window is allowed and encouraged — counts as one drill, not two.
 
-- **W4.4 — Calibration day.** Before the soak proper begins, record 24h of
-  growth on `decisions`, `tick_aggregates`, `account_snapshots`,
-  `audit_events`, Telegram alert log, and project × 60 days. If the projection
-  exceeds host disk headroom, adjust retention in W3.10 and re-measure.
+- **W4.4 — Calibration day + pre-soak sanity + sample-size pre-flight.**
+  Before the soak proper begins:
+  1. **Disk sizing.** Record 24h of growth on `decisions`, `tick_aggregates`,
+     `account_snapshots`, `audit_events`, Telegram alert log, and project × 60 days.
+     If projection exceeds host disk headroom, adjust retention in W3.10 and re-measure.
+  2. **Pre-soak sanity step (asymmetric TOST equivalence per D10 lowFidelity).**
+     Run the simulator over the prior 60 days (or extended 90–120 days if needed
+     per calibration-window extension allowance) with:
+     - Strategy v0 (zero-edge baseline).
+     - Small panel of diverse zero-edge policies (random direction, alternating,
+       spread-only entries).
+     Compute the **90% CI on residual expectancy in risk units**:
+     `residual_R = residual_expectancy / per_trade_risk_budget`.
+     Tolerance band, asymmetric (per D10):
+     - `ε_upper = 0.05 R` (strict on optimistic bias).
+     - `ε_lower = −0.15 R` (looser on pessimistic bias).
+     **Pass criterion:** the 90% CI on `residual_R` must lie within `[ε_lower, ε_upper]`.
+     If outside the band, the runbook documents the decision: extend the calibration
+     window or accept the soak as exploratory only with operator sign-off.
+     **Power check:** calibration sample must produce at least 200 simulated fills,
+     otherwise test is inconclusive and window is extended.
+  3. **Soak sample-size pre-flight.** Compute:
+     - Per-trade variance attributable to missed-fill + slippage rolls (N=1000 runs).
+     - **Also report `Var(E[v1] − E[v2])` across the same N=1000 paired runs.**
+     - Derive the minimum detectable effect size at n=80 with α=0.05 from the
+       paired-difference variance.
+     If the MDE exceeds the historical between-version expectancy gap on backtest,
+     the soak is statistically underpowered. Trade floor must be raised or the soak
+     is acknowledged as exploratory.
 
 - **W4.5 — Soak runbook dry-run.** Operator executes the runbook's daily check
   + halt + drain + rollback + key-rotation procedures against a test fixture
   before the soak proper starts. Catches doc drift before it bites in an
   incident.
+
+- **W4.6 — PAPER sub-account creation & key fingerprint.** Operator creates a
+  dedicated zero-balance Binance USDT-M Futures sub-account, generates the
+  PAPER key with `enableReading + enableFutures` only, IP-restricts it to the
+  soak-host IP, sets a non-null trading-authority expiry, and records the key
+  fingerprint (first 4 + last 4 chars of the public key) in the operator log.
+  See ADR 0032 §D8 (Fallback Profile) for the full sub-account invariant spec.
+  **Operator runbook mandatory step:** Verify the sub-account key's IP allow-list
+  via Binance UI (Sub Accounts → sub-account → API Management → Edit → IP
+  Restriction). Binance no longer exposes a self-readable IP-list endpoint; the
+  engine's predicate only verifies `ipRestrict: true` (whitelist set or not), not
+  which IPs. Manual verification closes the gap.
+
+## TESTNET pre-M11b drill (complementary, required gate)
+
+PAPER validates strategy / risk / operational behaviour on live market data,
+but **never** exercises Binance's order-placement contract — order acceptance,
+rejection, partial fills, cancel semantics, protective-order behaviour at the
+matching engine. Those still need **Binance Futures testnet** to drill.
+
+TESTNET is therefore a separate **required gate** before M11b, run after
+PAPER soak success. Scope:
+- Place / cancel / open / close / protective-order lifecycle on Binance
+  testnet; assert every state transition matches the engine's state
+  machine.
+- Reconciliation against exchange state — `PaperReconciliationAdapter`
+  is not exercised; the live `ExchangeAccountStateSource` path is.
+- Rate-limit policy under harmless burst load (W1.4 token bucket against
+  testnet REST + WS).
+
+PAPER and TESTNET are complementary:
+- **PAPER**: live-market operational + statistical soak.
+- **TESTNET**: exchange execution-contract drill.
+
+M11b begins only when **both** have passed. Soak runbook records this as
+two independent green checks; ADR 0032 codifies the requirement.
+
+---
 
 ## Soak exit criteria → M11b
 
@@ -579,6 +1080,14 @@ following hold:
   candidates; ≥80 trades is the documented relaxation of M8's ≥200-trade
   floor for this specific soak-window evaluation.
 
+  **Closed-trade counting (D10):** Only trades closing via `sl`, `tp`, or
+  `intra_bar_stop` count toward the 80-trade floor. `force_close` exits
+  (M7 end-of-window), operator drains, and reconciliation-forced closes are
+  **excluded from the count** but surfaced in a separate evaluator panel for
+  visibility into excluded PnL. Additionally, a simulator decision with
+  `missed: true` does **not** consume the restricted profile's
+  `max_trades_per_day: 3` slot.
+
   **Fat-tailed-returns escape clause.** Per-trade crypto PnL is not Gaussian
   — M8 ADR-0018 records skew + kurtosis precisely because the tails are fat.
   A "2-sigma" argument understates the real floor. The escape rule:
@@ -593,10 +1102,53 @@ following hold:
 - **Reduced evaluation gate (soak-specific, documented).** M8's full
   12-criterion all-of promotion gate cannot run because v0 has no per-event
   outcome distribution. The soak-specific reduced gate evaluates v1 (executed)
-  against shadow v2/v3 (W4.2) and against the v0 no-trade null hypothesis:
-  - **Net positive expectancy** on v1's executed trades after fees + funding +
-    realised slippage, with bootstrap 95% CI excluding zero (paired
-    circular-block on v1's own trade tape; no v0 series required).
+  against shadow v2/v3 (W4.2):
+  
+  **Primary criterion: Active version beats shadow v2/v3** on the paired
+  common-random-numbers CI (D17):
+  - **Two paired cohorts (D17):**
+    1. **Trade-vs-trade CRN cohort.** Both versions traded same event;
+       same simulator roll. Isolates fill-noise differences and pure
+       decision-edge conditional on willingness to trade.
+    2. **Full same-event cohort with skip-handling.** All events where at
+       least one version traded. For events where one trades and one skips,
+       the skipping version's contribution is `pnl = 0`.
+  - **The comparison must pass on BOTH cohorts** (D17 mirrored from ADR 0019
+    criterion 12). If trade-vs-trade cohort says v1 wins but full cohort says
+    v2 wins because selectivity dominates, criterion is **inconclusive.**
+  - **lowFidelity behaviour (D10 / lowFidelity section):** M7's fill simulator
+    currently sets `lowFidelity: true` on every fill. So **every v1 PAPER fill
+    is `lowFidelity`** for the duration of M11a. The "two rankings — full-set
+    + `lowFidelity`-excluded" rule becomes unsatisfiable; the `lowFidelity`-excluded
+    subset is empty for v1. **Explicit downgrade:** if either side of the shadow
+    comparison has an empty `lowFidelity`-excluded subset, the "active version
+    beats shadow v2/v3" criterion is **automatically marked inconclusive** and
+    the soak gate downgrades to "v1's own expectancy CI excludes zero" alone
+    (same fail-safe as W4.2's missing-contracts downgrade).
+  - **Joint-test acknowledgement.** "v1's expectancy CI excludes zero" in
+    PAPER is a joint test of `(strategy edge + M7 fill model bias)`, not of
+    strategy edge alone. M11b's go-live decision must treat the PAPER CI as
+    a **necessary but not sufficient** condition.
+  - **M11b gate hardening when all PAPER fills are `lowFidelity`** (D10 § "M11b
+    gate hardening"): A positive PAPER CI under an all-`lowFidelity` simulator
+    is not strong enough on its own. If soak closes with every fill flagged
+    `lowFidelity`, M11a's outcome is "operational soak passed, trading edge
+    still provisional." Entering M11b then requires **one** of:
+    1. The M7 depth-aware extension lands, the soak is rerun, and the
+       `lowFidelity`-excluded ranking is non-empty + the comparison passes
+       on both rankings.
+    2. A **tightly capped live micro-probe** milestone (separately planned):
+       $100–$200 of real capital, one position max, one to two weeks,
+       explicit stop condition (drawdown ≥ 5%, ≥1 reconciliation drift, ≥1
+       unhandled rejection). M11b proper begins only after the micro-probe
+       completes without triggering its stop.
+    3. An **architect-approved waiver** documented in ADR 0032, stating in
+       writing that the first real-money period is still validation, not
+       scale-up, and naming the operator who accepted the residual risk.
+  
+  **Secondary criteria (all must also pass):**
+  - **Net positive expectancy** on v1's executed trades (alone, excluding
+    shadow comparison) with bootstrap 95% CI excluding zero.
   - **Stop / protective-order behaviour matches the M6 model** (compare
     `stop_gap_pct` + `protective_order_type` distributions to backtest).
   - **No unresolved reconciliation drift events** — defined as zero
@@ -605,11 +1157,6 @@ following hold:
     outcomes.
   - **No unresolved crash-recovery incidents** — every drill in W4.3 passed.
   - **Successful drill in the last 30 days** — recency requirement.
-  - **Active version beats v0 baseline:** v1's risk-adjusted return is
-    strictly positive (v0 returns zero; the test is whether v1's CI excludes
-    zero from above).
-  - **Active version beats shadow v2/v3** on net risk-adjusted metrics, per
-    M8's per-regime metrics applied to the shadow tape.
   - **Auth rotation exercised**: at least one bootstrap-secret rotation +
     one JWT-signing-secret rotation completed during the soak with no
     operator-visible downtime, and `revoked_jti` stayed bounded.
@@ -644,31 +1191,42 @@ improve the edge.
 
 ## Definition of done
 
-The stack runs on a single trusted local machine against Binance demo trading,
-with:
+The stack runs on a single trusted local machine against Binance live market
+data (PAPER mode), with:
 
-- W0 shared contracts landed (`ExchangeEnvironmentEnum`, key-permission port,
-  `ILiveModeProfile`, two-token live-mode boot);
-- key-permission assertion enforces an **allowlist** of exactly
-  `{ enableReading, enableFutures }` plus non-empty IP allow-list and a
-  non-expired trading authority;
+- W0 shared contracts landed (`ExchangeEnvironmentEnum` with TESTNET/PAPER/LIVE,
+  key-permission port with mode-aware allowlist, `ILiveModeProfile`, two-token
+  live-mode boot, `IAccountStateSource` + `IExecutionClient` ports, shadow
+  contracts, `IBootStateSource` dispatch for crash recovery);
+- key-permission assertion enforces mode-aware **allowlist** per D8 (PAPER rejects
+  `enableFutures: true` on primary key; Fallback Profile with dedicated sub-account
+  permitted); non-empty IP allow-list and non-expired trading authority required
+  for both PAPER and LIVE;
 - WS resilience verified under simulated drop, rate-limit guard policy
-  implemented, demo-trading migration complete;
+  implemented, PAPER mode live-market subscription complete;
 - auth rotation items landed and **exercised** during the soak;
 - M6 pre-go-live blockers (2.2.3 / 2.2.5 / 2.2.7) fixed and verified by W4.3
   drills;
 - no `0.0.0.0` bindings; engine on an internal docker network;
 - nightly encrypted-at-source backups + offsite + weekly restore-test passing;
-- retention enforced for `decisions` / `account_snapshots` / Telegram log;
-  `audit_events` archived;
+- retention enforced per D16 + D17 (`decisions` / `account_snapshots` / Telegram
+  log soak_duration + 30 days; `audit_events` archived; `boot_mode_history` +
+  `boot_mode_chain_rotations` retain forever);
 - `RUNBOOK.md` covering daily check, incidents, key rotation, bootstrap-secret
-  rotation, soak abort triggers, demo→live transition;
+  rotation, soak abort triggers, PAPER→TESTNET→LIVE transition, pre-soak sanity
+  step, TESTNET drill procedure;
 - restricted v1 profile committed via `ILiveModeProfile`; shadow v0/v2/v3
   recording into `shadow_decisions` with simulated-fill records produced by
-  the M7 fill simulator; per-version comparison report generated (both
-  full-set and `lowFidelity`-excluded rankings);
+  the M7 `FillSimulatorCore` (via `StreamingFillAdapter` for PAPER); per-version
+  comparison report generated (two cohorts — trade-vs-trade CRN + full
+  same-event; two `lowFidelity` rankings per cohort per D17);
+- **TESTNET pre-M11b drill** complete (order lifecycle + reconciliation +
+  rate-limit policy under burst load — all green, separate gate);
 - soak completed with all reduced-gate exit criteria met **or** the soak
   routed back to M8 because criteria failed without abort, **or** an abort
-  trigger fired and the soak was halted.
+  trigger fired and the soak was halted;
+- soak outcome bucket recorded explicitly per D10 lowFidelity section
+  (operational + edge confirmed, OR operational only + edge provisional
+  + one of three M11b entry paths named).
 
-Only on full pass does M11b begin.
+Only on full pass of PAPER soak **and** TESTNET drill does M11b begin.

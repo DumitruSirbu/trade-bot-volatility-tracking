@@ -2,7 +2,8 @@
  * Adversarial tests for LiveGoAheadVerifier (M11a W1.1).
  *
  * All negative paths: hash mismatch, file missing, file empty, whitespace-only.
- * DEMO / TESTNET env must skip the gate entirely (no file reads, no throws).
+ * PAPER / TESTNET env must skip the gate entirely (no file reads, no throws —
+ * ADR 0032 §D9 locks PAPER as LIVE-only).
  */
 
 import { ExchangeEnvironmentEnum } from '@bot/shared';
@@ -62,7 +63,7 @@ describe('LiveGoAheadVerifier — adversarial', () => {
         });
     });
 
-    describe('DEMO env — gate is skipped', () => {
+    describe('PAPER env — gate is skipped (ADR 0032 §D9)', () => {
         it('does not read any file and resolves without throwing', async () => {
             // BUILD
             const appConfig = {
@@ -71,8 +72,8 @@ describe('LiveGoAheadVerifier — adversarial', () => {
             } as never;
             const verifier = new LiveGoAheadVerifier(appConfig);
 
-            // OPERATE + CHECK
-            await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.DEMO)).resolves.toBeUndefined();
+            // OPERATE + CHECK — PAPER must follow the same skip semantics as TESTNET.
+            await expect(verifier.verifyOrThrow(ExchangeEnvironmentEnum.PAPER)).resolves.toBeUndefined();
         });
     });
 

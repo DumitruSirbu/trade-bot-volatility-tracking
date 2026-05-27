@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { hkdfSync } from 'node:crypto';
 
-import { AUTH_SECRET_PROVIDER, IAuthSecretProvider } from './AuthModule';
+import { AUTH_SECRET_PROVIDER, IAuthSecretProvider } from './authTokens';
 
 // M11a W1.7. HKDF-Expand-based sub-key derivation from the single master
 // signing secret. Two domains are derived at boot and held in memory:

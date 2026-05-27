@@ -16,18 +16,23 @@ import { API_KEY_FINGERPRINT_PREFIX_LEN, API_KEY_FINGERPRINT_SUFFIX_LEN } from '
 import { EXCHANGE_CLIENT, IExchangeClient } from '../exchange/interface';
 import { LiveGoAheadVerifier } from './LiveGoAheadVerifier';
 
-// M11a W1.1 / W1.2 (ADR 0028). PHASE 0.5 — runs after the schema gate has
-// validated `control_audit` exists and BEFORE EngineBootstrapService kicks
-// off the M6 10-phase pipeline.
+// PHASE 0.5 (ADR 0028 R0.2 / R0.4 + ADR 0032 §D8 Fallback Profile LOCKED).
+// Runs after the schema gate has validated `control_audit` exists and BEFORE
+// EngineBootstrapService kicks off the M6 10-phase pipeline.
 //
 // Responsibilities:
-//   1. Verify the LIVE two-token gate (LiveGoAheadVerifier).
+//   1. Verify the LIVE two-token gate (LiveGoAheadVerifier). PAPER is skipped
+//      per ADR 0032 §D9 — the allowlist below is PAPER's safety teeth.
 //   2. Emit a CRITICAL boot Telegram alert announcing resolved env + API-key
 //      fingerprint (first 4 + last 4 chars). Never the secret.
-//   3. For DEMO / LIVE: call `IExchangeClient.fetchKeyPermissions()`, evaluate
-//      the allowlist predicate, on failure write the audit row + Telegram
-//      alert + process.exit(1). For TESTNET: write a SKIPPED audit row and
-//      log loudly.
+//   3. Three branches per ADR 0028 §2.3:
+//        - TESTNET → write a SKIPPED audit row and log loudly. No exchange call.
+//        - PAPER   → call live `/sapi`, evaluate predicate with mode='paper'.
+//                    Failure path mirrors LIVE (CRITICAL alert + audit +
+//                    process.exit(1)) but the alert/audit text distinguishes
+//                    PAPER from LIVE so the operator can see which profile
+//                    failed.
+//        - LIVE    → existing behaviour via mode='live'.
 //
 // One reason to change per the SRP test: it is the boot-time chokepoint
 // for "is this engine allowed to talk to the exchange." Everything else
@@ -80,7 +85,13 @@ export class KeyPermissionAssertionService implements OnApplicationBootstrap {
             return;
         }
 
-        await this.assertAgainstExchange(nowMs);
+        // ADR 0028 §2.4 — `mode` selects the per-mode interpretation of the
+        // shared allowlist predicate. PAPER and LIVE both call live `/sapi`;
+        // the difference is the per-mode shape parameter passed to
+        // `isKeyPermissionSnapshotAcceptable`. Trivial enough to inline.
+        const mode: 'paper' | 'live' = env === ExchangeEnvironmentEnum.PAPER ? 'paper' : 'live';
+
+        await this.assertAgainstExchange(nowMs, mode);
     }
 
     // CRITICAL boot alert announces resolved env + key fingerprint. Field
@@ -88,8 +99,8 @@ export class KeyPermissionAssertionService implements OnApplicationBootstrap {
     // ever enters this payload.
     private async publishBootAlert(env: ExchangeEnvironmentEnum): Promise<void> {
         const payload: IAlertPayload = {
-            type: AlertTypeEnum.UNHANDLED_EXCEPTION,
-            severity: AlertSeverityEnum.CRITICAL,
+            type: AlertTypeEnum.BOOT_ENGINE_STARTED,
+            severity: AlertSeverityEnum.INFO,
             occurredAt: new Date().toISOString(),
             title: 'Engine boot — exchange environment resolved',
             body: `env=${env} keyFingerprint=${this.apiKeyFingerprint()}`,
@@ -134,14 +145,20 @@ export class KeyPermissionAssertionService implements OnApplicationBootstrap {
         }
     }
 
-    // DEMO / LIVE path. Reads the snapshot once, evaluates the predicate, and
-    // either returns clean or routes through failHard (which never returns).
-    private async assertAgainstExchange(nowMs: number): Promise<void> {
+    // PAPER / LIVE path. Reads the snapshot once, evaluates the mode-aware
+    // predicate, and either returns clean or routes through failHard (which
+    // never returns).
+    private async assertAgainstExchange(nowMs: number, mode: 'paper' | 'live'): Promise<void> {
         let snapshot: IKeyPermissionSnapshot;
 
         try {
             snapshot = await this.exchange.fetchKeyPermissions();
-        } catch {
+        } catch (cause) {
+            // Synchronous stderr flush — pino is async-buffered and would
+            // otherwise drop the diagnostic before process.exit. Sanitized
+            // message only (no raw ccxt error, no key material).
+            const detail = cause instanceof Error ? `${cause.name}: ${cause.message} | code=${(cause as { code?: string }).code ?? 'none'} | cause=${(cause as { cause?: unknown }).cause ?? 'none'}` : describe(cause);
+            process.stderr.write(`key.permission.fetch.error — ${detail}\n`);
             // ADR 0028 §2.5: a throw IS an assertion failure. `failHard` is
             // typed `Promise<never>` — control flow does not return.
             await this.failHard(['fetch_error'], null);
@@ -149,8 +166,8 @@ export class KeyPermissionAssertionService implements OnApplicationBootstrap {
             return;
         }
 
-        if (isKeyPermissionSnapshotAcceptable(snapshot, nowMs)) {
-            this.logger.log('key-permission assertion PASSED');
+        if (isKeyPermissionSnapshotAcceptable(snapshot, nowMs, { mode })) {
+            this.logger.log(`key-permission assertion PASSED (mode=${mode})`);
 
             return;
         }
@@ -205,12 +222,17 @@ export class KeyPermissionAssertionService implements OnApplicationBootstrap {
         if (snapshot.ipRestrict !== true) {
             failures.push('ipRestrict');
         }
+        // ipAllowList content not self-readable (Binance discontinued the
+        // endpoint in 2021); operator runbook verifies the allow-list set.
 
-        if (snapshot.ipAllowList.length === 0) {
-            failures.push('ipAllowList.empty');
-        }
-
-        if (snapshot.tradingAuthorityExpirationTime === null || snapshot.tradingAuthorityExpirationTime <= nowMs) {
+        // M11a post-R4 live smoke: Binance's /sapi/v1/account/apiRestrictions
+        // omits `tradingAuthorityExpirationTime` for sub-account keys (no UI
+        // to set, no API to expose). Null is therefore the only physically-
+        // possible value for the PAPER Fallback Profile sub-account key. If
+        // Binance DOES return a value (master/main-account key), validate it
+        // strictly. The operator-runbook check covers expiry discipline for
+        // sub-account keys via Binance UI's separate Sub-Account dashboard.
+        if (snapshot.tradingAuthorityExpirationTime !== null && snapshot.tradingAuthorityExpirationTime <= nowMs) {
             failures.push('tradingAuthorityExpirationTime');
         }
 
@@ -225,7 +247,12 @@ export class KeyPermissionAssertionService implements OnApplicationBootstrap {
     private async failHard(failingClauses: ReadonlyArray<string>, snapshot: IKeyPermissionSnapshot | null): Promise<never> {
         const reasonList = failingClauses.join(',');
         const redactedSnapshotLine = snapshot === null ? '' : ` snapshot=${this.formatRedactedSnapshot(snapshot)}`;
-        const fullReason = `clauses=${reasonList}${redactedSnapshotLine}`;
+        // env=<paper|live> prefix mirrors the alert title so a downstream
+        // audit reader can distinguish a PAPER allowlist failure (engine-local
+        // paper trading) from a LIVE one (real-money) without cross-referencing
+        // another column.
+        const envLabel = this.appConfig.exchangeEnv;
+        const fullReason = `env=${envLabel} clauses=${reasonList}${redactedSnapshotLine}`;
 
         this.logger.error(`KEY PERMISSION ASSERTION FAILED — clauses=${reasonList}`);
 
@@ -269,13 +296,17 @@ export class KeyPermissionAssertionService implements OnApplicationBootstrap {
     }
 
     private async bestEffortAlert(reasonList: string): Promise<void> {
+        // env prefix in the title lets the operator distinguish a PAPER
+        // allowlist failure (engine-local paper trading) from a LIVE one
+        // (real-money) at a glance — both fire CRITICAL.
+        const envLabel = this.appConfig.exchangeEnv;
         const payload: IAlertPayload = {
             type: AlertTypeEnum.UNHANDLED_EXCEPTION,
             severity: AlertSeverityEnum.CRITICAL,
             occurredAt: new Date().toISOString(),
-            title: 'KEY PERMISSION ASSERTION FAILED — engine refuses to start',
-            body: `env=${this.appConfig.exchangeEnv} keyFingerprint=${this.apiKeyFingerprint()} clauses=${reasonList}`,
-            data: { env: this.appConfig.exchangeEnv, keyFingerprint: this.apiKeyFingerprint(), clauses: reasonList },
+            title: `KEY PERMISSION ASSERTION FAILED (env=${envLabel}) — engine refuses to start`,
+            body: `env=${envLabel} keyFingerprint=${this.apiKeyFingerprint()} clauses=${reasonList}`,
+            data: { env: envLabel, keyFingerprint: this.apiKeyFingerprint(), clauses: reasonList },
         };
 
         try {

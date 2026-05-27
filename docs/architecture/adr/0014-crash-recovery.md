@@ -1,8 +1,8 @@
 # ADR 0014 — Crash recovery & re-association (M6)
 
-Status: Accepted (revised 2026-05-23 post-M6 review round 1)
-Date: 2026-05-23
-Milestone: M6 — Position management & reconciliation
+Status: Accepted (revised 2026-05-23 post-M6 review round 1; amended 2026-05-26 by the M11a paper-mode addendum (R0.4) to dispatch phase 1's state source on `EXCHANGE_ENV`)
+Date: 2026-05-23 (amended 2026-05-26)
+Milestone: M6 — Position management & reconciliation (amendment owned by M11a)
 
 ## Revision history
 
@@ -24,6 +24,21 @@ Milestone: M6 — Position management & reconciliation
     position transitions `MANUAL_ADOPTED_UNMANAGED → OPEN` and assigns
     a default `correlationMode = CORRELATED` (conservative — uses slot
     C, single-correlated cap). (Round-1 logic high #L11.)
+- **2026-05-26 (M11a paper-mode addendum R0.4):** Phase 1 amended to
+  read durable account-state truth via an injected `IBootStateSource`
+  dispatched on `EXCHANGE_ENV`. In LIVE/TESTNET it resolves to
+  `ExchangeBootStateSource` (the historical behaviour — `fetchPositions
+  / fetchOpenOrders / fetchBalance` against the configured ccxt
+  exchange). In PAPER it resolves to `PaperBootStateSource`, which
+  reads from `paper_account_state` + `paper_account_state_history` +
+  `paper_account_snapshots` (per ADR 0032 §D16) so PAPER's crash
+  recovery never touches the live exchange's account-state endpoints.
+  Phases 2 (the exchange-truth-pull naming subsumed by the port),
+  3 (drift-sweep — drift cases reused; PAPER drift handler severity is
+  CRITICAL per ADR 0032 §D12), and 4–9 are otherwise unchanged. The
+  D6 `boot_mode_history` HMAC-chain verification runs **before**
+  phase 1 (as part of `EngineBootstrapService` start), so a mode
+  mismatch aborts before any state read.
 
 ## Context
 
@@ -105,18 +120,39 @@ passes. The phase ordering still holds: phases 4c → 8 only run
 de-risking close paths originated by the boot sweep or the local monitor,
 not strategy-originated `OPEN`/`ADD` intents (those wait for phase 9).
 
-### 2. Phase 1 — load durable state
+### 2. Phase 1 — load durable state (port-dispatched on `EXCHANGE_ENV`)
 
 Sequence (all reads, no writes):
 
-1. `positionRepository.findAllNonClosed()` — rows in
-   `state ∈ {pending_open, open, closing, reconciling}`.
+1. `bootStateSource.loadNonClosedPositions()` — rows in
+   `state ∈ {pending_open, open, closing, reconciling}`. Dispatched per
+   the table below.
 2. `riskStateRepository.findToday()` — today's daily/weekly loss window.
+   PAPER reads the same `risk_state` row family; risk-gate state is mode-
+   neutral.
 3. `transactionRepository.findRecentNonTerminalIntents(lookbackHours: 24)`
    — fills with no terminal record (entries to the `UNKNOWN_INTENT_OUTCOME`
-   case-f handler).
-4. `accountSnapshotRepository.findLatest()` — informational only (for
-   drift-alert in phase 7).
+   case-f handler). PAPER does not produce `transactions` rows (paper
+   fills land in `paper_account_state_history`), so PAPER's source
+   returns an empty set.
+4. `bootStateSource.loadLatestAccountSnapshot()` — informational only
+   (for drift-alert in phase 7). PAPER reads `paper_account_snapshots`.
+
+**`IBootStateSource` dispatch (M11a R0.4 amendment):**
+
+| `EXCHANGE_ENV` | Bound implementation | Position source | Latest snapshot source |
+|---|---|---|---|
+| `LIVE` | `ExchangeBootStateSource` | `positionRepository.findAllNonClosed()` | `accountSnapshotRepository.findLatest()` |
+| `TESTNET` | `ExchangeBootStateSource` | same | same |
+| `PAPER` | `PaperBootStateSource` | `paperAccountStateRepository.findAllOpen()` + closed-history join | `paperAccountSnapshotRepository.findLatest()` |
+
+The port is bound once at NestJS module composition (Phase 0). The
+dispatch is **structural**, not runtime: a PAPER boot cannot reach the
+live exchange's `fetchPositions`/`fetchBalance` even by accident, because
+the engine's recovery loop holds a reference to `IBootStateSource`, not
+to `IExchangeClient` directly. This matches ADR 0032 §D14's runtime
+guard against `ModuleRef.get(IExchangeClient)` from non-whitelisted
+call sites.
 
 These reads populate the engine's working set. No state transitions
 happen yet.
