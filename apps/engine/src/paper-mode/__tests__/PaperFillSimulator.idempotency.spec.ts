@@ -13,15 +13,7 @@
  *      on string-encoded decimal fields.
  */
 
-import {
-    CoinTierEnum,
-    IOrderIntent,
-    ISimulatedFillCore,
-    OrderIntentActionEnum,
-    CorrelationModeEnum,
-    FlowTypeEnum,
-    PositionSideEnum,
-} from '@bot/shared';
+import { CoinTierEnum, IOrderIntent, ISimulatedFillCore, OrderIntentActionEnum, CorrelationModeEnum, FlowTypeEnum, PositionSideEnum } from '@bot/shared';
 
 import { BootstrapSubkeyDeriver } from '../../boot-mode-history/service/BootstrapSubkeyDeriver';
 import { AppConfigService } from '../../config/service';
@@ -67,10 +59,7 @@ function buildFakeRepo(store: IFakeIdempotencyStore): PaperSimulatorIdempotencyR
     const repo: Partial<PaperSimulatorIdempotencyRepository> = {
         findByKey: jest.fn(async (key) => {
             const found = store.rows.find(
-                (r) =>
-                    r.eventId === key.eventId
-                    && r.orderIntentId === key.orderIntentId
-                    && r.versionNamespace === key.versionNamespace,
+                (r) => r.eventId === key.eventId && r.orderIntentId === key.orderIntentId && r.versionNamespace === key.versionNamespace,
             );
 
             return (found as PaperSimulatorIdempotencyEntity | undefined) ?? null;

@@ -1,0 +1,27 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "rootDir": "src",
+        "outDir": "dist",
+        "declaration": true,
+        "declarationMap": true,
+        "sourceMap": true,
+        "module": "nodenext",
+        "moduleResolution": "nodenext",
+        // Override the base-config path mapping so we resolve @bot/shared via
+        // its *built* declaration files rather than pulling its TS sources
+        // into this project. Pulling sources tripped TS6059/TS6307 (files
+        // outside our rootDir). Node resolution at runtime already finds the
+        // workspace package via its `exports` field — this mapping just keeps
+        // the type-check aligned. Engine consumes @bot/shared the same way
+        // (workspace package via Node resolution) but uses `module: commonjs`
+        // which is more permissive on the path mapping; we use the
+        // `nodenext` flavor consistent with the rest of @bot/analysis.
+        "paths": {
+            "@bot/shared": ["../shared/dist/index.d.ts"],
+            "@bot/shared/*": ["../shared/dist/*"]
+        }
+    },
+    "include": ["src/**/*"],
+    "exclude": ["node_modules", "dist", "tests", "src/**/*.spec.ts"]
+}

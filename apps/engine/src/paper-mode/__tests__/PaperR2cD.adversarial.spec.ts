@@ -21,13 +21,7 @@
  * promotion semantics apply.
  */
 
-import {
-    AlertSeverityEnum,
-    AlertTypeEnum,
-    ExchangeEnvironmentEnum,
-    IPriceUpdateEvent,
-    PositionSideEnum,
-} from '@bot/shared';
+import { AlertSeverityEnum, AlertTypeEnum, ExchangeEnvironmentEnum, IPriceUpdateEvent, PositionSideEnum } from '@bot/shared';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { randomUUID } from 'node:crypto';
 
@@ -92,8 +86,8 @@ function buildFakeRepos(store: IFakeStore) {
     };
 
     const stateRepo = {
-        findByClientOrderId: jest.fn(async (clientOrderId: string) =>
-            [...store.state, ...staging.state].find((r) => r.clientOrderId === clientOrderId) ?? null,
+        findByClientOrderId: jest.fn(
+            async (clientOrderId: string) => [...store.state, ...staging.state].find((r) => r.clientOrderId === clientOrderId) ?? null,
         ),
         findOpenBySymbol: jest.fn(async () => []),
         findAllOpen: jest.fn(async () => [...store.state, ...staging.state]),
@@ -138,7 +132,15 @@ function buildFakeRepos(store: IFakeStore) {
         appendInTransaction: jest.fn(async (_manager, params) => {
             const seq = String(store.nextAuditSeq++);
             const recordedAt = new Date();
-            const hmac = params.computeHmac({ seq, recordedAt, mutationKind: params.mutationKind, subjectKind: params.subjectKind, subjectId: params.subjectId, payloadHash: params.payloadHash, prevRowHash: params.prevRowHash });
+            const hmac = params.computeHmac({
+                seq,
+                recordedAt,
+                mutationKind: params.mutationKind,
+                subjectKind: params.subjectKind,
+                subjectId: params.subjectId,
+                payloadHash: params.payloadHash,
+                prevRowHash: params.prevRowHash,
+            });
             const draft: PaperStateAuditEntity = {
                 id: randomUUID(),
                 seq,
@@ -237,13 +239,16 @@ describe('PaperMarkPriceSubscriptionBridge — R2c.D Item 1', () => {
             observedAt: new Date(1_700_000_000_000),
         });
         expect(streamingAdapterMock.notifyTick).toHaveBeenCalledTimes(1);
-        expect(streamingAdapterMock.notifyTick).toHaveBeenCalledWith('BTCUSDT', expect.objectContaining({
-            bid: '30000.5',
-            ask: '30000.5',
-            last: '30000.5',
-            mark: '30000.5',
-            ts: 1_700_000_000_000,
-        }));
+        expect(streamingAdapterMock.notifyTick).toHaveBeenCalledWith(
+            'BTCUSDT',
+            expect.objectContaining({
+                bid: '30000.5',
+                ask: '30000.5',
+                last: '30000.5',
+                mark: '30000.5',
+                ts: 1_700_000_000_000,
+            }),
+        );
     });
 
     it('releases the subscription on shutdown — subsequent events fire NEITHER side', () => {
@@ -312,9 +317,7 @@ describe('PaperDrawdownAbortHandler — R2c.D Item 2', () => {
         expect(haltFlag.isHalted()).toBe(true);
         expect(haltService.notePragmaticTransition).toHaveBeenCalledTimes(1);
         expect(stateService.appendStandaloneAuditRow).toHaveBeenCalledTimes(1);
-        expect(stateService.appendStandaloneAuditRow).toHaveBeenCalledWith(
-            expect.objectContaining({ mutationKind: MutationKindEnum.DRAWDOWN_ABORT }),
-        );
+        expect(stateService.appendStandaloneAuditRow).toHaveBeenCalledWith(expect.objectContaining({ mutationKind: MutationKindEnum.DRAWDOWN_ABORT }));
         expect(alertSink.publish).toHaveBeenCalledTimes(1);
         const alertCall = alertSink.publish.mock.calls[0][0];
         expect(alertCall.severity).toBe(AlertSeverityEnum.CRITICAL);
@@ -428,9 +431,7 @@ describe('PaperFundingAccrualService — R2c.D Item 3', () => {
 
     it('position opened AFTER funding ts → no accrual', async () => {
         const fundingTs = Date.parse('2026-06-01T08:00:00Z');
-        stateService.getOpenPositions.mockReturnValue([
-            buildPosition(PositionSideEnum.LONG, new Date(fundingTs + 60_000)),
-        ] as never);
+        stateService.getOpenPositions.mockReturnValue([buildPosition(PositionSideEnum.LONG, new Date(fundingTs + 60_000))] as never);
 
         await service.onFundingObserved(makeFundingEvent('0.0001', fundingTs));
 
@@ -445,9 +446,7 @@ describe('PaperFundingAccrualService — R2c.D Item 3', () => {
 
         expect(stateService.applyFunding).toHaveBeenCalledTimes(1);
         expect(stateService.appendStandaloneAuditRow).toHaveBeenCalledTimes(1);
-        expect(stateService.appendStandaloneAuditRow).toHaveBeenCalledWith(
-            expect.objectContaining({ mutationKind: MutationKindEnum.FUNDING_CAP_BREACH }),
-        );
+        expect(stateService.appendStandaloneAuditRow).toHaveBeenCalledWith(expect.objectContaining({ mutationKind: MutationKindEnum.FUNDING_CAP_BREACH }));
         expect(alertSink.publish).toHaveBeenCalledTimes(1);
         expect(alertSink.publish.mock.calls[0][0].severity).toBe(AlertSeverityEnum.CRITICAL);
     });

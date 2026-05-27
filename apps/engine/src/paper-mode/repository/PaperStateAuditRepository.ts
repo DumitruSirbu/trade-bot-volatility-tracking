@@ -52,11 +52,7 @@ export class PaperStateAuditRepository {
         return this.scope(manager).createQueryBuilder('a').orderBy('a.seq', 'DESC').limit(1).getOne();
     }
 
-    async findBySubject(
-        subjectKind: SubjectKindEnum,
-        subjectId: string,
-        manager?: EntityManager,
-    ): Promise<readonly PaperStateAuditEntity[]> {
+    async findBySubject(subjectKind: SubjectKindEnum, subjectId: string, manager?: EntityManager): Promise<readonly PaperStateAuditEntity[]> {
         return this.scope(manager)
             .createQueryBuilder('a')
             .where('a.subjectKind = :subjectKind', { subjectKind })
@@ -139,10 +135,7 @@ export class PaperStateAuditRepository {
         // Re-hydrate the row so callers see the final persisted form. The
         // findOne occurs through the same `manager` so it reads the just-
         // written row even before commit.
-        const persisted = await this.scope(manager)
-            .createQueryBuilder('a')
-            .where('a.id = :id', { id: raw.paper_state_audit_id })
-            .getOne();
+        const persisted = await this.scope(manager).createQueryBuilder('a').where('a.id = :id', { id: raw.paper_state_audit_id }).getOne();
 
         if (persisted === null) {
             throw new Error(`paper_state_audit row vanished mid-transaction (id=${raw.paper_state_audit_id})`);

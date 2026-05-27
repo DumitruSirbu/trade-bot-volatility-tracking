@@ -15,7 +15,8 @@ export interface IPositionDetailView {
     openedAt: string;
     slot: number;
     strategyVersionId: string;
-    eventId: string;
+    /** Real event_id from the opening decision, or null when no joining decision exists. */
+    eventId: string | null;
     state: PositionStateEnum;
     protectiveOrderType: ProtectiveOrderTypeEnum;
     slPrice: string | null;

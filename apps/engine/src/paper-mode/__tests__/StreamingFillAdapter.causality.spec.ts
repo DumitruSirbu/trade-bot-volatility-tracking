@@ -189,10 +189,7 @@ describe('StreamingFillAdapter — D15 causality + event-driven SL/TP', () => {
             );
 
             // Tick that crosses SL (price drops from 100 to 94, below SL 95).
-            adapter.notifyTick(
-                symbol,
-                buildSnapshot({ ts: 5_000, bid: '94', ask: '94', last: '94', mark: '94', high: '100', low: '94' }),
-            );
+            adapter.notifyTick(symbol, buildSnapshot({ ts: 5_000, bid: '94', ask: '94', last: '94', mark: '94', high: '100', low: '94' }));
 
             expect(onTrigger).toHaveBeenCalledTimes(1);
             const fillArg = onTrigger.mock.calls[0][0];
@@ -259,10 +256,7 @@ describe('StreamingFillAdapter — D15 causality + event-driven SL/TP', () => {
             );
 
             // Tick crosses TP (price moves up through 2100).
-            adapter.notifyTick(
-                symbol,
-                buildSnapshot({ ts: 5_000, bid: '2105', ask: '2105', last: '2105', mark: '2105', high: '2105', low: '2000' }),
-            );
+            adapter.notifyTick(symbol, buildSnapshot({ ts: 5_000, bid: '2105', ask: '2105', last: '2105', mark: '2105', high: '2105', low: '2000' }));
 
             expect(onTrigger).toHaveBeenCalledTimes(1);
         });
@@ -287,10 +281,7 @@ describe('StreamingFillAdapter — D15 causality + event-driven SL/TP', () => {
             );
 
             // Cross SL on a DIFFERENT symbol — must not fire.
-            adapter.notifyTick(
-                'ETHUSDT',
-                buildSnapshot({ ts: 5_000, bid: '50', ask: '50', last: '50', mark: '50', high: '100', low: '50' }),
-            );
+            adapter.notifyTick('ETHUSDT', buildSnapshot({ ts: 5_000, bid: '50', ask: '50', last: '50', mark: '50', high: '100', low: '50' }));
 
             expect(onTrigger).not.toHaveBeenCalled();
         });
@@ -331,10 +322,7 @@ describe('StreamingFillAdapter — D15 causality + event-driven SL/TP', () => {
 
             // A tick on the symbol that all 1000 were watching MUST fire
             // ZERO callbacks because every position has been released.
-            adapter.notifyTick(
-                'BTCUSDT',
-                buildSnapshot({ ts: 5_000, bid: '50', ask: '50', last: '50', mark: '50', high: '100', low: '50' }),
-            );
+            adapter.notifyTick('BTCUSDT', buildSnapshot({ ts: 5_000, bid: '50', ask: '50', last: '50', mark: '50', high: '100', low: '50' }));
             expect(onTrigger).not.toHaveBeenCalled();
         });
 

@@ -153,13 +153,22 @@ describe('PaperStateAuditHmacCodec — chain integrity properties', () => {
 
     describe('hashOrderedPayload', () => {
         it('produces a 32-byte SHA-256 digest', () => {
-            const digest = codec.hashOrderedPayload([['op', 'open'], ['client_order_id', 'tbvt-1']]);
+            const digest = codec.hashOrderedPayload([
+                ['op', 'open'],
+                ['client_order_id', 'tbvt-1'],
+            ]);
             expect(digest.length).toBe(32);
         });
 
         it('is order-sensitive — reordered pairs produce a different digest', () => {
-            const a = codec.hashOrderedPayload([['op', 'open'], ['client_order_id', 'tbvt-1']]);
-            const b = codec.hashOrderedPayload([['client_order_id', 'tbvt-1'], ['op', 'open']]);
+            const a = codec.hashOrderedPayload([
+                ['op', 'open'],
+                ['client_order_id', 'tbvt-1'],
+            ]);
+            const b = codec.hashOrderedPayload([
+                ['client_order_id', 'tbvt-1'],
+                ['op', 'open'],
+            ]);
             expect(a.equals(b)).toBe(false);
         });
     });

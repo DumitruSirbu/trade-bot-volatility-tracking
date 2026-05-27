@@ -1,10 +1,4 @@
-import {
-    AlertSeverityEnum,
-    AlertTypeEnum,
-    ExchangeEnvironmentEnum,
-    HaltSourceEnum,
-    IAlertPayload,
-} from '@bot/shared';
+import { AlertSeverityEnum, AlertTypeEnum, ExchangeEnvironmentEnum, HaltSourceEnum, IAlertPayload } from '@bot/shared';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 
@@ -127,16 +121,10 @@ export class PaperDrawdownAbortHandler {
         try {
             if (!this.haltFlag.isHalted()) {
                 this.haltFlag.halt(`${HaltSourceEnum.MODEL_DIVERGENCE}:paper_drawdown`);
-                this.haltService.notePragmaticTransition(
-                    HaltSourceEnum.MODEL_DIVERGENCE,
-                    'paper_drawdown',
-                    event.evaluatedAt.getTime(),
-                );
+                this.haltService.notePragmaticTransition(HaltSourceEnum.MODEL_DIVERGENCE, 'paper_drawdown', event.evaluatedAt.getTime());
             }
         } catch (cause) {
-            this.logger.error(
-                `PaperDrawdownAbortHandler: halt-flag flip failed — ${cause instanceof Error ? cause.message : String(cause)}`,
-            );
+            this.logger.error(`PaperDrawdownAbortHandler: halt-flag flip failed — ${cause instanceof Error ? cause.message : String(cause)}`);
         }
 
         // (b) Audit row. Opens its own audited transaction.
@@ -154,9 +142,7 @@ export class PaperDrawdownAbortHandler {
                 payloadHash,
             });
         } catch (cause) {
-            this.logger.error(
-                `PaperDrawdownAbortHandler: audit-row append failed — ${cause instanceof Error ? cause.message : String(cause)}`,
-            );
+            this.logger.error(`PaperDrawdownAbortHandler: audit-row append failed — ${cause instanceof Error ? cause.message : String(cause)}`);
         }
 
         // (c) CRITICAL Telegram alert.
@@ -176,9 +162,7 @@ export class PaperDrawdownAbortHandler {
         try {
             await this.alerts.publish(payload);
         } catch (cause) {
-            this.logger.error(
-                `PaperDrawdownAbortHandler: alert publish failed — ${cause instanceof Error ? cause.message : String(cause)}`,
-            );
+            this.logger.error(`PaperDrawdownAbortHandler: alert publish failed — ${cause instanceof Error ? cause.message : String(cause)}`);
         }
 
         this.logger.error(`PAPER drawdown abort — ${reason}`);

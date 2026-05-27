@@ -20,10 +20,7 @@
  */
 
 import { AUTH_SECRET_PROVIDER, REVOKED_JTI_REPOSITORY } from '../AuthModule';
-import {
-    AUTH_SECRET_PROVIDER as TOKEN_FROM_DERIVED_SIDE,
-    REVOKED_JTI_REPOSITORY as REVOKED_TOKEN_FROM_LEAF,
-} from '../authTokens';
+import { AUTH_SECRET_PROVIDER as TOKEN_FROM_DERIVED_SIDE, REVOKED_JTI_REPOSITORY as REVOKED_TOKEN_FROM_LEAF } from '../authTokens';
 import { DerivedKeyService } from '../DerivedKeyService';
 import { RevokedJtiPruneScheduler } from '../RevokedJtiPruneScheduler';
 

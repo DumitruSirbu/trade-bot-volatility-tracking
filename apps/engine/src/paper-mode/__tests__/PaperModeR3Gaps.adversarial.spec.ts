@@ -203,17 +203,11 @@ describe('GAP-2 — D6 audit HMAC includes assigned seq (codec-level binding)', 
             prevRowHash: null,
         };
 
-        const preAllocationHmac = codec.computeHmac(
-            subkey,
-            codec.encodePayload(CHAIN_NAME_PAPER_STATE_AUDIT, { ...basePayload, seq: '1' }),
-        );
+        const preAllocationHmac = codec.computeHmac(subkey, codec.encodePayload(CHAIN_NAME_PAPER_STATE_AUDIT, { ...basePayload, seq: '1' }));
 
         // Simulate: the DB RETURNING clause assigns seq=2 (e.g. a concurrent
         // transaction slipped in between INSERT and RETURNING).
-        const postAllocationHmac = codec.computeHmac(
-            subkey,
-            codec.encodePayload(CHAIN_NAME_PAPER_STATE_AUDIT, { ...basePayload, seq: '2' }),
-        );
+        const postAllocationHmac = codec.computeHmac(subkey, codec.encodePayload(CHAIN_NAME_PAPER_STATE_AUDIT, { ...basePayload, seq: '2' }));
 
         // The HMAC over seq=1 MUST NOT match the HMAC over seq=2.
         // If it did, a crash-replay window could bind the wrong seq without
@@ -250,14 +244,8 @@ describe('GAP-2 — D6 audit HMAC includes assigned seq (codec-level binding)', 
             prevRowHash: null,
         };
 
-        const preAllocation = codec.computeHmac(
-            subkey,
-            codec.encodePayload(CHAIN_NAME_PAPER_STATE_AUDIT, { ...sharedFields, seq: '0' }),
-        );
-        const postAllocation = codec.computeHmac(
-            subkey,
-            codec.encodePayload(CHAIN_NAME_PAPER_STATE_AUDIT, { ...sharedFields, seq: '5' }),
-        );
+        const preAllocation = codec.computeHmac(subkey, codec.encodePayload(CHAIN_NAME_PAPER_STATE_AUDIT, { ...sharedFields, seq: '0' }));
+        const postAllocation = codec.computeHmac(subkey, codec.encodePayload(CHAIN_NAME_PAPER_STATE_AUDIT, { ...sharedFields, seq: '5' }));
 
         expect(preAllocation.equals(postAllocation)).toBe(false);
     });
@@ -278,9 +266,7 @@ function emptyChainState(): IBootChainState {
 
 function buildChainRepos(state: IBootChainState, stagingH: BootModeHistoryEntity[], stagingR: BootModeChainRotationEntity[]) {
     const historyRepo: jest.Mocked<Pick<BootModeHistoryRepository, 'findOrderedAll' | 'findTip' | 'appendInTransaction'>> = {
-        findOrderedAll: jest.fn().mockImplementation(async () =>
-            [...state.historyRows, ...stagingH].sort((a, b) => Number(a.seq) - Number(b.seq)),
-        ),
+        findOrderedAll: jest.fn().mockImplementation(async () => [...state.historyRows, ...stagingH].sort((a, b) => Number(a.seq) - Number(b.seq))),
         findTip: jest.fn().mockImplementation(async () => {
             const merged = [...state.historyRows, ...stagingH];
             return merged.length === 0 ? null : [...merged].sort((a, b) => Number(b.seq) - Number(a.seq))[0];
@@ -299,16 +285,22 @@ function buildChainRepos(state: IBootChainState, stagingH: BootModeHistoryEntity
                 prevRowHash: params.prevRowHash,
                 thisRowHmac: Buffer.alloc(32),
             } as never;
-            draft.thisRowHmac = params.computeHmac({ seq, bootedAt, rowKind: draft.rowKind, exchangeEnv: draft.exchangeEnv, fromEnv: draft.fromEnv, toEnv: draft.toEnv, prevRowHash: draft.prevRowHash });
+            draft.thisRowHmac = params.computeHmac({
+                seq,
+                bootedAt,
+                rowKind: draft.rowKind,
+                exchangeEnv: draft.exchangeEnv,
+                fromEnv: draft.fromEnv,
+                toEnv: draft.toEnv,
+                prevRowHash: draft.prevRowHash,
+            });
             stagingH.push(draft);
             return draft;
         }),
     };
 
     const rotationRepo: jest.Mocked<Pick<BootModeChainRotationRepository, 'findOrderedAll' | 'findTip' | 'appendInTransaction'>> = {
-        findOrderedAll: jest.fn().mockImplementation(async () =>
-            [...state.rotationRows, ...stagingR].sort((a, b) => Number(a.seq) - Number(b.seq)),
-        ),
+        findOrderedAll: jest.fn().mockImplementation(async () => [...state.rotationRows, ...stagingR].sort((a, b) => Number(a.seq) - Number(b.seq))),
         findTip: jest.fn().mockImplementation(async () => {
             const merged = [...state.rotationRows, ...stagingR];
             return merged.length === 0 ? null : [...merged].sort((a, b) => Number(b.seq) - Number(a.seq))[0];
@@ -327,7 +319,15 @@ function buildChainRepos(state: IBootChainState, stagingH: BootModeHistoryEntity
                 prevRowHash: params.prevRowHash,
                 thisRowHmac: Buffer.alloc(32),
             } as never;
-            draft.thisRowHmac = params.computeHmac({ seq, rotatedAt, fromEnv: draft.fromEnv, toEnv: draft.toEnv, preTipHash: draft.preTipHash, transitionTokenHash: draft.transitionTokenHash, prevRowHash: draft.prevRowHash });
+            draft.thisRowHmac = params.computeHmac({
+                seq,
+                rotatedAt,
+                fromEnv: draft.fromEnv,
+                toEnv: draft.toEnv,
+                preTipHash: draft.preTipHash,
+                transitionTokenHash: draft.transitionTokenHash,
+                prevRowHash: draft.prevRowHash,
+            });
             stagingR.push(draft);
             return draft;
         }),
@@ -401,7 +401,10 @@ describe('GAP-3 — D7 single-use transition token (structural guarantee)', () =
         const state = emptyChainState();
 
         // First boot: genesis TESTNET.
-        { const { service } = buildChainService(state, ExchangeEnvironmentEnum.TESTNET); await service.runBootSequence(); }
+        {
+            const { service } = buildChainService(state, ExchangeEnvironmentEnum.TESTNET);
+            await service.runBootSequence();
+        }
         expect(state.historyRows).toHaveLength(1);
         expect(state.historyRows[0].rowKind).toBe(BootModeHistoryRowKindEnum.BOOT);
         expect(state.historyRows[0].exchangeEnv).toBe('testnet');
@@ -467,7 +470,10 @@ describe('GAP-3 — D7 single-use transition token (structural guarantee)', () =
         // either aborts (no TESTNET→PAPER wiring under PAPER tip) or produces
         // an inconsistent preTipHash (which the rotation-chain walk detects).
         const state = emptyChainState();
-        { const { service } = buildChainService(state, ExchangeEnvironmentEnum.TESTNET); await service.runBootSequence(); }
+        {
+            const { service } = buildChainService(state, ExchangeEnvironmentEnum.TESTNET);
+            await service.runBootSequence();
+        }
 
         const tesnetTipHmac = state.historyRows[0].thisRowHmac;
 
@@ -593,7 +599,15 @@ function buildAccountService(store: IFakeStore = emptyStore()): { service: Paper
                 prevRowHash: params.prevRowHash,
                 thisRowHmac: Buffer.alloc(32, 0xff),
             };
-            draft.thisRowHmac = params.computeHmac({ seq, recordedAt, mutationKind: draft.mutationKind, subjectKind: draft.subjectKind, subjectId: draft.subjectId, payloadHash: draft.payloadHash, prevRowHash: draft.prevRowHash });
+            draft.thisRowHmac = params.computeHmac({
+                seq,
+                recordedAt,
+                mutationKind: draft.mutationKind,
+                subjectKind: draft.subjectKind,
+                subjectId: draft.subjectId,
+                payloadHash: draft.payloadHash,
+                prevRowHash: draft.prevRowHash,
+            });
             stagingAudit.push(draft);
             return draft;
         }),
@@ -610,7 +624,10 @@ function buildAccountService(store: IFakeStore = emptyStore()): { service: Paper
             store.audit.push(...stagingAudit);
             store.meta.push(...stagingMeta);
             for (const row of stagingState as Array<PaperAccountStateEntity & { __toRestore?: boolean }>) {
-                if (row.__toRestore) { delete row.__toRestore; continue; }
+                if (row.__toRestore) {
+                    delete row.__toRestore;
+                    continue;
+                }
                 store.state.push(row);
             }
             store.history.push(...stagingHistory);
@@ -619,7 +636,10 @@ function buildAccountService(store: IFakeStore = emptyStore()): { service: Paper
         } catch (cause) {
             store.nextAuditSeq -= stagingAudit.length;
             for (const row of stagingState as Array<PaperAccountStateEntity & { __toRestore?: boolean }>) {
-                if (row.__toRestore) { delete row.__toRestore; store.state.push(row); }
+                if (row.__toRestore) {
+                    delete row.__toRestore;
+                    store.state.push(row);
+                }
             }
             throw cause;
         }

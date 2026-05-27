@@ -75,9 +75,8 @@ export const BOOT_MODE_HISTORY_ADVISORY_LOCK_KEY: bigint = 0x5b3f_c6c1_4b29_4f93
 export type TransitionTokenFileEnvName = 'TESTNET_TO_PAPER_TOKEN_FILE' | 'PAPER_TO_LIVE_TOKEN_FILE';
 export type TransitionTokenHashEnvName = 'TESTNET_TO_PAPER_TOKEN_HASH' | 'PAPER_TO_LIVE_TOKEN_HASH';
 
-export const TRANSITION_ENV_VARS: Readonly<
-    Record<string, { tokenFileEnv: TransitionTokenFileEnvName; tokenHashEnv: TransitionTokenHashEnvName }>
-> = Object.freeze({
-    TESTNET_PAPER: { tokenFileEnv: 'TESTNET_TO_PAPER_TOKEN_FILE', tokenHashEnv: 'TESTNET_TO_PAPER_TOKEN_HASH' },
-    PAPER_LIVE: { tokenFileEnv: 'PAPER_TO_LIVE_TOKEN_FILE', tokenHashEnv: 'PAPER_TO_LIVE_TOKEN_HASH' },
-});
+export const TRANSITION_ENV_VARS: Readonly<Record<string, { tokenFileEnv: TransitionTokenFileEnvName; tokenHashEnv: TransitionTokenHashEnvName }>> =
+    Object.freeze({
+        TESTNET_PAPER: { tokenFileEnv: 'TESTNET_TO_PAPER_TOKEN_FILE', tokenHashEnv: 'TESTNET_TO_PAPER_TOKEN_HASH' },
+        PAPER_LIVE: { tokenFileEnv: 'PAPER_TO_LIVE_TOKEN_FILE', tokenHashEnv: 'PAPER_TO_LIVE_TOKEN_HASH' },
+    });

@@ -157,7 +157,10 @@ export class KeyPermissionAssertionService implements OnApplicationBootstrap {
             // Synchronous stderr flush — pino is async-buffered and would
             // otherwise drop the diagnostic before process.exit. Sanitized
             // message only (no raw ccxt error, no key material).
-            const detail = cause instanceof Error ? `${cause.name}: ${cause.message} | code=${(cause as { code?: string }).code ?? 'none'} | cause=${(cause as { cause?: unknown }).cause ?? 'none'}` : describe(cause);
+            const detail =
+                cause instanceof Error
+                    ? `${cause.name}: ${cause.message} | code=${(cause as { code?: string }).code ?? 'none'} | cause=${(cause as { cause?: unknown }).cause ?? 'none'}`
+                    : describe(cause);
             process.stderr.write(`key.permission.fetch.error — ${detail}\n`);
             // ADR 0028 §2.5: a throw IS an assertion failure. `failHard` is
             // typed `Promise<never>` — control flow does not return.

@@ -65,7 +65,14 @@ function emptyStore(): IFakeStore {
     return { state: [], history: [], meta: [], snapshots: [], audit: [], nextAuditSeq: 1 };
 }
 
-function buildFakeRepos(store: IFakeStore, stagingAudit: PaperStateAuditEntity[], stagingMeta: PaperAccountStateMetaEntity[], stagingState: PaperAccountStateEntity[], stagingHistory: PaperAccountStateHistoryEntity[], stagingSnap: PaperAccountSnapshotEntity[]) {
+function buildFakeRepos(
+    store: IFakeStore,
+    stagingAudit: PaperStateAuditEntity[],
+    stagingMeta: PaperAccountStateMetaEntity[],
+    stagingState: PaperAccountStateEntity[],
+    stagingHistory: PaperAccountStateHistoryEntity[],
+    stagingSnap: PaperAccountSnapshotEntity[],
+) {
     const stateRepo: Pick<PaperAccountStateRepository, 'findByClientOrderId' | 'findOpenBySymbol' | 'findAllOpen' | 'insertNew' | 'deleteByClientOrderId'> = {
         findByClientOrderId: jest.fn(async (clientOrderId: string) => {
             const merged = [...store.state, ...stagingState];
@@ -220,7 +227,14 @@ function buildService(store: IFakeStore = emptyStore(), appConfig: AppConfigServ
     const stagingHistory: PaperAccountStateHistoryEntity[] = [];
     const stagingSnap: PaperAccountSnapshotEntity[] = [];
 
-    const { stateRepo, historyRepo, metaRepo, snapshotRepo, auditRepo } = buildFakeRepos(store, stagingAudit, stagingMeta, stagingState, stagingHistory, stagingSnap);
+    const { stateRepo, historyRepo, metaRepo, snapshotRepo, auditRepo } = buildFakeRepos(
+        store,
+        stagingAudit,
+        stagingMeta,
+        stagingState,
+        stagingHistory,
+        stagingSnap,
+    );
 
     const txShim = jest.fn().mockImplementation(async (fn: (manager: never) => Promise<unknown>) => {
         // Reset staging at the start of every transaction so a failed
@@ -340,10 +354,7 @@ describe('PaperAccountStateService — atomicity', () => {
 
             // Force the audit append to throw — simulates a CHECK constraint
             // violation or a network blip mid-transaction.
-            const auditRepoSpy = jest.spyOn(
-                (service as unknown as { auditRepo: PaperStateAuditRepository }).auditRepo,
-                'appendInTransaction',
-            );
+            const auditRepoSpy = jest.spyOn((service as unknown as { auditRepo: PaperStateAuditRepository }).auditRepo, 'appendInTransaction');
             auditRepoSpy.mockRejectedValueOnce(new Error('simulated audit-append failure'));
 
             await expect(
@@ -817,10 +828,7 @@ describe('PaperAccountStateService — atomicity', () => {
 
             // Now force the close's audit append to fail. The in-memory map
             // must still hold the open position; balance must NOT advance.
-            const auditRepoSpy = jest.spyOn(
-                (service as unknown as { auditRepo: PaperStateAuditRepository }).auditRepo,
-                'appendInTransaction',
-            );
+            const auditRepoSpy = jest.spyOn((service as unknown as { auditRepo: PaperStateAuditRepository }).auditRepo, 'appendInTransaction');
             auditRepoSpy.mockRejectedValueOnce(new Error('simulated close-audit failure'));
 
             await expect(

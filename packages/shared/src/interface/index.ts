@@ -32,6 +32,7 @@ export { IDecisionView } from './IDecisionView.js';
 export { IAccountEquityView } from './IAccountEquityView.js';
 export { IRiskStateView } from './IRiskStateView.js';
 export { IPerformanceByVersionView } from './IPerformanceByVersionView.js';
+export { IVersionComparisonResult, IPairedDiffSummary } from './IVersionComparisonResult.js';
 export { IPnlTickEvent, IStreamLaggedEvent } from './IPnlTickEvent.js';
 export { IPaginated } from './IPaginated.js';
 export { IAlertPayload } from './IAlertPayload.js';

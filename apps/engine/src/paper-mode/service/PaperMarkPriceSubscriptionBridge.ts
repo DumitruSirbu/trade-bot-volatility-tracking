@@ -117,8 +117,7 @@ export class PaperMarkPriceSubscriptionBridge implements OnApplicationBootstrap,
             });
         } catch (cause) {
             this.logger.error(
-                `PaperMarkPriceSubscriptionBridge: notifyMarkPrice failed for ${event.symbol} — ` +
-                    `${cause instanceof Error ? cause.message : String(cause)}`,
+                `PaperMarkPriceSubscriptionBridge: notifyMarkPrice failed for ${event.symbol} — ` + `${cause instanceof Error ? cause.message : String(cause)}`,
             );
         }
 
@@ -126,8 +125,7 @@ export class PaperMarkPriceSubscriptionBridge implements OnApplicationBootstrap,
             this.streamingAdapter.notifyTick(event.symbol, buildSnapshotFromTick(event));
         } catch (cause) {
             this.logger.error(
-                `PaperMarkPriceSubscriptionBridge: notifyTick failed for ${event.symbol} — ` +
-                    `${cause instanceof Error ? cause.message : String(cause)}`,
+                `PaperMarkPriceSubscriptionBridge: notifyTick failed for ${event.symbol} — ` + `${cause instanceof Error ? cause.message : String(cause)}`,
             );
         }
     }

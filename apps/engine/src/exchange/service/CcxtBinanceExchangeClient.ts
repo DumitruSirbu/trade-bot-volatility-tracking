@@ -364,7 +364,19 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
     }
 
     async close(): Promise<void> {
-        await this.callExchange('close', () => this.client.close());
+        // why: `close()` is invoked from NestJS `onModuleDestroy()` during
+        // shutdown — it tears the local ccxt connection without issuing any
+        // HTTP weight, so it does NOT belong in `OPERATION_REQUEST_WEIGHTS`.
+        // Routing it through `callExchange()` (which requires a weight entry)
+        // crashed the lifecycle teardown with `No REQUEST_WEIGHT entry for
+        // ccxt operation 'close'`. Bypass the rate-limiter for teardown only.
+        try {
+            await this.client.close();
+        } catch (cause) {
+            const sanitizedCause = sanitizeExchangeError(cause);
+
+            this.logger.error(`ccxt close failed: ${sanitizedCause}`);
+        }
     }
 
     async onModuleDestroy(): Promise<void> {

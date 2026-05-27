@@ -14,6 +14,7 @@
         "test": "jest",
         "typecheck": "tsc --noEmit",
         "strategy": "ts-node -r tsconfig-paths/register src/strategy/cli/StrategyCli.ts",
+        "backtest": "ts-node -r tsconfig-paths/register src/backtest/cli/BacktestCli.ts",
         "auth": "ts-node -r tsconfig-paths/register src/auth/cli/IssueRevokeCommands.ts",
         "typeorm": "typeorm-ts-node-commonjs -d src/database/dataSource.ts",
         "migration:generate": "pnpm typeorm migration:generate",

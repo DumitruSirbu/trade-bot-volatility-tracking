@@ -80,6 +80,8 @@ apps/engine/src/backtest/
 
 `BacktestModule` lives sibling-to `RiskModule`/`ExecutionModule` and depends on `StrategyModule`, `RiskModule` (for the gate service + sizer), `CommonModule`, and `MarketDataModule` (for `SymbolMarketState` + `computeIndicatorSnapshot`). `BacktestModule` is **not imported by `AppModule` in live mode** — it is registered only when the CLI command runs or when an integration test wires it explicitly. This keeps live startup free of the in-memory adapter providers entirely.
 
+**M12 invocation note.** The runner remains under `apps/engine/src/backtest/` after the M12 W2 adjudication (see ADR 0033 §2.5). The MCP `run_backtest` tool invokes it out-of-process via `pnpm --filter @bot/engine backtest run`, preserving the MCP↔engine address-space boundary. No file moves into `packages/analysis/` were performed.
+
 ## 4. How the replay works
 
 ### 4.1 Candle loading
