@@ -1,12 +1,15 @@
-# M11b — Cloud go-live & scaling
+# M15 — Cloud go-live & scaling
 
 **Goal:** Move the same stack off the local box onto a cheap, single-cloud
 deployment for real-money trading at minimal size, **only after the M11a soak
 confirms a live edge worth paying for**.
 
-**Depends on:** M11a (local soak complete; soak exit criteria met).
-**Defers from M11b until explicitly justified:** multi-instance scaling, managed
+**Depends on:** M11a (PAPER soak passing) + TESTNET pre-M11b drill green + M12/M13/M14 complete (recommended, but not strictly required).
+
+**Defers from M15 until explicitly justified:** multi-instance scaling, managed
 Kubernetes, multi-region, blue/green deploys.
+
+Renumbered from M11b in 2026-05-27. Local-first sequencing — M12/M13/M14 (analysis MCP, agentic loop, CI review gate) run on the local box and ship before cloud go-live.
 
 ## Why this is gated
 
@@ -18,7 +21,7 @@ likely first candidate; secret managers are usually not).
 
 ## Hosting menu (pick one before starting)
 
-The decision is deferred to the start of M11b because the right choice depends on
+The decision is deferred to the start of M15 because the right choice depends on
 what the soak proved and what live capital is actually committed.
 
 | Profile | What it is | Approx cost/mo | When it's the right pick |
@@ -73,7 +76,7 @@ Binance WebSocket and in-memory state.
 Single cloud, one VPC. Adjust components per hosting profile.
 
 ```
-┌─ Single cloud (chosen at M11b start), one VPC ────────────────────┐
+┌─ Single cloud (chosen at M15 start), one VPC ────────────────────┐
 │                                                                    │
 │   Dashboard container (nginx, static)  ──HTTPS/WSS (authed)──┐     │
 │         ▲                                                    ▼     │
@@ -100,7 +103,7 @@ Single cloud, one VPC. Adjust components per hosting profile.
 
 ### Deferred (do not enter without an explicit follow-up milestone)
 
-These were in the original M11 scope and are explicitly **out** of M11b unless a
+These were in the original M11 scope and are explicitly **out** of M15 unless a
 concrete need emerges. Each would justify its own milestone, not silent scope
 growth.
 
@@ -127,7 +130,7 @@ the others on net risk-adjusted metrics (M8 promotion gate against live data).
 Until then, the restricted profile holds.
 
 - *Output:* a documented checklist that must pass before any cap is relaxed;
-  relaxation is a deliberate, evidence-gated step, separate from the M11b
+  relaxation is a deliberate, evidence-gated step, separate from the M15
   go-live event itself.
 
 ## Definition of done

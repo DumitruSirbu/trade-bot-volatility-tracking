@@ -1067,6 +1067,8 @@ two independent green checks; ADR 0032 codifies the requirement.
 
 ## Soak exit criteria → M11b
 
+**Note (2026-05-27):** the cloud go-live milestone was renumbered M11b → M15. References to "M11b" in this document refer to the same milestone, now at `docs/plans/M15-cloud-go-live.md`.
+
 The soak is the gate, not a deadline. M11b is entered only when **all** of the
 following hold:
 
