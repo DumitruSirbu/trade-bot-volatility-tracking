@@ -37,13 +37,13 @@
 
 import { DataSource } from 'typeorm';
 
-import { CHAIN_NAME_BOOT_MODE_HISTORY, SUBKEY_BYTES } from '../const';
-import { BootModeHistoryEntity } from '../entity/BootModeHistoryEntity';
-import { BootModeHistoryRowKindEnum } from '../enum';
-import { BootModeHistoryRepository } from '../repository/BootModeHistoryRepository';
-import { BootModeHmacCodec } from '../service/BootModeHmacCodec';
-import { BootstrapSubkeyDeriver } from '../service/BootstrapSubkeyDeriver';
-import { AppConfigService } from '../../config/service';
+import { CHAIN_NAME_BOOT_MODE_HISTORY, SUBKEY_BYTES } from '../../src/boot-mode-history/const';
+import { BootModeHistoryEntity } from '../../src/boot-mode-history/entity/BootModeHistoryEntity';
+import { BootModeHistoryRowKindEnum } from '../../src/boot-mode-history/enum';
+import { BootModeHistoryRepository } from '../../src/boot-mode-history/repository/BootModeHistoryRepository';
+import { BootModeHmacCodec } from '../../src/boot-mode-history/service/BootModeHmacCodec';
+import { BootstrapSubkeyDeriver } from '../../src/boot-mode-history/service/BootstrapSubkeyDeriver';
+import { AppConfigService } from '../../src/config/service';
 
 const RUN_PG_INTEGRATION = process.env.RUN_PG_INTEGRATION === '1';
 

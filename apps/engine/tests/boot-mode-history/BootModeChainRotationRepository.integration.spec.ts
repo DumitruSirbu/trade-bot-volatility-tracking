@@ -22,12 +22,12 @@
 
 import { DataSource } from 'typeorm';
 
-import { CHAIN_NAME_BOOT_MODE_CHAIN_ROTATIONS, SUBKEY_BYTES } from '../const';
-import { BootModeChainRotationEntity } from '../entity/BootModeChainRotationEntity';
-import { BootModeChainRotationRepository } from '../repository/BootModeChainRotationRepository';
-import { BootModeHmacCodec } from '../service/BootModeHmacCodec';
-import { BootstrapSubkeyDeriver } from '../service/BootstrapSubkeyDeriver';
-import { AppConfigService } from '../../config/service';
+import { CHAIN_NAME_BOOT_MODE_CHAIN_ROTATIONS, SUBKEY_BYTES } from '../../src/boot-mode-history/const';
+import { BootModeChainRotationEntity } from '../../src/boot-mode-history/entity/BootModeChainRotationEntity';
+import { BootModeChainRotationRepository } from '../../src/boot-mode-history/repository/BootModeChainRotationRepository';
+import { BootModeHmacCodec } from '../../src/boot-mode-history/service/BootModeHmacCodec';
+import { BootstrapSubkeyDeriver } from '../../src/boot-mode-history/service/BootstrapSubkeyDeriver';
+import { AppConfigService } from '../../src/config/service';
 
 const RUN_PG_INTEGRATION = process.env.RUN_PG_INTEGRATION === '1';
 

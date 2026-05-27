@@ -43,13 +43,13 @@ import { randomUUID } from 'node:crypto';
 
 import { DataSource } from 'typeorm';
 
-import { CHAIN_NAME_PAPER_STATE_AUDIT, PAPER_STATE_AUDIT_SUBKEY_BYTES } from '../const';
-import { PaperStateAuditEntity } from '../entity/PaperStateAuditEntity';
-import { MutationKindEnum, SubjectKindEnum } from '../enum';
-import { PaperStateAuditRepository } from '../repository/PaperStateAuditRepository';
-import { PaperStateAuditHmacCodec } from '../service/PaperStateAuditHmacCodec';
-import { BootstrapSubkeyDeriver } from '../../boot-mode-history/service/BootstrapSubkeyDeriver';
-import { AppConfigService } from '../../config/service';
+import { CHAIN_NAME_PAPER_STATE_AUDIT, PAPER_STATE_AUDIT_SUBKEY_BYTES } from '../../src/paper-mode/const';
+import { PaperStateAuditEntity } from '../../src/paper-mode/entity/PaperStateAuditEntity';
+import { MutationKindEnum, SubjectKindEnum } from '../../src/paper-mode/enum';
+import { PaperStateAuditRepository } from '../../src/paper-mode/repository/PaperStateAuditRepository';
+import { PaperStateAuditHmacCodec } from '../../src/paper-mode/service/PaperStateAuditHmacCodec';
+import { BootstrapSubkeyDeriver } from '../../src/boot-mode-history/service/BootstrapSubkeyDeriver';
+import { AppConfigService } from '../../src/config/service';
 
 const RUN_PG_INTEGRATION = process.env.RUN_PG_INTEGRATION === '1';
 
