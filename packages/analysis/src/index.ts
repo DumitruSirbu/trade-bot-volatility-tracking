@@ -25,5 +25,7 @@ export type { IListPositionsParams, PositionListStatusFilter } from './query/lis
 export { getDecisions } from './query/getDecisions.js';
 export type { IGetDecisionsParams, IGetDecisionsResult } from './query/getDecisions.js';
 
+export { selectHaltState } from './query/selectHaltState.js';
+
 export { decodeCursor, encodeCursor } from './util/CursorCodec.js';
 export type { ICursorPayload } from './util/CursorCodec.js';

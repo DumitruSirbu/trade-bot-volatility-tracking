@@ -1,0 +1,16 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "rootDir": "src",
+        "outDir": "dist",
+        "module": "nodenext",
+        "moduleResolution": "nodenext",
+        "types": ["node"],
+        "paths": {
+            "@bot/shared": ["../../packages/shared/dist/index.d.ts"],
+            "@bot/shared/*": ["../../packages/shared/dist/*"]
+        }
+    },
+    "include": ["src/**/*.ts"],
+    "exclude": ["node_modules", "dist", "tests", "**/*.spec.ts"]
+}

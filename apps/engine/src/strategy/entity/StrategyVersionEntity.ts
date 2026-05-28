@@ -51,4 +51,14 @@ export class StrategyVersionEntity {
 
     @Column({ name: 'promotion_note', type: 'text', nullable: true })
     promotionNote?: string | null;
+
+    // M13 W0 (ADR 0036 §2.4) — agent-draft provenance. Both nullable: historical
+    // hand-authored rows leave them NULL; the partial UNIQUE index
+    // (parent_version_id, week_iso) WHERE week_iso IS NOT NULL enforces
+    // idempotency for agent-drafted rows only.
+    @Column({ name: 'week_iso', type: 'text', nullable: true })
+    weekIso?: string | null;
+
+    @Column({ name: 'rationale', type: 'text', nullable: true })
+    rationale?: string | null;
 }

@@ -12,6 +12,7 @@ import type { createMcpDataSource } from '@bot/analysis';
 
 import { buildCompareVersionsTool } from './compareVersions.tool.js';
 import { buildGetDecisionsTool } from './getDecisions.tool.js';
+import { buildGetHaltStateTool } from './getHaltState.tool.js';
 import { buildGetPerformanceTool } from './getPerformance.tool.js';
 import { buildListPositionsTool } from './listPositions.tool.js';
 import { buildRunBacktestTool } from './runBacktest.tool.js';
@@ -24,5 +25,6 @@ export function registerAllTools(registry: ToolRegistry, ds: AnalysisDataSource)
     registry.registerReadOnlyTool(buildCompareVersionsTool(ds));
     registry.registerReadOnlyTool(buildListPositionsTool(ds));
     registry.registerReadOnlyTool(buildGetDecisionsTool(ds));
+    registry.registerReadOnlyTool(buildGetHaltStateTool(ds));
     registry.registerReadOnlyTool(buildRunBacktestTool());
 }

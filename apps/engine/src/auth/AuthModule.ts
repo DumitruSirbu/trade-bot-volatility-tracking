@@ -92,6 +92,12 @@ interface IJwtPayload {
     scopes: AuthScopeEnum[];
     iat: number;
     exp: number;
+    // M13 fix wave 7 — JWT `aud` claim. M9 W2 / ADR 0020 originally minted tokens
+    // without an audience, which silently broke M13 W1.B's MCP bearer verifier
+    // (it requires `aud === 'mcp'`). Default is `'engine'` so existing engine
+    // routes / AuthGuard stay unaffected; operators mint MCP tokens with
+    // `--aud mcp`. The MCP verifier owns the actual audience-allowlist check.
+    aud?: string;
 }
 
 function base64UrlEncode(input: Buffer | string): string {
@@ -122,7 +128,11 @@ export interface IIssueTokenInput {
     scopes: AuthScopeEnum[];
     ttlSec: number;
     now: Date;
+    // M13 fix wave 7 — optional audience; defaults to `'engine'`.
+    aud?: string;
 }
+
+export const AUTH_TOKEN_DEFAULT_AUDIENCE = 'engine';
 
 export interface IIssuedToken {
     token: string;
@@ -145,12 +155,15 @@ export class AuthTokenService {
         const exp = iat + (input.ttlSec > 0 ? input.ttlSec : AUTH_TOKEN_DEFAULT_TTL_SEC);
         const jti = randomUUID();
 
+        const aud = input.aud === undefined || input.aud.length === 0 ? AUTH_TOKEN_DEFAULT_AUDIENCE : input.aud;
+
         const payload: IJwtPayload = {
             sub: input.sub,
             jti,
             scopes: input.scopes,
             iat,
             exp,
+            aud,
         };
 
         const headerAndPayload = `${AUTH_HS256_HEADER_B64URL}.${base64UrlEncode(JSON.stringify(payload))}`;
@@ -236,6 +249,14 @@ function isWellFormedPayload(value: unknown): value is IJwtPayload {
     }
 
     if (!Array.isArray(v.scopes)) {
+        return false;
+    }
+
+    // M13 fix wave 7 — `aud` is optional on the wire (legacy tokens minted
+    // before W1.B carry no aud). When present it must be a string. The
+    // audience-allowlist policy itself lives in each consumer (engine
+    // AuthGuard ignores it today; MCP bearer verifier enforces 'mcp').
+    if (v.aud !== undefined && typeof v.aud !== 'string') {
         return false;
     }
 

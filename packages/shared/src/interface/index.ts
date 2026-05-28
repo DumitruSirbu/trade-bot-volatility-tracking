@@ -21,6 +21,7 @@ export { ILoginRequest, ILoginResponse } from './IAuthLogin.js';
 export { IRateLimitFailure } from './IRateLimitFailure.js';
 export { IApiError } from './IApiError.js';
 export { IKillSwitchState } from './IKillSwitchState.js';
+export { IHaltStateView } from './IHaltStateView.js';
 export { IHaltAuditEntry } from './IHaltAuditEntry.js';
 export { IHaltChangedEvent } from './IHaltChangedEvent.js';
 export { IRiskHaltEvent } from './IRiskHaltEvent.js';

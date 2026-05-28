@@ -24,7 +24,8 @@
  *   [3] DELETE from a whitelisted table → same rejection.
  *   [4] SELECT from a whitelisted table (positions) → succeeds (empty or rows).
  *   [5] SELECT from auth_tokens (sensitive, NOT in whitelist) → 42501.
- *   [6] SELECT from revoked_jti (sensitive, NOT in whitelist) → 42501.
+ *   [6] SELECT from revoked_jti (M13 ADR 0038 — explicitly granted SELECT;
+ *       INSERT/UPDATE/DELETE still rejected with 42501).
  *   [7] SELECT from boot_mode_history (NOT in whitelist) → 42501.
  *   [8] SELECT from paper_account_state (NOT in whitelist) → 42501.
  *   [9] pg_sleep(35) → 57014 query_canceled (statement_timeout = 30s).
@@ -194,12 +195,36 @@ describe('mcp_reader role — permission enforcement (ADR 0034 §5)', () => {
         );
     });
 
-    // ---- [6] SELECT from revoked_jti is rejected ----
+    // ---- [6] SELECT from revoked_jti succeeds (M13 ADR 0038 grant);
+    //         writes still rejected by REVOKE + read-only-tx. ----
 
-    it('[6] SELECT FROM revoked_jti is rejected (not in whitelist)', async () => {
+    it('[6a] SELECT FROM revoked_jti succeeds (M13 ADR 0038 — granted for bearer revocation check)', async () => {
+        skipIfNotReachable();
+        const result = await client!.query(`SELECT 1 FROM revoked_jti LIMIT 1`);
+        expect(result).toBeDefined();
+        expect(Array.isArray(result.rows)).toBe(true);
+    });
+
+    it('[6b] INSERT INTO revoked_jti is rejected (read-only role)', async () => {
         skipIfNotReachable();
         await assertSqlstateRejection(
-            `SELECT * FROM revoked_jti LIMIT 1`,
+            `INSERT INTO revoked_jti (jti, revoked_at) VALUES ('test-jti', NOW())`,
+            INSUFFICIENT_PRIVILEGE,
+        );
+    });
+
+    it('[6c] UPDATE revoked_jti is rejected (read-only role)', async () => {
+        skipIfNotReachable();
+        await assertSqlstateRejection(
+            `UPDATE revoked_jti SET jti = 'x' WHERE 1=0`,
+            INSUFFICIENT_PRIVILEGE,
+        );
+    });
+
+    it('[6d] DELETE FROM revoked_jti is rejected (read-only role)', async () => {
+        skipIfNotReachable();
+        await assertSqlstateRejection(
+            `DELETE FROM revoked_jti WHERE 1=0`,
             INSUFFICIENT_PRIVILEGE,
         );
     });
