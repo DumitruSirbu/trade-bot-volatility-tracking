@@ -1,10 +1,6 @@
 // M13 W4 — paired-backtest runner tests.
 
-import {
-    runComparisonBacktests,
-    BacktestWindowMismatchError,
-    type IComparisonMcpPort,
-} from '../../src/backtest/runComparisonBacktests.js';
+import { runComparisonBacktests, BacktestWindowMismatchError, type IComparisonMcpPort } from '../../src/backtest/runComparisonBacktests.js';
 import type { BacktestReportParsed } from '../../src/mcp/schemas.js';
 
 function makeReport(label: string, from: string, to: string): BacktestReportParsed {
@@ -43,7 +39,10 @@ function makeReport(label: string, from: string, to: string): BacktestReportPars
     };
 }
 
-function makeMcp(activeReport: BacktestReportParsed, draftReport: BacktestReportParsed): IComparisonMcpPort & { calls: Array<{ versionId: number; from: string; to: string }> } {
+function makeMcp(
+    activeReport: BacktestReportParsed,
+    draftReport: BacktestReportParsed,
+): IComparisonMcpPort & { calls: Array<{ versionId: number; from: string; to: string }> } {
     const calls: Array<{ versionId: number; from: string; to: string }> = [];
     return {
         calls,
@@ -56,10 +55,7 @@ function makeMcp(activeReport: BacktestReportParsed, draftReport: BacktestReport
 
 describe('runComparisonBacktests — happy path', () => {
     it('returns both reports when active and draft windows match', async () => {
-        const mcp = makeMcp(
-            makeReport('active', '2026-02-26', '2026-05-27'),
-            makeReport('draft', '2026-02-26', '2026-05-27'),
-        );
+        const mcp = makeMcp(makeReport('active', '2026-02-26', '2026-05-27'), makeReport('draft', '2026-02-26', '2026-05-27'));
 
         const result = await runComparisonBacktests({
             mcp,
@@ -81,10 +77,7 @@ describe('runComparisonBacktests — happy path', () => {
 
 describe('runComparisonBacktests — window mismatch', () => {
     it('throws BacktestWindowMismatchError when fromUtcDate diverges', async () => {
-        const mcp = makeMcp(
-            makeReport('active', '2026-02-26', '2026-05-27'),
-            makeReport('draft', '2026-02-27', '2026-05-27'),
-        );
+        const mcp = makeMcp(makeReport('active', '2026-02-26', '2026-05-27'), makeReport('draft', '2026-02-27', '2026-05-27'));
 
         await expect(
             runComparisonBacktests({
@@ -98,10 +91,7 @@ describe('runComparisonBacktests — window mismatch', () => {
     });
 
     it('throws BacktestWindowMismatchError when toUtcDate diverges', async () => {
-        const mcp = makeMcp(
-            makeReport('active', '2026-02-26', '2026-05-27'),
-            makeReport('draft', '2026-02-26', '2026-05-28'),
-        );
+        const mcp = makeMcp(makeReport('active', '2026-02-26', '2026-05-27'), makeReport('draft', '2026-02-26', '2026-05-28'));
 
         await expect(
             runComparisonBacktests({

@@ -130,9 +130,7 @@ describe('buildReport — JSON contract', () => {
         expect(json.headline.draftVersionId).toBe(999);
         expect(json.headline.expectedDirection).toBe('better');
         expect(json.activeVsDraft).toContainEqual({ metric: 'netPnlUsdt', active: '92.00', draft: '105.00' });
-        expect(json.perRegime).toEqual([
-            { regime: 'regime:trend', activeTrades: 5, draftTrades: 6, activeNetPnl: '92.00', draftNetPnl: '105.00' },
-        ]);
+        expect(json.perRegime).toEqual([{ regime: 'regime:trend', activeTrades: 5, draftTrades: 6, activeNetPnl: '92.00', draftNetPnl: '105.00' }]);
         expect(json.llmRationale).toBe('Tighten signal threshold to reduce noise.');
         expect(json.provenance.gatewayCostUsd).toBe(0.0123);
     });

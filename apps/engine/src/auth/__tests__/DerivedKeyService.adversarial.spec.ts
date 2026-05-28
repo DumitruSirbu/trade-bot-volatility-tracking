@@ -5,7 +5,7 @@
  * cross-use fails a MAC verification, v2-info-derived key differs from v1.
  */
 
-import { createHmac } from 'node:crypto';
+import { createHmac, hkdfSync } from 'node:crypto';
 
 import { DerivedKeyService } from '../DerivedKeyService';
 
@@ -126,7 +126,6 @@ describe('DerivedKeyService — adversarial', () => {
     describe('v2 info string produces a different key (forward-compatibility)', () => {
         it('a key derived with info="cursor v2" differs from "cursor v1"', () => {
             // BUILD — derive a v2 key directly using the same HKDF mechanism
-            const { hkdfSync } = require('node:crypto');
             const master = Buffer.from(MASTER_32, 'hex');
 
             const v1Key = Buffer.from(hkdfSync('sha256', master, Buffer.alloc(0), Buffer.from('cursor v1', 'utf8'), 32));
@@ -138,7 +137,6 @@ describe('DerivedKeyService — adversarial', () => {
 
         it('getCursorKey() returns the v1 key (not v2)', () => {
             // BUILD
-            const { hkdfSync } = require('node:crypto');
             const master = Buffer.from(MASTER_32, 'hex');
             const expectedV1 = Buffer.from(hkdfSync('sha256', master, Buffer.alloc(0), Buffer.from('cursor v1', 'utf8'), 32));
 

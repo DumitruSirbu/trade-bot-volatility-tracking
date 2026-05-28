@@ -10,6 +10,7 @@ import { RateLimitPolicyService } from '../RateLimitPolicyService';
 import { ExchangeRateLimitExhaustedException, SymbolRateLimitExhaustedException } from '../../exception';
 import { IRateLimitHeaders, IRateLimitedCall } from '../../interface/IRateLimitPolicy';
 import { ORDERS_10S_PUBLISHED_LIMIT, RATE_LIMIT_SAFETY_MARGIN, REQUEST_WEIGHT_1M_PUBLISHED_LIMIT } from '../../const/rateLimitConsts';
+import { parseRateLimitHeaders } from '../../utils/parseRateLimitHeaders';
 
 // ─── factory helpers ──────────────────────────────────────────────────────────
 
@@ -25,7 +26,7 @@ function buildOrderCall(overrides: Partial<IRateLimitedCall> = {}): IRateLimited
     };
 }
 
-function buildReadCall(overrides: Partial<IRateLimitedCall> = {}): IRateLimitedCall {
+function _buildReadCall(overrides: Partial<IRateLimitedCall> = {}): IRateLimitedCall {
     return {
         operation: 'fetchPositions',
         requestWeight: 5,
@@ -165,7 +166,7 @@ describe('RateLimitPolicyService — adversarial', () => {
             // BUILD — drain BTC's per-symbol ORDERS_10S bucket
             const { service } = buildService();
             const btcOrderCall = buildOrderCall({ symbol: 'BTCUSDT', mode: 'fail-fast' });
-            const etcOrderCall = buildOrderCall({ symbol: 'ETHUSDT', mode: 'fail-fast' });
+            const _etcOrderCall = buildOrderCall({ symbol: 'ETHUSDT', mode: 'fail-fast' });
 
             // We may need to drain the per-symbol 30% share
             let btcDrained = false;
@@ -206,7 +207,6 @@ describe('RateLimitPolicyService — adversarial', () => {
         it('emits at most one alert for repeated drift in the coalesce window', async () => {
             // BUILD
             const { service, alerts, clock } = buildService();
-            const COALESCE_WINDOW_MS = 5 * 60 * 1_000;
 
             // Simulate server reporting 50% capacity used (well above 10% drift
             // threshold) while local accounting shows 0 used
@@ -228,7 +228,7 @@ describe('RateLimitPolicyService — adversarial', () => {
 
         it('allows a second alert after the coalesce window expires', async () => {
             // BUILD
-            const { service, alerts, clock } = buildService();
+            const { service, alerts: _alerts, clock } = buildService();
             const COALESCE_WINDOW_MS = 5 * 60 * 1_000;
 
             // After each reconcile the local accounting is updated to match the
@@ -326,7 +326,7 @@ describe('RateLimitPolicyService — adversarial', () => {
 
         it('doubles the freeze duration on second 429 within the freeze window', async () => {
             // BUILD
-            const { service, clock } = buildService();
+            const { service, clock: _clock } = buildService();
 
             // OPERATE — first 429
             service.reconcileFromHeaders(buildHeaders({ responseStatus: 429, retryAfterSec: 60 }));
@@ -346,9 +346,6 @@ describe('RateLimitPolicyService — adversarial', () => {
 
     describe('malformed Binance response headers — parseRateLimitHeaders robustness', () => {
         it('non-numeric weight header collapses to null without throwing', () => {
-            // BUILD
-            const { parseRateLimitHeaders } = require('../../utils/parseRateLimitHeaders');
-
             // OPERATE + CHECK
             expect(() => parseRateLimitHeaders({ 'x-mbx-used-weight-1m': 'not-a-number' }, 200)).not.toThrow();
 
@@ -357,19 +354,16 @@ describe('RateLimitPolicyService — adversarial', () => {
         });
 
         it('negative weight header is treated as null', () => {
-            const { parseRateLimitHeaders } = require('../../utils/parseRateLimitHeaders');
             const result = parseRateLimitHeaders({ 'x-mbx-used-weight-1m': '-5' }, 200);
             expect(result.usedWeight1m).toBeNull();
         });
 
         it('array-valued header takes the first element', () => {
-            const { parseRateLimitHeaders } = require('../../utils/parseRateLimitHeaders');
             const result = parseRateLimitHeaders({ 'x-mbx-used-weight-1m': ['42', '99'] }, 200);
             expect(result.usedWeight1m).toBe(42);
         });
 
         it('undefined header value collapses to null', () => {
-            const { parseRateLimitHeaders } = require('../../utils/parseRateLimitHeaders');
             const result = parseRateLimitHeaders({}, 200);
             expect(result.usedWeight1m).toBeNull();
             expect(result.orderCount10s).toBeNull();

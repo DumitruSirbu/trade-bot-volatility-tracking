@@ -16,7 +16,6 @@ import {
 import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { Money, MoneyValue } from '../../common/utils/money';
-import { OrderPolicyRouter } from '../../execution/service/OrderPolicyRouter';
 import { TickAggregateEntity, BookSnapshotEntity } from '../../market-data/entity';
 import { CANDLE_5M_INTERVAL_MS } from '../../market-data/const/candleConsts';
 import {
@@ -26,7 +25,7 @@ import {
     MAX_SAME_DIRECTION_EXPOSURE_USDT,
     WEEKLY_LOSS_LIMIT_USDT,
 } from '../../risk/const/riskConsts';
-import { IApprovedRiskDecision, IOrderIntent, IRiskDecision, IRiskGateContext, isApprovedOpening } from '../../risk/interface';
+import { IApprovedRiskDecision, IOrderIntent, IRiskGateContext, isApprovedOpening } from '../../risk/interface';
 import { PositionSizer, ReservationLedger, RiskGateService } from '../../risk/service';
 import { buildMarketSnapshot } from '../../strategy/mapper';
 import { IOpenPositionState, IStrategy, ISignal } from '../../strategy/interface';
@@ -357,7 +356,7 @@ export class BacktestOrchestrator {
         signal: ISignal,
         decision: IApprovedRiskDecision,
         fill: ReturnType<HistoricalFillAdapter['simulateFill']>,
-        ctx: IBacktestOrchestratorContext,
+        _ctx: IBacktestOrchestratorContext,
     ): IBacktestPosition {
         if (signal.proposedExit === null) {
             // Defensive narrowing — checked before reaching here.

@@ -195,10 +195,7 @@ async function renderDryRunReport(
     };
 }
 
-function makeDryRunPlaceholderReport(
-    performance: PerformanceByVersionViewParsed,
-    parentVersionId: number,
-): BacktestReportParsed {
+function makeDryRunPlaceholderReport(performance: PerformanceByVersionViewParsed, parentVersionId: number): BacktestReportParsed {
     // Zero-trade placeholder so downstream report rendering produces the
     // canonical "no data" rows rather than crashing on missing fields. The
     // promotion-gate evaluation invoked inside buildAgentReport will surface
@@ -298,11 +295,7 @@ function extractBootstrapBound(report: BacktestReportParsed, bound: 'lo' | 'hi')
     return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-async function persistHistoryBestEffort(
-    deps: IRunWeeklyLoopDeps,
-    result: IRunWeeklyLoopResult,
-    startedAt: Date,
-): Promise<void> {
+async function persistHistoryBestEffort(deps: IRunWeeklyLoopDeps, result: IRunWeeklyLoopResult, startedAt: Date): Promise<void> {
     if (deps.dryRun === true) {
         // M13 W6 fix wave 2 (#2): dry-run NEVER writes history.
         deps.logger.info('agent.dry_run.skip_history', { weekIso: deps.weekIso, terminalState: result.terminalState });

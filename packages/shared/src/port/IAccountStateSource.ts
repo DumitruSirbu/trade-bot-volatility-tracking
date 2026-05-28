@@ -31,28 +31,25 @@ import { IBalance, IFunding, IOrder, IPosition } from '../interface/index.js';
  * @cite M11a R2a.1b — typed DTOs replace Record<string, unknown>
  */
 export interface IAccountStateSource {
-	/**
-	 * Fetch the account balance snapshot (free, used, total for each asset).
-	 */
-	fetchBalance(): Promise<IBalance[]>;
+    /**
+     * Fetch the account balance snapshot (free, used, total for each asset).
+     */
+    fetchBalance(): Promise<IBalance[]>;
 
-	/**
-	 * Fetch all open positions (holding state), optionally filtered by symbol.
-	 */
-	fetchPositions(symbol?: string): Promise<IPosition[]>;
+    /**
+     * Fetch all open positions (holding state), optionally filtered by symbol.
+     */
+    fetchPositions(symbol?: string): Promise<IPosition[]>;
 
-	/**
-	 * Fetch all open (resting) orders, optionally filtered by symbol.
-	 * Shared across both ports for consistency; also on `IExecutionClient`
-	 * because the engine treats it as part of the order-lifecycle surface.
-	 */
-	fetchOpenOrders(symbol?: string): Promise<IOrder[]>;
+    /**
+     * Fetch all open (resting) orders, optionally filtered by symbol.
+     * Shared across both ports for consistency; also on `IExecutionClient`
+     * because the engine treats it as part of the order-lifecycle surface.
+     */
+    fetchOpenOrders(symbol?: string): Promise<IOrder[]>;
 
-	/**
-	 * Fetch historical funding payments since a given timestamp (epoch ms).
-	 */
-	fetchFundingHistory(
-		symbol: string,
-		since: number,
-	): Promise<IFunding[]>;
+    /**
+     * Fetch historical funding payments since a given timestamp (epoch ms).
+     */
+    fetchFundingHistory(symbol: string, since: number): Promise<IFunding[]>;
 }

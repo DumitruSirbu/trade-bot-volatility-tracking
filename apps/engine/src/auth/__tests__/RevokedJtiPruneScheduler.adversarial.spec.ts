@@ -104,7 +104,7 @@ describe('RevokedJtiPruneScheduler — adversarial', () => {
             // BUILD — the actual deletion is behind the repository mock; verify
             // the cutoff passed is such that rows within JWT_TTL + 1h would be preserved
             const now = new Date('2026-06-01T12:00:00.000Z');
-            const pruneAfterMs = 4500 * 1000; // 75 min
+            const _pruneAfterMs = 4500 * 1000; // 75 min — kept for readability; buildAppConfig uses revokedJtiPruneAfterSec
             const recentRevocationMs = now.getTime() - 30 * 60 * 1000; // 30 min ago — should be preserved
 
             const revoked = buildRevoked();

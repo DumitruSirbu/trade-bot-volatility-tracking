@@ -19,7 +19,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ORDER_INTENT_APPROVED_EVENT } from '../../src/common/const';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
-import { IExchangeClient, IPositionSnapshot } from '../../src/exchange/interface';
+import { IPositionSnapshot } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { PositionEntity } from '../../src/position/entity';
 import { PositionRepository } from '../../src/position/repository/PositionRepository';

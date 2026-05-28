@@ -89,18 +89,12 @@ describe('evaluatePromotionGate — measurable criteria pass', () => {
     });
 
     it('criterion 3 passes at the MAX_DD_TOLERANCE_PCT threshold (boundary)', () => {
-        const result = evaluatePromotionGate(
-            makeReport({ maxDrawdownPct: String(MAX_DD_TOLERANCE_PCT) }),
-            makeReport(),
-        );
+        const result = evaluatePromotionGate(makeReport({ maxDrawdownPct: String(MAX_DD_TOLERANCE_PCT) }), makeReport());
         expect(result.criteria[2].passed).toBe(true);
     });
 
     it('criterion 3 fails just above MAX_DD_TOLERANCE_PCT', () => {
-        const result = evaluatePromotionGate(
-            makeReport({ maxDrawdownPct: String(MAX_DD_TOLERANCE_PCT + 0.01) }),
-            makeReport(),
-        );
+        const result = evaluatePromotionGate(makeReport({ maxDrawdownPct: String(MAX_DD_TOLERANCE_PCT + 0.01) }), makeReport());
         expect(result.criteria[2].passed).toBe(false);
     });
 });
@@ -139,10 +133,7 @@ describe('evaluatePromotionGate — engine-side constant mirror (M13 W6 fix wave
     });
 
     it('criterion 4 passes exactly at the -5 WORST_DAY_LOSS_TOLERANCE_PCT boundary', () => {
-        const result = evaluatePromotionGate(
-            makeReport({ equityCurve: [{ utcDate: '2026-05-25', equityUsdt: '1000', dailyReturnPct: '-5' }] }),
-            makeReport(),
-        );
+        const result = evaluatePromotionGate(makeReport({ equityCurve: [{ utcDate: '2026-05-25', equityUsdt: '1000', dailyReturnPct: '-5' }] }), makeReport());
         expect(result.criteria[3].passed).toBe(true);
     });
 

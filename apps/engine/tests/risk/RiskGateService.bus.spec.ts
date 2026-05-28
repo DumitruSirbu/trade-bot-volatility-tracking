@@ -28,7 +28,6 @@ import {
     OrderIntentActionEnum,
     PositionSideEnum,
     RejectReasonEnum,
-    RiskOutcomeEnum,
 } from '@bot/shared';
 
 import { MODEL_DIVERGENCE_TRIGGERED_EVENT, RISK_HALT_TRIGGERED_EVENT } from '../../src/alert/const/alertEvents';

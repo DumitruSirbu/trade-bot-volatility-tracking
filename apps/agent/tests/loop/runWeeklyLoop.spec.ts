@@ -96,11 +96,13 @@ interface ITestHarness {
     calls: string[];
 }
 
-function makeHarness(overrides: {
-    halt?: HaltStateViewParsed;
-    llmResults?: ReadonlyArray<IProposedDraft | Error>;
-    draftVersionId?: number;
-} = {}): ITestHarness {
+function makeHarness(
+    overrides: {
+        halt?: HaltStateViewParsed;
+        llmResults?: ReadonlyArray<IProposedDraft | Error>;
+        draftVersionId?: number;
+    } = {},
+): ITestHarness {
     const calls: string[] = [];
     const halt: HaltStateViewParsed = overrides.halt ?? { isHalted: false, haltReason: null, asOf: '2026-05-27T00:00:00.000Z' };
     const llmResults = overrides.llmResults ?? [FIXTURE_DRAFT];

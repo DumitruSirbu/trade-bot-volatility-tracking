@@ -16,7 +16,8 @@
         }
     },
     "scripts": {
-        "build": "tsc"
+        "build": "tsc",
+        "typecheck": "tsc --noEmit"
     },
     "dependencies": {
         "decimal.js": "10.6.0",

@@ -14,10 +14,8 @@ import {
     OPEN_POSITION_VIEW_KEYS,
     CLOSED_POSITION_VIEW_KEYS,
     POSITION_DETAIL_VIEW_KEYS,
-    DECISION_VIEW_KEYS,
     ACCOUNT_EQUITY_VIEW_KEYS,
     RISK_STATE_VIEW_KEYS,
-    PERFORMANCE_BY_VERSION_VIEW_KEYS,
 } from '../../src/read-api/mappers/readApiMappers';
 
 // M9 QA — adversarial extension to readApi.spec.ts.
@@ -29,7 +27,7 @@ import {
 //   - DTO key-snapshot: assert serialized payload keys EXACTLY equal *_VIEW_KEYS (all DTOs)
 //   - Money field type assertion: every monetary field is typeof === 'string'
 
-const NOW = new Date('2026-05-24T12:00:00Z');
+const _NOW = new Date('2026-05-24T12:00:00Z');
 
 class StubSecretProvider {
     getSigningSecret(): Buffer {

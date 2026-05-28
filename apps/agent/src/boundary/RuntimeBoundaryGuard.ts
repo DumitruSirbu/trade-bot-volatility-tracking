@@ -19,11 +19,7 @@
 // any sibling agent module — keeping the guard dependency-free protects
 // against a buggy import chain pulling banned code BEFORE the guard runs.
 
-const BANNED_PATH_FRAGMENTS: readonly string[] = [
-    '/apps/engine/',
-    '/apps/mcp/',
-    '/packages/analysis/',
-];
+const BANNED_PATH_FRAGMENTS: readonly string[] = ['/apps/engine/', '/apps/mcp/', '/packages/analysis/'];
 const ESCAPE_HATCH_ENV_VAR = 'AGENT_BOUNDARY_GUARD';
 const ESCAPE_HATCH_VALUE = 'disabled';
 

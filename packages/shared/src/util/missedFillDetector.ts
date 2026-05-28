@@ -1,5 +1,3 @@
-import Decimal from 'decimal.js';
-
 import { OrderPolicyEnum } from '../enum/OrderPolicyEnum.js';
 import { isLessThanOrEqual, isGreaterThanOrEqual, parseDecimal } from './decimalMath.js';
 
@@ -24,9 +22,9 @@ import { isLessThanOrEqual, isGreaterThanOrEqual, parseDecimal } from './decimal
  */
 
 export interface ITickSnapshot {
-	readonly high: string; // decimal
-	readonly low: string; // decimal
-	readonly ts: Date;
+    readonly high: string; // decimal
+    readonly low: string; // decimal
+    readonly ts: Date;
 }
 
 /**
@@ -41,40 +39,40 @@ export interface ITickSnapshot {
  * @returns true if the order would be missed, false if it would fill
  */
 export function isMissedFill(
-	policy: string,
-	limitPrice: string,
-	side: 'long' | 'short',
-	ticks: ITickSnapshot[],
-	barOpenMs: number,
-	orderTimeoutMs: number,
+    policy: string,
+    limitPrice: string,
+    side: 'long' | 'short',
+    ticks: ITickSnapshot[],
+    barOpenMs: number,
+    orderTimeoutMs: number,
 ): boolean {
-	if (policy === OrderPolicyEnum.REDUCE_MARKET) {
-		return false; // market orders always fill
-	}
+    if (policy === OrderPolicyEnum.REDUCE_MARKET) {
+        return false; // market orders always fill
+    }
 
-	if (!isLimitPolicy(policy)) {
-		return false; // non-limit policies are not modelled as missable
-	}
+    if (!isLimitPolicy(policy)) {
+        return false; // non-limit policies are not modelled as missable
+    }
 
-	if (ticks.length === 0) {
-		return true; // no ticks → cannot confirm fill → missed
-	}
+    if (ticks.length === 0) {
+        return true; // no ticks → cannot confirm fill → missed
+    }
 
-	const timeoutEndMs = barOpenMs + orderTimeoutMs;
-	const ticksWithinWindow = ticks.filter((tick) => {
-		const tickMs = tick.ts.getTime();
-		return tickMs >= barOpenMs && tickMs <= timeoutEndMs;
-	});
+    const timeoutEndMs = barOpenMs + orderTimeoutMs;
+    const ticksWithinWindow = ticks.filter((tick) => {
+        const tickMs = tick.ts.getTime();
+        return tickMs >= barOpenMs && tickMs <= timeoutEndMs;
+    });
 
-	if (ticksWithinWindow.length === 0) {
-		return true; // no ticks within order timeout → missed
-	}
+    if (ticksWithinWindow.length === 0) {
+        return true; // no ticks within order timeout → missed
+    }
 
-	return !anyTickTouchesLimit(ticksWithinWindow, limitPrice, side);
+    return !anyTickTouchesLimit(ticksWithinWindow, limitPrice, side);
 }
 
 function isLimitPolicy(policy: string): boolean {
-	return policy === OrderPolicyEnum.MARKETABLE_LIMIT_IOC || policy === OrderPolicyEnum.POST_ONLY_MAKER;
+    return policy === OrderPolicyEnum.MARKETABLE_LIMIT_IOC || policy === OrderPolicyEnum.POST_ONLY_MAKER;
 }
 
 /**
@@ -84,13 +82,13 @@ function isLimitPolicy(policy: string): boolean {
  * For a SHORT sell-side order, we need the bid to come up to limitPrice → tick.high touches.
  */
 function anyTickTouchesLimit(ticks: ITickSnapshot[], limitPrice: string, side: 'long' | 'short'): boolean {
-	const limit = parseDecimal(limitPrice);
+    const limit = parseDecimal(limitPrice);
 
-	if (side === 'long') {
-		// LONG: ask comes down to limitPrice → tick.low <= limitPrice
-		return ticks.some((tick) => isLessThanOrEqual(parseDecimal(tick.low), limit));
-	}
+    if (side === 'long') {
+        // LONG: ask comes down to limitPrice → tick.low <= limitPrice
+        return ticks.some((tick) => isLessThanOrEqual(parseDecimal(tick.low), limit));
+    }
 
-	// SHORT: bid comes up to limitPrice → tick.high >= limitPrice
-	return ticks.some((tick) => isGreaterThanOrEqual(parseDecimal(tick.high), limit));
+    // SHORT: bid comes up to limitPrice → tick.high >= limitPrice
+    return ticks.some((tick) => isGreaterThanOrEqual(parseDecimal(tick.high), limit));
 }

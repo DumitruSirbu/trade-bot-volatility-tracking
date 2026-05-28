@@ -50,10 +50,7 @@ export async function runComparisonBacktests(args: IRunComparisonBacktestsArgs):
 
 function assertSharedWindow(active: BacktestReportParsed, draft: BacktestReportParsed): void {
     if (active.fromUtcDate !== draft.fromUtcDate || active.toUtcDate !== draft.toUtcDate) {
-        throw new BacktestWindowMismatchError(
-            { from: active.fromUtcDate, to: active.toUtcDate },
-            { from: draft.fromUtcDate, to: draft.toUtcDate },
-        );
+        throw new BacktestWindowMismatchError({ from: active.fromUtcDate, to: active.toUtcDate }, { from: draft.fromUtcDate, to: draft.toUtcDate });
     }
 }
 
@@ -61,14 +58,8 @@ export class BacktestWindowMismatchError extends Error {
     public readonly activeWindow: { readonly from: string; readonly to: string };
     public readonly draftWindow: { readonly from: string; readonly to: string };
 
-    constructor(
-        activeWindow: { readonly from: string; readonly to: string },
-        draftWindow: { readonly from: string; readonly to: string },
-    ) {
-        super(
-            `Backtest window mismatch: active=[${activeWindow.from}..${activeWindow.to}] ` +
-                `draft=[${draftWindow.from}..${draftWindow.to}]`,
-        );
+    constructor(activeWindow: { readonly from: string; readonly to: string }, draftWindow: { readonly from: string; readonly to: string }) {
+        super(`Backtest window mismatch: active=[${activeWindow.from}..${activeWindow.to}] ` + `draft=[${draftWindow.from}..${draftWindow.to}]`);
         this.name = 'BacktestWindowMismatchError';
         this.activeWindow = activeWindow;
         this.draftWindow = draftWindow;

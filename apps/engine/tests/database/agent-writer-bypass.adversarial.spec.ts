@@ -33,8 +33,7 @@ import { Client } from 'pg';
 // Connection config
 // ---------------------------------------------------------------------------
 
-const ENGINE_DB_URL =
-    process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
+const ENGINE_DB_URL = process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
 
 const AGENT_WRITER_PASSWORD = process.env['AGENT_WRITER_PASSWORD'] ?? 'CHANGE_ME_BEFORE_PROD';
 
@@ -90,9 +89,7 @@ async function assertPrivilegeRejection(client: Client, sql: string): Promise<vo
         const pgErr = err as PgError;
         const acceptable = [INSUFFICIENT_PRIVILEGE, READ_ONLY_SQL_TRANSACTION];
         if (!acceptable.includes(pgErr.code ?? '')) {
-            throw new Error(
-                `Expected SQLSTATE 42501 or 25006 but got '${pgErr.code ?? 'no code'}': ${pgErr.message}. SQL was: ${sql}`,
-            );
+            throw new Error(`Expected SQLSTATE 42501 or 25006 but got '${pgErr.code ?? 'no code'}': ${pgErr.message}. SQL was: ${sql}`);
         }
         expect(acceptable).toContain(pgErr.code);
     }
@@ -141,10 +138,12 @@ describe('agent_writer role — bypass attempts (M13 W6a vector 4, ADR 0036 §5)
         // Insert a draft row via admin so bypass tests [A] have a target.
         const weekIso = `2099-W99-bypass-${Date.now()}`;
         const draftRows = (
-            await adminClient.query<{ strategy_versions_id: number }>(
-                `SELECT draft_strategy_version($1, $2::jsonb, $3, $4) AS strategy_versions_id`,
-                [parentId, '{"signalThreshold":1.9}', 'bypass-test-rationale', weekIso],
-            )
+            await adminClient.query<{ strategy_versions_id: number }>(`SELECT draft_strategy_version($1, $2::jsonb, $3, $4) AS strategy_versions_id`, [
+                parentId,
+                '{"signalThreshold":1.9}',
+                'bypass-test-rationale',
+                weekIso,
+            ])
         ).rows;
         freshDraftId = draftRows[0]?.strategy_versions_id ?? null;
 
@@ -166,22 +165,19 @@ describe('agent_writer role — bypass attempts (M13 W6a vector 4, ADR 0036 §5)
         // Clean up: delete seeded rows via admin.
         if (adminClient !== null) {
             if (freshHistoryId !== null) {
-                await adminClient
-                    .query(`DELETE FROM agent_run_history WHERE agent_run_id = $1`, [freshHistoryId])
-                    .catch(() => undefined);
+                await adminClient.query(`DELETE FROM agent_run_history WHERE agent_run_id = $1`, [freshHistoryId]).catch(() => undefined);
             }
             if (freshDraftId !== null) {
                 await adminClient
-                    .query(`DELETE FROM strategy_versions WHERE parent_version_id = (SELECT parent_version_id FROM strategy_versions WHERE strategy_versions_id = $1)`, [freshDraftId])
+                    .query(
+                        `DELETE FROM strategy_versions WHERE parent_version_id = (SELECT parent_version_id FROM strategy_versions WHERE strategy_versions_id = $1)`,
+                        [freshDraftId],
+                    )
                     .catch(() => undefined);
-                await adminClient
-                    .query(`DELETE FROM strategy_versions WHERE strategy_versions_id = $1`, [freshDraftId])
-                    .catch(() => undefined);
+                await adminClient.query(`DELETE FROM strategy_versions WHERE strategy_versions_id = $1`, [freshDraftId]).catch(() => undefined);
             }
             // Delete the parent version rows created with the bypass-adversarial prefix.
-            await adminClient
-                .query(`DELETE FROM strategy_versions WHERE name LIKE 'bypass-adversarial-%'`)
-                .catch(() => undefined);
+            await adminClient.query(`DELETE FROM strategy_versions WHERE name LIKE 'bypass-adversarial-%'`).catch(() => undefined);
             await adminClient.end().catch(() => undefined);
         }
         if (writerClient !== null) {
@@ -191,7 +187,7 @@ describe('agent_writer role — bypass attempts (M13 W6a vector 4, ADR 0036 §5)
 
     function skipIfNotReachable(): boolean {
         if (suiteSkipped) {
-            console.info('[SKIP] Postgres not reachable — test skipped');
+            console.warn('[SKIP] Postgres not reachable — test skipped');
             return true;
         }
         return false;
@@ -204,10 +200,7 @@ describe('agent_writer role — bypass attempts (M13 W6a vector 4, ADR 0036 §5)
             console.warn('[SKIP-A] freshDraftId is null — SDF seed failed. Skipping.');
             return;
         }
-        await assertPrivilegeRejection(
-            writerClient!,
-            `UPDATE strategy_versions SET status = 'active' WHERE strategy_versions_id = ${freshDraftId}`,
-        );
+        await assertPrivilegeRejection(writerClient!, `UPDATE strategy_versions SET status = 'active' WHERE strategy_versions_id = ${freshDraftId}`);
     });
 
     // [B] Cannot INSERT INTO strategy_versions directly with status='active'
@@ -223,19 +216,13 @@ describe('agent_writer role — bypass attempts (M13 W6a vector 4, ADR 0036 §5)
     // [C] Cannot ALTER FUNCTION draft_strategy_version
     it('[C] ALTER FUNCTION draft_strategy_version(...) → 42501', async () => {
         if (skipIfNotReachable()) return;
-        await assertPrivilegeRejection(
-            writerClient!,
-            `ALTER FUNCTION draft_strategy_version(integer, jsonb, text, text) COST 200`,
-        );
+        await assertPrivilegeRejection(writerClient!, `ALTER FUNCTION draft_strategy_version(integer, jsonb, text, text) COST 200`);
     });
 
     // [D] Cannot DROP FUNCTION draft_strategy_version
     it('[D] DROP FUNCTION draft_strategy_version(...) → 42501', async () => {
         if (skipIfNotReachable()) return;
-        await assertPrivilegeRejection(
-            writerClient!,
-            `DROP FUNCTION draft_strategy_version(integer, jsonb, text, text)`,
-        );
+        await assertPrivilegeRejection(writerClient!, `DROP FUNCTION draft_strategy_version(integer, jsonb, text, text)`);
     });
 
     // [E] Cannot INSERT INTO agent_run_history with explicit PK column
@@ -255,10 +242,7 @@ describe('agent_writer role — bypass attempts (M13 W6a vector 4, ADR 0036 §5)
             console.warn('[SKIP-F] freshHistoryId is null. Skipping.');
             return;
         }
-        await assertPrivilegeRejection(
-            writerClient!,
-            `DELETE FROM agent_run_history WHERE agent_run_id = ${freshHistoryId}`,
-        );
+        await assertPrivilegeRejection(writerClient!, `DELETE FROM agent_run_history WHERE agent_run_id = ${freshHistoryId}`);
     });
 
     // [G] Cannot UPDATE agent_run_history
@@ -268,9 +252,6 @@ describe('agent_writer role — bypass attempts (M13 W6a vector 4, ADR 0036 §5)
             console.warn('[SKIP-G] freshHistoryId is null. Skipping.');
             return;
         }
-        await assertPrivilegeRejection(
-            writerClient!,
-            `UPDATE agent_run_history SET terminal_state = 'FAILED' WHERE agent_run_id = ${freshHistoryId}`,
-        );
+        await assertPrivilegeRejection(writerClient!, `UPDATE agent_run_history SET terminal_state = 'FAILED' WHERE agent_run_id = ${freshHistoryId}`);
     });
 });

@@ -10,6 +10,8 @@
  *   - legacy tokens without `aud` still verify (back-compat).
  */
 
+import { createHmac } from 'node:crypto';
+
 import { AuthScopeEnum } from '@bot/shared';
 
 import { AUTH_TOKEN_DEFAULT_AUDIENCE, AuthTokenService } from '../AuthModule';
@@ -126,14 +128,9 @@ describe('AuthTokenService.issue — aud claim (M13 fix wave 7)', () => {
         const json = Buffer.from(payloadSeg.replace(/-/gu, '+').replace(/_/gu, '/') + pad, 'base64').toString('utf8');
         const obj = JSON.parse(json) as Record<string, unknown>;
         delete obj.aud;
-        const legacyPayloadSeg = Buffer.from(JSON.stringify(obj), 'utf8')
-            .toString('base64')
-            .replace(/=+$/u, '')
-            .replace(/\+/gu, '-')
-            .replace(/\//gu, '_');
+        const legacyPayloadSeg = Buffer.from(JSON.stringify(obj), 'utf8').toString('base64').replace(/=+$/u, '').replace(/\+/gu, '-').replace(/\//gu, '_');
 
         // Re-sign with the derived auth key.
-        const { createHmac } = require('crypto');
         const masterMaterial = Buffer.from(VALID_SECRET_HEX, 'hex');
         const derivedKeys = new DerivedKeyService({ getSigningSecret: () => masterMaterial } as never);
         derivedKeys.onModuleInit();

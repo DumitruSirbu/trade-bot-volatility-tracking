@@ -4,3 +4,15 @@ build
 coverage
 pnpm-lock.yaml
 .pnpm-store
+
+# Vendored / tooling artifacts — not project source, not ours to format.
+.agents/
+.claude/
+skills-lock.json
+
+# Prose markdown — the format gate scopes to code + config consistency, not
+# authored prose. Reformatting docs is table-repadding churn that buries real
+# diffs and mangles hand-authored ADRs (ADR 0039 §2.2 refinement; recorded at close).
+docs/
+README.md
+CLAUDE.md

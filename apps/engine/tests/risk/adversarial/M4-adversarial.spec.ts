@@ -29,10 +29,12 @@ import {
     buildOpenPositionsPort,
     buildOrderIntent,
     buildProposedExit,
+    buildReservation,
     buildRiskStateDay,
     buildRiskStatePort,
     buildSizing,
 } from '../support/fixtures';
+import { buildSnapshot } from '../../strategy/support/fixtures';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -193,7 +195,6 @@ describe('S2 — reservation leak: TTL expiry releases slot after downstream cra
         // ADR 0004 §3: PENDING -> EXPIRED frees the slot for the next intent.
         const { ledger } = makeGate();
 
-        const { buildReservation } = require('../support/fixtures');
         const reservation = buildReservation({
             reservationId: 'ev1:A',
             slot: PositionSlotEnum.A,
@@ -217,7 +218,6 @@ describe('S2 — reservation leak: TTL expiry releases slot after downstream cra
         // the crash window must not revive the reservation.
         const { ledger } = makeGate();
 
-        const { buildReservation } = require('../support/fixtures');
         const reservation = buildReservation({ reservationId: 'ev2:A', state: ReservationStateEnum.PENDING, expiresAtMs: NOW_MS });
 
         ledger.reserve(reservation);
@@ -231,7 +231,7 @@ describe('S2 — reservation leak: TTL expiry releases slot after downstream cra
     it('gate approves a subsequent intent after the prior reservation TTL has lapsed', async () => {
         // ADR 0004 §bypass-proof + §3. The gate uses the ledger's listActive() to count
         // occupied slots. After TTL expiry the slot must be free for a new intent.
-        const { gate, ledger } = makeGate();
+        const { gate, ledger: _ledger } = makeGate();
         const context = buildPassingContext({ openPositions: buildOpenPositionsPort({ open: [] }) });
 
         const firstIntent = buildValidIntent({ symbol: 'ETHUSDT', eventId: 'ETH:ev1' });
@@ -250,7 +250,6 @@ describe('S2 — reservation leak: TTL expiry releases slot after downstream cra
     it('released reservation (normal path) also frees the slot immediately', () => {
         // ADR 0004 §3: RELEASED is a terminal free state; must not count toward caps.
         const { ledger } = makeGate();
-        const { buildReservation } = require('../support/fixtures');
         const reservation = buildReservation({ reservationId: 'ev3:A', state: ReservationStateEnum.PENDING });
 
         ledger.reserve(reservation);
@@ -395,7 +394,6 @@ describe('S4 — halt fired between reservation and emit: intent blocked; reserv
         // ADR 0004 §bypass-proof + §halt-overrides. If stress fires first in the pipeline,
         // no reservation must land in the ledger for the blocked intent.
         const { gate, ledger } = makeGate();
-        const { buildSnapshot } = require('../../strategy/support/fixtures');
 
         const context = buildPassingContext({
             snapshot: buildSnapshot({ btc_1m_move_pct: 5.0 }), // triggers stress

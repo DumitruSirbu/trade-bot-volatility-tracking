@@ -14,6 +14,7 @@
         "format": "prettier --check .",
         "format:fix": "prettier --write .",
         "test": "pnpm -r test",
+        "audit:ci": "pnpm audit --audit-level=high --prod --json > audit-prod.json || true; pnpm --filter @bot/engine exec ts-node tests/ci/runScaGate.ts \"$PWD/audit-prod.json\"; status=$?; rm -f audit-prod.json; exit $status",
         "dev": "pnpm -r --parallel dev",
         "engine:dev": "pnpm --filter @bot/engine dev",
         "dashboard:dev": "pnpm --filter @bot/dashboard dev"
@@ -29,5 +30,10 @@
         "globals": "^17.6.0",
         "prettier": "3.8.3",
         "typescript": "5.9.3"
+    },
+    "pnpm": {
+        "auditConfig": {
+            "ignoreGhsas": []
+        }
     }
 }

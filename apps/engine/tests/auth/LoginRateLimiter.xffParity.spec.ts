@@ -1,6 +1,3 @@
-/* eslint-disable no-undef -- this spec uses the WHATWG `fetch` global (Node 18+),
- * matching the engine's own TelegramAlertSink. The eslint env config disables
- * `node` globals; this directive scopes the relaxation to the test file. */
 import { IAlertPayload } from '@bot/shared';
 import express from 'express';
 

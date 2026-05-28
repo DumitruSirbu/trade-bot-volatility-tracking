@@ -1,7 +1,7 @@
 import { Decimal } from 'decimal.js';
 
 import { CoinTierEnum } from '../enum/CoinTierEnum.js';
-import { parseDecimal, formatDecimal, multiplyDecimal, divideDecimal, isGreaterThan } from './decimalMath.js';
+import { parseDecimal, formatDecimal, multiplyDecimal, divideDecimal } from './decimalMath.js';
 
 // Type alias for Decimal instances per decimal.js d.ts pattern (avoids TS2709 namespace-collision).
 type DecimalT = InstanceType<typeof Decimal>;
@@ -23,14 +23,14 @@ export const DEFAULT_TIER2_SLIPPAGE_PCT = 0.5;
 export const DEFAULT_TIER3_SLIPPAGE_PCT = 1.0;
 
 export interface ITierSlippageParams {
-	readonly slippage_tier1_pct?: number;
-	readonly slippage_tier2_pct?: number;
-	readonly slippage_tier3_pct?: number;
+    readonly slippage_tier1_pct?: number;
+    readonly slippage_tier2_pct?: number;
+    readonly slippage_tier3_pct?: number;
 }
 
 export interface ITierSlippageResult {
-	readonly fillPrice: string; // decimal
-	readonly slippagePct: DecimalT;
+    readonly fillPrice: string; // decimal
+    readonly slippagePct: DecimalT;
 }
 
 /**
@@ -45,31 +45,31 @@ export interface ITierSlippageResult {
  * @returns Result with filled price and slippage percentage applied
  */
 export function computeTierFillPrice(
-	refPrice: string,
-	coinTier: CoinTierEnum,
-	side: 'long' | 'short',
-	action: 'open' | 'reduce' | 'close',
-	params: ITierSlippageParams,
+    refPrice: string,
+    coinTier: CoinTierEnum,
+    side: 'long' | 'short',
+    action: 'open' | 'reduce' | 'close',
+    params: ITierSlippageParams,
 ): ITierSlippageResult {
-	const slippagePct = resolveTierSlippagePct(coinTier, params);
-	const refDecimal = parseDecimal(refPrice);
-	const fillPrice = applyAdverseSlippage(refDecimal, slippagePct, side, action);
+    const slippagePct = resolveTierSlippagePct(coinTier, params);
+    const refDecimal = parseDecimal(refPrice);
+    const fillPrice = applyAdverseSlippage(refDecimal, slippagePct, side, action);
 
-	return {
-		fillPrice: formatDecimal(fillPrice),
-		slippagePct,
-	};
+    return {
+        fillPrice: formatDecimal(fillPrice),
+        slippagePct,
+    };
 }
 
 function resolveTierSlippagePct(coinTier: CoinTierEnum, params: ITierSlippageParams): DecimalT {
-	const pct =
-		coinTier === CoinTierEnum.TIER_1
-			? params.slippage_tier1_pct ?? DEFAULT_TIER1_SLIPPAGE_PCT
-			: coinTier === CoinTierEnum.TIER_2
-				? params.slippage_tier2_pct ?? DEFAULT_TIER2_SLIPPAGE_PCT
-				: params.slippage_tier3_pct ?? DEFAULT_TIER3_SLIPPAGE_PCT;
+    const pct =
+        coinTier === CoinTierEnum.TIER_1
+            ? (params.slippage_tier1_pct ?? DEFAULT_TIER1_SLIPPAGE_PCT)
+            : coinTier === CoinTierEnum.TIER_2
+              ? (params.slippage_tier2_pct ?? DEFAULT_TIER2_SLIPPAGE_PCT)
+              : (params.slippage_tier3_pct ?? DEFAULT_TIER3_SLIPPAGE_PCT);
 
-	return parseDecimal(pct);
+    return parseDecimal(pct);
 }
 
 /**
@@ -79,20 +79,15 @@ function resolveTierSlippagePct(coinTier: CoinTierEnum, params: ITierSlippagePar
  *   - LONG opening / LONG reducing → buying side, adverse = higher (multiply by 1 + slippage)
  *   - SHORT opening / SHORT reducing → selling side, adverse = lower (multiply by 1 - slippage)
  */
-function applyAdverseSlippage(
-	refPrice: DecimalT,
-	slippagePct: DecimalT,
-	side: 'long' | 'short',
-	action: 'open' | 'reduce' | 'close',
-): DecimalT {
-	const slippageFraction = divideDecimal(slippagePct, parseDecimal(100));
-	const isAdverseHigher = isAdverseDirectionHigher(side, action);
+function applyAdverseSlippage(refPrice: DecimalT, slippagePct: DecimalT, side: 'long' | 'short', action: 'open' | 'reduce' | 'close'): DecimalT {
+    const slippageFraction = divideDecimal(slippagePct, parseDecimal(100));
+    const isAdverseHigher = isAdverseDirectionHigher(side, action);
 
-	if (isAdverseHigher) {
-		return multiplyDecimal(refPrice, parseDecimal(1).plus(slippageFraction));
-	}
+    if (isAdverseHigher) {
+        return multiplyDecimal(refPrice, parseDecimal(1).plus(slippageFraction));
+    }
 
-	return multiplyDecimal(refPrice, parseDecimal(1).minus(slippageFraction));
+    return multiplyDecimal(refPrice, parseDecimal(1).minus(slippageFraction));
 }
 
 /**
@@ -101,11 +96,11 @@ function applyAdverseSlippage(
  *   - short open / short add / long close / long reduce → selling side, adverse = lower
  */
 function isAdverseDirectionHigher(side: 'long' | 'short', action: 'open' | 'reduce' | 'close'): boolean {
-	const isEntry = action === 'open';
+    const isEntry = action === 'open';
 
-	if (side === 'long') {
-		return isEntry; // long buying on open, selling on reduce/close
-	}
+    if (side === 'long') {
+        return isEntry; // long buying on open, selling on reduce/close
+    }
 
-	return !isEntry; // short selling on open, buying on reduce/close
+    return !isEntry; // short selling on open, buying on reduce/close
 }

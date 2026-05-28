@@ -108,12 +108,12 @@ export class CreateAgentWriterRoleAndSdf20260620000000 implements MigrationInter
         // 4. Add nullable `week_iso` + `rationale` columns to
         //    strategy_versions if absent (ADR 0036 §2.4).
         const hasWeekIso = await queryRunner.hasColumn('strategy_versions', 'week_iso');
-        if (! hasWeekIso) {
+        if (!hasWeekIso) {
             await queryRunner.query(`ALTER TABLE "strategy_versions" ADD COLUMN "week_iso" text NULL`);
         }
 
         const hasRationale = await queryRunner.hasColumn('strategy_versions', 'rationale');
-        if (! hasRationale) {
+        if (!hasRationale) {
             await queryRunner.query(`ALTER TABLE "strategy_versions" ADD COLUMN "rationale" text NULL`);
         }
 

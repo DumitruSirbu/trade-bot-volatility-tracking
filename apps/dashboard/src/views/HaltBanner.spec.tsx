@@ -148,6 +148,14 @@ describe('HaltBanner — content', () => {
         expect(screen.getByRole('alert').textContent).toContain('market stress');
     });
 
+    it('shows the rate-limit source label', () => {
+        mockHaltStateData = haltedState({ haltSource: HaltSourceEnum.RATE_LIMIT });
+
+        render(<HaltBanner />);
+
+        expect(screen.getByRole('alert').textContent).toContain('rate limit');
+    });
+
     it('shows the audit id in the banner', () => {
         mockHaltStateData = haltedState({ lastTransitionAuditId: 'audit-xyz-789' });
 

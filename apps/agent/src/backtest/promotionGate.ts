@@ -57,10 +57,7 @@ export interface IPromotionGateEvaluation {
     readonly criteria: readonly ICriterionResult[];
 }
 
-export function evaluatePromotionGate(
-    draft: BacktestReportParsed,
-    active: BacktestReportParsed,
-): IPromotionGateEvaluation {
+export function evaluatePromotionGate(draft: BacktestReportParsed, active: BacktestReportParsed): IPromotionGateEvaluation {
     const criteria: ICriterionResult[] = [
         evalCriterion1NetPositiveExpectancy(draft),
         evalCriterion2ProfitFactor(draft),
@@ -265,10 +262,7 @@ function evalCriterion10WeeklyConcentration(): ICriterionResult {
 //     targets. The regime-target map (per StrategyDirectionEnum) lives in the
 //     engine's `promotionGateConsts.ts`; the agent does not have a copy. Until
 //     the engine surfaces the per-regime delta verdict, this is NOT_AVAILABLE.
-function evalCriterion11RegimeTargeting(
-    draft: BacktestReportParsed,
-    active: BacktestReportParsed,
-): ICriterionResult {
+function evalCriterion11RegimeTargeting(draft: BacktestReportParsed, active: BacktestReportParsed): ICriterionResult {
     void draft;
     void active;
     return {

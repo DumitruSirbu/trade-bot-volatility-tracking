@@ -27,12 +27,7 @@ import {
     type IReportWriterPort,
     type ILogger,
 } from '../../src/loop/runWeeklyLoop.js';
-import type {
-    BacktestReportParsed,
-    GetDecisionsResultParsed,
-    HaltStateViewParsed,
-    PerformanceByVersionViewParsed,
-} from '../../src/mcp/schemas.js';
+import type { BacktestReportParsed, GetDecisionsResultParsed, HaltStateViewParsed, PerformanceByVersionViewParsed } from '../../src/mcp/schemas.js';
 
 // ---------------------------------------------------------------------------
 // Schema-level assertions
@@ -146,9 +141,7 @@ interface IHallucinationHarness {
     capturedDraftArgs: Array<Parameters<IPersistencePort['draftStrategyVersion']>[0]>;
 }
 
-function makeHallucinationHarness(
-    llmBehavior: 'succeed-with-extra' | 'fail-then-succeed'
-): IHallucinationHarness {
+function makeHallucinationHarness(llmBehavior: 'succeed-with-extra' | 'fail-then-succeed'): IHallucinationHarness {
     const calls: string[] = [];
     const capturedDraftArgs: Array<Parameters<IPersistencePort['draftStrategyVersion']>[0]> = [];
 

@@ -41,7 +41,9 @@ import { getTestDataSource } from '../../support/testDataSource';
 // cleanup never collides with other suites.
 const TEST_SYMBOL = 'PAPRRTUSDT';
 const TEST_CO_ID_PREFIX = 'tbvt-paper-r2b-test-';
-const TEST_SOAK_ID_PREFIX = '00000000-0000-4000-8000-r2b';
+// soak_start_id is a UUID column; the suffix appended below must keep the full
+// value a syntactically valid UUID (final group = 12 hex digits).
+const TEST_SOAK_ID_PREFIX = '00000000-0000-4000-8000-d2b00000';
 
 describe('PAPER persistence repositories — CRUD + adversarial (requires Postgres)', () => {
     let dataSource: DataSource;

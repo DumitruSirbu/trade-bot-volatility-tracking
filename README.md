@@ -209,6 +209,60 @@ Watch mode:
 pnpm --filter @bot/engine test -- --watch
 ```
 
+## CI & Continuous Integration
+
+All changes to `main` are gated by automated deterministic checks (no LLM review in CI). The 10 required status checks are:
+
+1. **install** — frozen-lockfile integrity
+2. **build** — production build succeeds
+3. **typecheck** — TypeScript strict mode
+4. **lint** — ESLint (includes import boundaries per ADR 0033/0035)
+5. **format** — Prettier code style
+6. **test** — full unit + integration suite (with Postgres service for DB tests)
+7. **boundary** — ADR 0033/0035 structural boundary enforcement (import-greps + spec suites)
+8. **sca** — supply-chain security audit (HIGH/CRITICAL advisories block unless allowlisted per ADR 0040)
+9. **lockfile:single-source** — exactly one root `pnpm-lock.yaml`, no foreign lockfiles
+10. **deps:pin-and-provenance** — exchange-critical dependencies (`ccxt`, `decimal.js`, `pg`) pinned to exact versions with cross-workspace skew check (ADR 0041)
+
+Failing any gate blocks merge to `main`. See `docs/runbooks/ci-gates.md` for operator reference.
+
+### Running gates locally
+
+- **Install/build/lint/test:** `pnpm install`, `pnpm build`, `pnpm lint:fix`, `pnpm test`
+- **Format:** `pnpm format` (runs Prettier in check mode; use `pnpm format:write` to auto-fix)
+- **Supply-chain audit:** `pnpm run audit:ci` (same filter as CI; respects `.github/audit-allowlist.json`)
+
+### Supply-chain exception process
+
+If `pnpm audit --prod` reports a HIGH/CRITICAL advisory with no upstream fix:
+
+1. Verify there is no patch version available upstream.
+2. Add an entry to `.github/audit-allowlist.json` with:
+   - `ghsa` (GHSA ID)
+   - `package` (e.g., `foo@^1.2.3`)
+   - `severity` (high or critical)
+   - `reason` (why the fix is unavailable and the risk is acceptable)
+   - `reachability` (whether and how it can be triggered; for exchange-touching deps, argue why the order/key path is unaffected)
+   - `approvedBy` (operator handle)
+   - `approvedOn` (today's date)
+   - `expiresOn` (at most 90 days out; forces re-review on expiry)
+3. Open a PR; the `sca` gate verifies the entry is well-formed and checks the expiry.
+4. **Never** add the GHSA to `pnpm.auditConfig.ignoreGhsas` — the allowlist is the sole suppression authority (pnpm strips ignoreGhsas before the filter sees them, so it would blind the expiry forcing-function).
+
+See `docs/runbooks/ci-gates.md` §5 for full rotation and expiry procedures.
+
+### Exchangedependency bumps
+
+Exchange-critical dependencies (`ccxt`, `decimal.js`, `pg`) are pinned to exact versions in `.github/exchange-critical-deps.json`. To bump one:
+
+1. Review the upstream changelog for order-path / key-handling impact (ccxt only).
+2. Update the exact version in **all** workspace `package.json` files that declare it (check `pnpm why <pkg>`).
+3. Update `.github/exchange-critical-deps.json` to match.
+4. Run `pnpm install` to regenerate the lockfile with the new integrity hash.
+5. Open the PR; the `deps:pin-and-provenance` job verifies exact-pin + skew, and logs provenance-attestation presence (non-blocking advisory lookup).
+
+See `docs/runbooks/ci-gates.md` §6 for details.
+
 ## Project Status
 
 **Completed Milestones (M0–M10):**

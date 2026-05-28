@@ -30,8 +30,7 @@ import { Client } from 'pg';
 // Connection config
 // ---------------------------------------------------------------------------
 
-const ENGINE_DB_URL =
-    process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
+const ENGINE_DB_URL = process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
 
 const AGENT_WRITER_PASSWORD = process.env['AGENT_WRITER_PASSWORD'] ?? 'CHANGE_ME_BEFORE_PROD';
 
@@ -89,18 +88,34 @@ async function assertSqlstateRejection(client: Client, sql: string, expectedCode
         throw new Error(`Expected SQL to fail with SQLSTATE ${expectedCode} but it succeeded: ${sql}`);
     } catch (err) {
         const pgErr = err as PgError;
-        const validCodes =
-            expectedCode === INSUFFICIENT_PRIVILEGE
-                ? [INSUFFICIENT_PRIVILEGE, READ_ONLY_SQL_TRANSACTION]
-                : [expectedCode];
+        const validCodes = expectedCode === INSUFFICIENT_PRIVILEGE ? [INSUFFICIENT_PRIVILEGE, READ_ONLY_SQL_TRANSACTION] : [expectedCode];
 
         if (!validCodes.includes(pgErr.code ?? '')) {
-            throw new Error(
-                `Expected SQLSTATE ${expectedCode} (or ${validCodes.join('/')}) but got ${pgErr.code ?? 'no code'}: ${pgErr.message}`,
-            );
+            throw new Error(`Expected SQLSTATE ${expectedCode} (or ${validCodes.join('/')}) but got ${pgErr.code ?? 'no code'}: ${pgErr.message}`);
         }
 
         expect(validCodes).toContain(pgErr.code);
+    }
+}
+
+/**
+ * Calls a write SDF the way the fixed production caller (AgentPgClient) does:
+ * inside an explicit transaction whose first statement is SET TRANSACTION READ
+ * WRITE. The agent_writer role has `default_transaction_read_only = on`, so a
+ * bare autocommit SELECT of the SDF fails with 25006 ("transaction read-write
+ * mode must be set before any query"). This mirrors the production statement
+ * ordering so the test is a faithful regression for that path.
+ */
+async function callWriteSdf<T extends { [k: string]: unknown }>(client: Client, sql: string, params: ReadonlyArray<unknown>): Promise<T[]> {
+    try {
+        await client.query('BEGIN');
+        await client.query('SET TRANSACTION READ WRITE');
+        const result = await client.query<T>(sql, params as unknown[]);
+        await client.query('COMMIT');
+        return result.rows;
+    } catch (cause) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw cause;
     }
 }
 
@@ -150,11 +165,9 @@ describe('agent_run_history table — structure + privilege (ADR 0036)', () => {
         // Clean up test rows by week_iso (the UNIQUE key) using the admin connection.
         if (adminClient !== null && insertedWeekIsos.length > 0) {
             for (const iso of insertedWeekIsos) {
-                await adminClient
-                    .query(`DELETE FROM agent_run_history WHERE week_iso = $1`, [iso])
-                    .catch(() => {
-                        /* ignore errors during cleanup */
-                    });
+                await adminClient.query(`DELETE FROM agent_run_history WHERE week_iso = $1`, [iso]).catch(() => {
+                    /* ignore errors during cleanup */
+                });
             }
         }
         if (writerClient !== null) {
@@ -167,7 +180,7 @@ describe('agent_run_history table — structure + privilege (ADR 0036)', () => {
 
     function skipIfNotReachable(): boolean {
         if (suiteSkipped) {
-            console.info('[SKIP] Postgres not reachable — test skipped');
+            console.warn('[SKIP] Postgres not reachable — test skipped');
             return true;
         }
         return false;
@@ -276,7 +289,8 @@ describe('agent_run_history table — structure + privilege (ADR 0036)', () => {
         const weekIso = `2099-W06-sdf-${Date.now()}`;
         insertedWeekIsos.push(weekIso);
 
-        const result = await writerClient!.query<{ agent_run_id: number | string | null }>(
+        const rows = await callWriteSdf<{ agent_run_id: number | string | null }>(
+            writerClient!,
             `SELECT record_agent_run_history(
                 $1, $2, NULL, 'claude-opus-4-7', '/r/test.md', '/r/test.json',
                 'COMPLETED', NULL, now(), now(),
@@ -285,8 +299,8 @@ describe('agent_run_history table — structure + privilege (ADR 0036)', () => {
             [weekIso, parentVersionId],
         );
 
-        expect(result.rows.length).toBe(1);
-        const raw = result.rows[0]!.agent_run_id;
+        expect(rows.length).toBe(1);
+        const raw = rows[0]!.agent_run_id;
         const asNumber = typeof raw === 'string' ? Number(raw) : raw;
         expect(asNumber).not.toBeNull();
         expect(asNumber).toBeGreaterThan(0);
@@ -300,7 +314,8 @@ describe('agent_run_history table — structure + privilege (ADR 0036)', () => {
         const weekIso = `2099-W07-idem-${Date.now()}`;
         insertedWeekIsos.push(weekIso);
 
-        const first = await writerClient!.query<{ agent_run_id: number | string | null }>(
+        const first = await callWriteSdf<{ agent_run_id: number | string | null }>(
+            writerClient!,
             `SELECT record_agent_run_history(
                 $1, $2, NULL, 'm', NULL, NULL,
                 'COMPLETED', NULL, now(), now(),
@@ -308,9 +323,10 @@ describe('agent_run_history table — structure + privilege (ADR 0036)', () => {
             ) AS agent_run_id`,
             [weekIso, parentVersionId],
         );
-        expect(first.rows[0]!.agent_run_id).not.toBeNull();
+        expect(first[0]!.agent_run_id).not.toBeNull();
 
-        const second = await writerClient!.query<{ agent_run_id: number | string | null }>(
+        const second = await callWriteSdf<{ agent_run_id: number | string | null }>(
+            writerClient!,
             `SELECT record_agent_run_history(
                 $1, $2, NULL, 'm', NULL, NULL,
                 'COMPLETED', NULL, now(), now(),
@@ -318,7 +334,7 @@ describe('agent_run_history table — structure + privilege (ADR 0036)', () => {
             ) AS agent_run_id`,
             [weekIso, parentVersionId],
         );
-        expect(second.rows[0]!.agent_run_id).toBeNull();
+        expect(second[0]!.agent_run_id).toBeNull();
     });
 
     // ---- [8] Direct INSERT under agent_writer is REVOKEd (SDF-only) ----

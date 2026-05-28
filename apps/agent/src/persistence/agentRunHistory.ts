@@ -39,10 +39,7 @@ interface ISdfRow {
     readonly agent_run_id: number | string | null;
 }
 
-export async function insertAgentRunHistory(
-    pg: IAgentPgClient,
-    row: IAgentRunHistoryRow,
-): Promise<number | null> {
+export async function insertAgentRunHistory(pg: IAgentPgClient, row: IAgentRunHistoryRow): Promise<number | null> {
     const rows = await pg.query<ISdfRow>(
         `SELECT record_agent_run_history(
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13

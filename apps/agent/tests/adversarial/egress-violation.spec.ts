@@ -7,10 +7,7 @@
 // `terminalState='FAILED'` with a `failureReason` containing 'EgressViolation'
 // or 'EGRESS_VIOLATION'. No call to `aiGateway.generateStructured` may occur.
 
-import {
-    EgressViolationError,
-    redactForLlm,
-} from '../../src/llm/redactForLlm.js';
+import { EgressViolationError, redactForLlm } from '../../src/llm/redactForLlm.js';
 import {
     runWeeklyLoop,
     type IRunWeeklyLoopDeps,
@@ -20,12 +17,7 @@ import {
     type IReportWriterPort,
     type ILogger,
 } from '../../src/loop/runWeeklyLoop.js';
-import type {
-    BacktestReportParsed,
-    GetDecisionsResultParsed,
-    HaltStateViewParsed,
-    PerformanceByVersionViewParsed,
-} from '../../src/mcp/schemas.js';
+import type { BacktestReportParsed, GetDecisionsResultParsed, HaltStateViewParsed, PerformanceByVersionViewParsed } from '../../src/mcp/schemas.js';
 import { ProposedDraftSchema } from '../../src/llm/ProposedDraftSchema.js';
 
 // ---------------------------------------------------------------------------
@@ -99,9 +91,7 @@ describe('redactForLlm — blocklisted field throws EgressViolationError', () =>
     });
 
     it('throws when input contains apiKey nested inside an object', () => {
-        expect(() =>
-            redactForLlm({ summary: { sharpe: '0.42', apiKey: 'deep-secret' } }),
-        ).toThrow(EgressViolationError);
+        expect(() => redactForLlm({ summary: { sharpe: '0.42', apiKey: 'deep-secret' } })).toThrow(EgressViolationError);
     });
 
     it('includes the offending path in the error message', () => {
@@ -214,10 +204,7 @@ describe('runWeeklyLoop — egress violation (ADR 0037, W6a vector 1)', () => {
         const result = await runWeeklyLoop(deps);
         expect(result.failureReason).not.toBeNull();
         const reason = result.failureReason!;
-        const mentionsEgress =
-            reason.includes('EgressViolation') ||
-            reason.includes('EGRESS_VIOLATION') ||
-            reason.includes('egress');
+        const mentionsEgress = reason.includes('EgressViolation') || reason.includes('EGRESS_VIOLATION') || reason.includes('egress');
         // The failure reason should be traceable to the egress error name or code.
         // EgressViolationError.name === 'EgressViolationError' → extracted as 'EgressViolationError'.
         expect(mentionsEgress || reason.includes('EgressViolationError')).toBe(true);

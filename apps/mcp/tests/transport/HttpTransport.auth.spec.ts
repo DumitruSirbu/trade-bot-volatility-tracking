@@ -33,7 +33,9 @@ function mintToken(payload: IPayload, secretOverride?: Buffer): string {
     const headerSeg = MCP_AUTH_HS256_HEADER_B64URL;
     const payloadSeg = base64UrlEncode(JSON.stringify(payload));
     const headerAndPayload = `${headerSeg}.${payloadSeg}`;
-    const sig = createHmac('sha256', secretOverride ?? SECRET).update(headerAndPayload).digest();
+    const sig = createHmac('sha256', secretOverride ?? SECRET)
+        .update(headerAndPayload)
+        .digest();
     const sigSeg = sig.toString('base64').replace(/=+$/u, '').replace(/\+/gu, '-').replace(/\//gu, '_');
 
     return `${headerAndPayload}.${sigSeg}`;

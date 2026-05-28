@@ -11,8 +11,6 @@ import {
 } from '@bot/shared';
 import { ArgumentsHost, BadRequestException, HttpException, UnauthorizedException, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { plainToInstance } from 'class-transformer';
-import { validate } from 'class-validator';
 import type { Request, Response } from 'express';
 import { createHash } from 'node:crypto';
 
@@ -502,6 +500,7 @@ describe('AuthController.login (M10 W0.5 / ADR 0027)', () => {
         // from the env-resident secret on the request path.
         it('computes the expected-secret hash once at construction, not per request', async () => {
             const ctx = buildController();
+            // eslint-disable-next-line @typescript-eslint/no-require-imports -- jest.spyOn requires the CJS module object to intercept createHash; dynamic import() returns a non-configurable module binding
             const cryptoModule = require('node:crypto') as typeof import('node:crypto');
             const spy = jest.spyOn(cryptoModule, 'createHash');
 

@@ -33,14 +33,11 @@ function runEslintOnStdin(source: string, virtualFilename: string): EslintResult
     let exitCode = 0;
 
     try {
-        output = execSync(
-            `echo ${JSON.stringify(source)} | "${ESLINT_BIN}" --stdin --stdin-filename "${virtualFilename}"`,
-            {
-                cwd: REPO_ROOT,
-                encoding: 'utf-8',
-                stdio: ['pipe', 'pipe', 'pipe'],
-            },
-        );
+        output = execSync(`echo ${JSON.stringify(source)} | "${ESLINT_BIN}" --stdin --stdin-filename "${virtualFilename}"`, {
+            cwd: REPO_ROOT,
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+        });
     } catch (err) {
         const spawnErr = err as { status?: number; stdout?: string; stderr?: string };
         exitCode = spawnErr.status ?? 1;
@@ -56,10 +53,7 @@ const VIRTUAL_AGENT_SRC = 'apps/agent/src/fake.ts';
 
 describe('ESLint boundary — apps/agent no-restricted-imports (ADR 0035 §2.3)', () => {
     it('import from @bot/engine triggers a no-restricted-imports violation', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import x from '@bot/engine';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import x from '@bot/engine';", VIRTUAL_AGENT_SRC);
 
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/@bot\/engine/);
@@ -67,10 +61,7 @@ describe('ESLint boundary — apps/agent no-restricted-imports (ADR 0035 §2.3)'
     });
 
     it('import from @bot/analysis triggers a no-restricted-imports violation', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import y from '@bot/analysis';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import y from '@bot/analysis';", VIRTUAL_AGENT_SRC);
 
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/@bot\/analysis/);
@@ -78,10 +69,7 @@ describe('ESLint boundary — apps/agent no-restricted-imports (ADR 0035 §2.3)'
     });
 
     it('import from @bot/mcp triggers a no-restricted-imports violation', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import z from '@bot/mcp';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import z from '@bot/mcp';", VIRTUAL_AGENT_SRC);
 
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/@bot\/mcp/);
@@ -89,11 +77,7 @@ describe('ESLint boundary — apps/agent no-restricted-imports (ADR 0035 §2.3)'
     });
 
     it('all three banned imports in one file each trigger a violation', () => {
-        const source = [
-            "import x from '@bot/engine';",
-            "import y from '@bot/analysis';",
-            "import z from '@bot/mcp';",
-        ].join(' ');
+        const source = ["import x from '@bot/engine';", "import y from '@bot/analysis';", "import z from '@bot/mcp';"].join(' ');
 
         const { exitCode, output } = runEslintOnStdin(source, VIRTUAL_AGENT_SRC);
 
@@ -108,47 +92,32 @@ describe('ESLint boundary — apps/agent no-restricted-imports (ADR 0035 §2.3)'
     // `../../apps/mcp/...`). Without explicit tests for those, a regression
     // that drops a pattern from the list would slip through.
     it('relative reach `../mcp/x` triggers a no-restricted-imports violation', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import x from '../mcp/x';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import x from '../mcp/x';", VIRTUAL_AGENT_SRC);
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/no-restricted-imports/);
     });
 
     it('relative reach `../../apps/mcp/x` triggers a no-restricted-imports violation', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import x from '../../apps/mcp/x';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import x from '../../apps/mcp/x';", VIRTUAL_AGENT_SRC);
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/no-restricted-imports/);
     });
 
     it('relative reach `../../packages/analysis/x` triggers a no-restricted-imports violation', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import x from '../../packages/analysis/x';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import x from '../../packages/analysis/x';", VIRTUAL_AGENT_SRC);
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/no-restricted-imports/);
     });
 
     it('relative reach `../../engine/x` triggers a no-restricted-imports violation', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import x from '../../engine/x';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import x from '../../engine/x';", VIRTUAL_AGENT_SRC);
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/no-restricted-imports/);
     });
 
     it('a clean import from @bot/shared does NOT trigger no-restricted-imports', () => {
         // @bot/shared is the one allowed cross-workspace dep — it must not be blocked.
-        const { output } = runEslintOnStdin(
-            "import { IOrder } from '@bot/shared';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { output } = runEslintOnStdin("import { IOrder } from '@bot/shared';", VIRTUAL_AGENT_SRC);
 
         // The no-restricted-imports rule must not mention @bot/shared.
         expect(output).not.toMatch(/no-restricted-imports.*@bot\/shared/);

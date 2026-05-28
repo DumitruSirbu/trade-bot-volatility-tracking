@@ -28,7 +28,7 @@
 
 import { PositionSideEnum } from '@bot/shared';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { BootstrapSubkeyDeriver } from '../../boot-mode-history/service/BootstrapSubkeyDeriver';
 import { AppConfigService } from '../../config/service';
@@ -626,8 +626,7 @@ describe('PaperAccountStateService — atomicity', () => {
                 // Hash MUST match the service's computed sentinel hash so
                 // validateMetaOrThrow passes. The sentinel is stable across
                 // boots so we compute it the same way here.
-                simulatorConfigHash: require('node:crypto')
-                    .createHash('sha256')
+                simulatorConfigHash: createHash('sha256')
                     .update(Buffer.from('paper_simulator_config_hash:R2b-pending-architect-adjudication', 'utf8'))
                     .digest('hex'),
                 bootstrapAtStartFingerprint: '00'.repeat(32),

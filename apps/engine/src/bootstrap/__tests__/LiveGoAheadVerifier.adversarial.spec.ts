@@ -38,7 +38,7 @@ async function writeTempFile(content: string): Promise<string> {
     return path;
 }
 
-function buildVerifier(configOverrides: { liveGoAheadTokenFile?: string; liveGoAheadTokenHash?: string }): LiveGoAheadVerifier {
+function _buildVerifier(configOverrides: { liveGoAheadTokenFile?: string; liveGoAheadTokenHash?: string }): LiveGoAheadVerifier {
     const appConfig = {
         ...makeConfig(configOverrides),
     };

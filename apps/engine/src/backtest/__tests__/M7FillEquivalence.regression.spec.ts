@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { CoinTierEnum, IBacktestFill, OrderPolicyEnum, type ITierSlippageParams } from '@bot/shared';
+import { CoinTierEnum, IBacktestFill, type ITierSlippageParams } from '@bot/shared';
 
 import { Money } from '../../common/utils';
 import { TickAggregateEntity } from '../../market-data/entity';

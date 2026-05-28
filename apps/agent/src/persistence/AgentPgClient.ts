@@ -50,24 +50,8 @@ export function buildAgentPoolConfig(env: IAgentPgEnv): PoolConfig {
     const host = readRequired(env, 'AGENT_DB_HOST');
     const port = parsePortOrThrow(env.AGENT_DB_PORT);
     const database = readRequired(env, 'AGENT_DB_NAME');
-    const user = env.AGENT_DB_USER && env.AGENT_DB_USER.length > 0 ? env.AGENT_DB_USER : EXPECTED_ROLE;
-
-    if (user !== EXPECTED_ROLE) {
-        throw new AgentPgConfigError(
-            'AGENT_DB_USER',
-            `must be "${EXPECTED_ROLE}" (got "${user}"); the agent's least-privilege role is the only acceptable login per ADR 0036`,
-        );
-    }
-
-    const password = readRequired(env, 'AGENT_DB_PASSWORD');
-
-    if (password === SENTINEL_PASSWORD) {
-        throw new AgentPgConfigError(
-            'AGENT_DB_PASSWORD',
-            'still set to the migration sentinel; rotate the agent_writer role password before launch',
-        );
-    }
-
+    const user = validateUserOrThrow(env);
+    const password = validatePasswordOrThrow(env);
     const ssl = parseSslFlag(env.AGENT_DB_SSL);
 
     return {
@@ -84,6 +68,29 @@ export function buildAgentPoolConfig(env: IAgentPgEnv): PoolConfig {
     };
 }
 
+function validateUserOrThrow(env: IAgentPgEnv): string {
+    const user = env.AGENT_DB_USER && env.AGENT_DB_USER.length > 0 ? env.AGENT_DB_USER : EXPECTED_ROLE;
+
+    if (user !== EXPECTED_ROLE) {
+        throw new AgentPgConfigError(
+            'AGENT_DB_USER',
+            `must be "${EXPECTED_ROLE}" (got "${user}"); the agent's least-privilege role is the only acceptable login per ADR 0036`,
+        );
+    }
+
+    return user;
+}
+
+function validatePasswordOrThrow(env: IAgentPgEnv): string {
+    const password = readRequired(env, 'AGENT_DB_PASSWORD');
+
+    if (password === SENTINEL_PASSWORD) {
+        throw new AgentPgConfigError('AGENT_DB_PASSWORD', 'still set to the migration sentinel; rotate the agent_writer role password before launch');
+    }
+
+    return password;
+}
+
 export class AgentPgClient implements IAgentPgClient {
     private readonly pool: Pool;
 
@@ -92,9 +99,32 @@ export class AgentPgClient implements IAgentPgClient {
         this.pool = new Pool(config);
     }
 
+    // The agent_writer role is created with `default_transaction_read_only = on`
+    // (least-privilege: the agent's ONLY writes go through SECURITY DEFINER
+    // functions). Under that role default, an autocommit statement runs in a
+    // read-only transaction; the SDF body's `SET LOCAL transaction_read_only =
+    // off` then fails with 25006 ("transaction read-write mode must be set
+    // before any query") because the implicit transaction is already underway.
+    // We therefore run every statement inside an explicit transaction whose
+    // FIRST action is `SET TRANSACTION READ WRITE` — legal because no query has
+    // run yet — which lets the SDF perform its INSERT. All agent writes flow
+    // through SDFs, so promoting every query to read-write is correct here.
     async query<T extends QueryResultRow = QueryResultRow>(sql: string, params: ReadonlyArray<unknown>): Promise<T[]> {
-        const result = await this.pool.query<T>(sql, params as unknown[]);
-        return result.rows;
+        const client = await this.pool.connect();
+
+        try {
+            await client.query('BEGIN');
+            await client.query('SET TRANSACTION READ WRITE');
+            const result = await client.query<T>(sql, params as unknown[]);
+            await client.query('COMMIT');
+
+            return result.rows;
+        } catch (cause) {
+            await client.query('ROLLBACK').catch(() => undefined);
+            throw cause;
+        } finally {
+            client.release();
+        }
     }
 
     async close(): Promise<void> {
@@ -119,7 +149,7 @@ function parsePortOrThrow(raw: string | undefined): number {
 
     const parsed = Number(raw);
 
-    if (! Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+    if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
         throw new AgentPgConfigError('AGENT_DB_PORT', `not a valid TCP port: "${raw}"`);
     }
 

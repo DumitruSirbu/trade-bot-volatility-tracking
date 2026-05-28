@@ -38,7 +38,7 @@ import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { Money } from '../../src/common/utils/money';
 import { SubmitStateEnum } from '../../src/execution/enum';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
-import { IExchangeClient, IPositionSnapshot } from '../../src/exchange/interface';
+import { IPositionSnapshot } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { POSITION_ADOPTION_VANISHED_EVENT } from '../../src/position/const';
 import { PositionEntity } from '../../src/position/entity';

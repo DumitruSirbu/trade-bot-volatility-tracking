@@ -71,10 +71,18 @@ async function bootstrap(): Promise<void> {
         // leak DB password / AI gateway key / MCP bearer / auth header.
         redact: {
             paths: [
-                '*.password', '*.apiKey', '*.bearer', '*.token', '*.secret',
-                '*.AGENT_DB_PASSWORD', '*.AI_GATEWAY_API_KEY', '*.AGENT_MCP_BEARER',
-                'authorization', 'headers.authorization',
-                'config.password', 'config.apiKey',
+                '*.password',
+                '*.apiKey',
+                '*.bearer',
+                '*.token',
+                '*.secret',
+                '*.AGENT_DB_PASSWORD',
+                '*.AI_GATEWAY_API_KEY',
+                '*.AGENT_MCP_BEARER',
+                'authorization',
+                'headers.authorization',
+                'config.password',
+                'config.apiKey',
             ],
             remove: true,
         },
@@ -267,18 +275,12 @@ export function computeEffectiveLockStaleMs(wallclockMs: number): number {
         // Defensive: the Math.max + margin guarantees this, but assert so a
         // future refactor that drops the margin trips a clear error rather
         // than a silent lock-steal.
-        throw new Error(
-            `Lock stale window (${effective}ms) must exceed wallclock budget (${wallclockMs}ms); refusing to boot`,
-        );
+        throw new Error(`Lock stale window (${effective}ms) must exceed wallclock budget (${wallclockMs}ms); refusing to boot`);
     }
     return effective;
 }
 
-async function tryAcquireLock(
-    lockPath: string,
-    staleMs: number,
-    logger: pino.Logger,
-): Promise<(() => Promise<void>) | null> {
+async function tryAcquireLock(lockPath: string, staleMs: number, logger: pino.Logger): Promise<(() => Promise<void>) | null> {
     await mkdir(dirname(lockPath), { recursive: true }).catch(() => undefined);
     try {
         const release = await lockFile(lockPath, { realpath: false, stale: staleMs });

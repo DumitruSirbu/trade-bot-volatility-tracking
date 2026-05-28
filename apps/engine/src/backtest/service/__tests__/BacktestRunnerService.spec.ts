@@ -104,12 +104,13 @@ function buildCandle(openTimeMs: number, open = 100, close = 101, high = 102, lo
     return {
         symbol: 'ETHUSDT',
         openTimeMs,
-        open: String(open),
-        close: String(close),
-        high: String(high),
-        low: String(low),
-        volume: '1000',
-        closeTimeMs: openTimeMs + CANDLE_5M_INTERVAL_MS - 1,
+        open: new Money(open),
+        close: new Money(close),
+        high: new Money(high),
+        low: new Money(low),
+        volume: new Money(1000),
+        quoteVolume: new Money(101000),
+        isClosed: true,
     };
 }
 
@@ -364,7 +365,7 @@ describe('BacktestRunnerService.run — instrument seeding', () => {
                 resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
             },
             candleLoader: {
-                loadFor5mWindow: jest.fn().mockImplementation(({ fromMs, toMs }: { fromMs: number; toMs: number }) => {
+                loadFor5mWindow: jest.fn().mockImplementation(({ fromMs, toMs: _toMs }: { fromMs: number; toMs: number }) => {
                     // Warmup returns empty; replay returns one bar
                     const isReplayWindow = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
                     return Promise.resolve(isReplayWindow ? [bar] : []);
@@ -502,106 +503,300 @@ describe('BacktestRunnerService.run — daily tier cache', () => {
 
 // ─── R6: applyFundingForBar cursor behavior ────────────────────────────────────
 
+// Shared helper for R6: builds a trigger-worthy indicator snapshot so the orchestrator
+// is called on bar1 and can seed an open position into the book before bar2's funding
+// window is evaluated.
+function buildTriggerSnapshot(symbol: string, barOpenTimeMs: number) {
+    return {
+        symbol,
+        closedBarOpenTimeMs: barOpenTimeMs,
+        vwapSession: new Money('2000'),
+        vwap20bar: new Money('2000'),
+        vwap24h: new Money('2000'),
+        vwapEventAnchored: new Money('2000'),
+        activeVwapAnchorType: 'session',
+        vwapDeviationPct: 3.5,
+        vwapDeviationSigma: 2.5, // >= vwap_sigma_trigger(2.0) → trigger fires
+        volumeRatio: 2.5, // >= volume_ratio_min(1.5) → trigger fires
+        volume20barAvg: new Money('500000'),
+        atr14: new Money('50'),
+        adx14: 30,
+        adxDiPlus: 20,
+        adxDiMinus: 10,
+        rsi14: 60,
+        bollingerUpper: new Money('2100'),
+        bollingerLower: new Money('1900'),
+        bollingerPctB: 0.7,
+        close: new Money('2070'),
+        fiveMinMovePct: 1.0,
+    };
+}
+
+// Builds an IBacktestFill for a long open on the given symbol at the given timestamp.
+function buildOpenFill(symbol: string, tsMs: number): Record<string, unknown> {
+    return {
+        eventId: `test-event:${tsMs}`,
+        symbol,
+        side: 'long',
+        intent: 'open',
+        priceUsdt: '2000',
+        qty: '1',
+        feeUsdt: '2',
+        slippagePct: '0.05',
+        tsMs,
+        missed: false,
+        depthAware: false,
+    };
+}
+
+// Builds an IBacktestPosition for a long open on the given symbol at the given timestamp.
+// entryNotionalUsdt = qty * entryPrice = 1 * 2000 = 2000 USDT.
+function buildOpenPosition(symbol: string, openedAtMs: number): Record<string, unknown> {
+    return {
+        positionId: `test-event:${openedAtMs}:${openedAtMs + 100}`,
+        symbol,
+        side: 'long',
+        slot: 'A',
+        entryPriceUsdt: '2000',
+        qty: '1',
+        entryNotionalUsdt: '2000',
+        leverage: '10',
+        stopLossUsdt: '1900',
+        takeProfitUsdt: '2200',
+        openedAtMs,
+        timeStopAtMs: null,
+        maxAdverseExcursionPct: '0',
+        maxFavorableExcursionPct: '0',
+        accumulatedFundingUsdt: '0',
+    };
+}
+
 describe('BacktestRunnerService — applyFundingForBar (via run integration)', () => {
-    // We test funding application by checking that the FundingReplayLoader.computeCashflow
-    // is called for events that fall within the bar's window, and not for events outside it.
+    // Strategy: the orchestrator mock seeds a real IBacktestPosition into the book on bar1.
+    // Bar2's applyFundingForBar then has an open position to iterate over, so computeCashflow
+    // is called iff the funding event's tsMs falls within bar2's window [bar2Open, bar2End].
+    //
+    // Call order inside processBar: applyFundingForBar → handleOpenPositions → trigger dispatch.
+    // So by the time bar2 runs its funding step the position seeded by the bar1 orchestrator
+    // call is already in book.openPositions.
 
-    it('does not apply funding events at barEndMs or later', async () => {
-        const computeCashflow = jest.fn().mockReturnValue(new Money('0'));
+    it('does not apply a funding event whose tsMs is strictly after barEndMs', async () => {
+        const computeCashflow = jest.fn().mockReturnValue(new Money('5'));
 
-        const barOpenTimeMs = new Date('2024-01-15T08:00:00.000Z').getTime();
-        const barEndMs = barOpenTimeMs + CANDLE_5M_INTERVAL_MS;
-        const bar = buildCandle(barOpenTimeMs);
+        const bar1OpenMs = new Date('2024-01-15T08:00:00.000Z').getTime();
+        const bar2OpenMs = bar1OpenMs + CANDLE_5M_INTERVAL_MS;
+        const bar2EndMs = bar2OpenMs + CANDLE_5M_INTERVAL_MS;
 
-        // Place a position so funding can be applied
-        const applyFundingCashflow = jest.fn();
+        const bar1 = buildCandle(bar1OpenMs);
+        const bar2 = buildCandle(bar2OpenMs);
 
-        // Funding event exactly AT barEndMs — must NOT be applied
-        const fundingAtBarEnd = {
-            symbol: 'ETHUSDT',
-            tsMs: barEndMs,
-            rate: '0.0001',
+        // Funding event arrives one millisecond after bar2 closes — must not be applied.
+        const fundingAfterBar2 = { symbol: 'ETHUSDT', tsMs: bar2EndMs + 1, rate: '0.0001' };
+
+        const orchestrator = {
+            processEvent: jest.fn().mockImplementation((_event: unknown, ctx: any) => {
+                const fill = buildOpenFill('ETHUSDT', bar1OpenMs + 100);
+                const position = buildOpenPosition('ETHUSDT', bar1OpenMs);
+                ctx.sink.applyOpenFill(fill, position, '2024-01-15');
+                return Promise.resolve({ skipped: false, rejectedByGate: false, missedFill: false, filled: true });
+            }),
         };
 
         const runner = buildRunner({
             pointInTimeUniverse: {
                 resolveForWindow: jest.fn().mockResolvedValue(['ETHUSDT']),
-                resolveAt: jest.fn().mockResolvedValue(new Map()),
+                resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
             },
             candleLoader: {
                 loadFor5mWindow: jest.fn().mockImplementation(({ fromMs }: { fromMs: number }) => {
                     const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
-                    return Promise.resolve(isReplay ? [bar] : []);
+                    return Promise.resolve(isReplay ? [bar1, bar2] : []);
                 }),
                 loadTicksForBar: jest.fn().mockResolvedValue([]),
             },
             indicatorStateBuilder: {
                 buildInitialWindow: jest.fn().mockReturnValue([]),
-                appendBar: jest.fn().mockReturnValue([]),
-                computeSnapshot: jest.fn().mockReturnValue(null),
+                appendBar: jest.fn().mockReturnValue([bar1]),
+                // Return a triggering snapshot on bar1 so the orchestrator seeds the position,
+                // then return null on bar2 to avoid a second trigger dispatch.
+                computeSnapshot: jest.fn().mockReturnValueOnce(buildTriggerSnapshot('ETHUSDT', bar1OpenMs)).mockReturnValueOnce(null),
             },
             fundingReplayLoader: {
-                loadForWindow: jest.fn().mockResolvedValue([fundingAtBarEnd]),
+                loadForWindow: jest.fn().mockResolvedValue([fundingAfterBar2]),
                 computeCashflow,
             },
+            orchestrator,
         });
 
         await runner.run(buildConfig());
 
-        // No open positions means computeCashflow is never called in any case,
-        // but the cursor logic must not advance past the event at barEndMs either.
-        // The test validates the boundary condition by checking the runner completes
-        // without error and no cashflow is applied for a non-existing position.
+        // The funding event is outside every bar window → computeCashflow must not be called.
         expect(computeCashflow).not.toHaveBeenCalled();
     });
 
-    it('applies funding events strictly before barEndMs', async () => {
-        const computeCashflow = jest.fn().mockReturnValue(new Money('5'));
+    it('applies a funding event whose tsMs falls strictly before barEndMs (long pays negative cashflow for rate>0)', async () => {
+        // rate=0.0001 (positive), side=long → cashflow = notional * (-rate) = 2000 * (-0.0001) = -0.2 USDT
+        const expectedCashflow = new Money('-0.2');
+        const computeCashflow = jest.fn().mockReturnValue(expectedCashflow);
 
-        const barOpenTimeMs = new Date('2024-01-15T08:00:00.000Z').getTime();
-        const barEndMs = barOpenTimeMs + CANDLE_5M_INTERVAL_MS;
-        const bar = buildCandle(barOpenTimeMs);
+        const bar1OpenMs = new Date('2024-01-15T08:00:00.000Z').getTime();
+        const bar2OpenMs = bar1OpenMs + CANDLE_5M_INTERVAL_MS;
+        const bar2EndMs = bar2OpenMs + CANDLE_5M_INTERVAL_MS;
 
-        // Funding event just before barEndMs — must be applied
-        const fundingJustBeforeBarEnd = {
-            symbol: 'ETHUSDT',
-            tsMs: barEndMs - 1,
-            rate: '0.0001',
+        const bar1 = buildCandle(bar1OpenMs);
+        const bar2 = buildCandle(bar2OpenMs);
+
+        // Funding event one millisecond before bar2 closes — must be applied.
+        const fundingInBar2 = { symbol: 'ETHUSDT', tsMs: bar2EndMs - 1, rate: '0.0001' };
+
+        const orchestrator = {
+            processEvent: jest.fn().mockImplementation((_event: unknown, ctx: any) => {
+                const fill = buildOpenFill('ETHUSDT', bar1OpenMs + 100);
+                const position = buildOpenPosition('ETHUSDT', bar1OpenMs);
+                ctx.sink.applyOpenFill(fill, position, '2024-01-15');
+                return Promise.resolve({ skipped: false, rejectedByGate: false, missedFill: false, filled: true });
+            }),
         };
-
-        // We need an open position for the cashflow to be applied.
-        // The sink spy lets us check applyFundingCashflow is invoked.
-        const applyFundingCashflow = jest.fn();
 
         const runner = buildRunner({
             pointInTimeUniverse: {
                 resolveForWindow: jest.fn().mockResolvedValue(['ETHUSDT']),
-                resolveAt: jest.fn().mockResolvedValue(new Map()),
+                resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
             },
             candleLoader: {
                 loadFor5mWindow: jest.fn().mockImplementation(({ fromMs }: { fromMs: number }) => {
                     const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
-                    return Promise.resolve(isReplay ? [bar] : []);
+                    return Promise.resolve(isReplay ? [bar1, bar2] : []);
                 }),
                 loadTicksForBar: jest.fn().mockResolvedValue([]),
             },
             indicatorStateBuilder: {
                 buildInitialWindow: jest.fn().mockReturnValue([]),
-                appendBar: jest.fn().mockReturnValue([]),
-                computeSnapshot: jest.fn().mockReturnValue(null),
+                appendBar: jest.fn().mockReturnValue([bar1]),
+                computeSnapshot: jest.fn().mockReturnValueOnce(buildTriggerSnapshot('ETHUSDT', bar1OpenMs)).mockReturnValueOnce(null),
             },
             fundingReplayLoader: {
-                loadForWindow: jest.fn().mockResolvedValue([fundingJustBeforeBarEnd]),
+                loadForWindow: jest.fn().mockResolvedValue([fundingInBar2]),
                 computeCashflow,
             },
+            orchestrator,
         });
 
         await runner.run(buildConfig());
 
-        // No open positions → computeCashflow not called (no positions to apply to),
-        // but the important check is the runner doesn't throw and completes normally.
-        // The cursor correctly advances past the in-window event.
-        expect(computeCashflow).not.toHaveBeenCalled(); // no positions → no iteration
+        // The funding event is within bar2's window → computeCashflow called once with the
+        // open position's notional (2000 USDT), the raw rate, and the position side.
+        expect(computeCashflow).toHaveBeenCalledTimes(1);
+        expect(computeCashflow).toHaveBeenCalledWith(
+            expect.objectContaining({ toString: expect.any(Function) }), // MoneyValue for notional
+            '0.0001', // raw rate string from the funding event
+            'long',
+        );
+    });
+
+    it('applies a funding event whose tsMs equals barEndMs (inclusive boundary)', async () => {
+        const computeCashflow = jest.fn().mockReturnValue(new Money('-0.2'));
+
+        const bar1OpenMs = new Date('2024-01-15T08:00:00.000Z').getTime();
+        const bar2OpenMs = bar1OpenMs + CANDLE_5M_INTERVAL_MS;
+        const bar2EndMs = bar2OpenMs + CANDLE_5M_INTERVAL_MS;
+
+        const bar1 = buildCandle(bar1OpenMs);
+        const bar2 = buildCandle(bar2OpenMs);
+
+        // Funding event exactly at bar2's close boundary — inclusive, must be applied.
+        const fundingAtBar2End = { symbol: 'ETHUSDT', tsMs: bar2EndMs, rate: '0.0001' };
+
+        const orchestrator = {
+            processEvent: jest.fn().mockImplementation((_event: unknown, ctx: any) => {
+                const fill = buildOpenFill('ETHUSDT', bar1OpenMs + 100);
+                const position = buildOpenPosition('ETHUSDT', bar1OpenMs);
+                ctx.sink.applyOpenFill(fill, position, '2024-01-15');
+                return Promise.resolve({ skipped: false, rejectedByGate: false, missedFill: false, filled: true });
+            }),
+        };
+
+        const runner = buildRunner({
+            pointInTimeUniverse: {
+                resolveForWindow: jest.fn().mockResolvedValue(['ETHUSDT']),
+                resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
+            },
+            candleLoader: {
+                loadFor5mWindow: jest.fn().mockImplementation(({ fromMs }: { fromMs: number }) => {
+                    const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
+                    return Promise.resolve(isReplay ? [bar1, bar2] : []);
+                }),
+                loadTicksForBar: jest.fn().mockResolvedValue([]),
+            },
+            indicatorStateBuilder: {
+                buildInitialWindow: jest.fn().mockReturnValue([]),
+                appendBar: jest.fn().mockReturnValue([bar1]),
+                computeSnapshot: jest.fn().mockReturnValueOnce(buildTriggerSnapshot('ETHUSDT', bar1OpenMs)).mockReturnValueOnce(null),
+            },
+            fundingReplayLoader: {
+                loadForWindow: jest.fn().mockResolvedValue([fundingAtBar2End]),
+                computeCashflow,
+            },
+            orchestrator,
+        });
+
+        await runner.run(buildConfig());
+
+        // barEndMs is inclusive per the applyFundingForBar while-condition (tsMs <= barEndMs).
+        expect(computeCashflow).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips a funding event that predates the position openedAtMs (openedAtMs guard)', async () => {
+        const computeCashflow = jest.fn().mockReturnValue(new Money('-0.2'));
+
+        const bar1OpenMs = new Date('2024-01-15T08:00:00.000Z').getTime();
+        const bar2OpenMs = bar1OpenMs + CANDLE_5M_INTERVAL_MS;
+
+        const bar1 = buildCandle(bar1OpenMs);
+        const bar2 = buildCandle(bar2OpenMs);
+
+        // Position opens at bar1OpenMs + 100 ms; funding event timestamp is earlier → skip.
+        const positionOpenedAtMs = bar1OpenMs + 100;
+        const fundingBeforeOpen = { symbol: 'ETHUSDT', tsMs: bar1OpenMs + 50, rate: '0.0001' };
+
+        const orchestrator = {
+            processEvent: jest.fn().mockImplementation((_event: unknown, ctx: any) => {
+                const fill = buildOpenFill('ETHUSDT', positionOpenedAtMs);
+                const position = buildOpenPosition('ETHUSDT', positionOpenedAtMs);
+                ctx.sink.applyOpenFill(fill, position, '2024-01-15');
+                return Promise.resolve({ skipped: false, rejectedByGate: false, missedFill: false, filled: true });
+            }),
+        };
+
+        const runner = buildRunner({
+            pointInTimeUniverse: {
+                resolveForWindow: jest.fn().mockResolvedValue(['ETHUSDT']),
+                resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
+            },
+            candleLoader: {
+                loadFor5mWindow: jest.fn().mockImplementation(({ fromMs }: { fromMs: number }) => {
+                    const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
+                    return Promise.resolve(isReplay ? [bar1, bar2] : []);
+                }),
+                loadTicksForBar: jest.fn().mockResolvedValue([]),
+            },
+            indicatorStateBuilder: {
+                buildInitialWindow: jest.fn().mockReturnValue([]),
+                appendBar: jest.fn().mockReturnValue([bar1]),
+                computeSnapshot: jest.fn().mockReturnValueOnce(buildTriggerSnapshot('ETHUSDT', bar1OpenMs)).mockReturnValueOnce(null),
+            },
+            fundingReplayLoader: {
+                // The funding event falls within bar1's window but is before positionOpenedAtMs.
+                loadForWindow: jest.fn().mockResolvedValue([fundingBeforeOpen]),
+                computeCashflow,
+            },
+            orchestrator,
+        });
+
+        await runner.run(buildConfig());
+
+        // applyFundingEvent skips when fundingEvent.tsMs < position.openedAtMs.
+        expect(computeCashflow).not.toHaveBeenCalled();
     });
 });
 

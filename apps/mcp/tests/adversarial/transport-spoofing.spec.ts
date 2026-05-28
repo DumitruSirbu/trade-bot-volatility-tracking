@@ -68,12 +68,7 @@ interface IRpcResponse {
     };
 }
 
-function postJsonRpc(
-    port: number,
-    body: object,
-    bearer: string | null,
-    host = '127.0.0.1',
-): Promise<IRpcResponse> {
+function postJsonRpc(port: number, body: object, bearer: string | null, host = '127.0.0.1'): Promise<IRpcResponse> {
     return new Promise((resolve, reject) => {
         const payload = JSON.stringify(body);
         const headers: Record<string, string> = {
@@ -83,21 +78,18 @@ function postJsonRpc(
         if (bearer !== null) {
             headers.authorization = `Bearer ${bearer}`;
         }
-        const req = request(
-            { host, port, path: '/jsonrpc', method: 'POST', headers },
-            (res) => {
-                const chunks: Buffer[] = [];
-                res.on('data', (c: Buffer) => chunks.push(c));
-                res.on('end', () => {
-                    const text = Buffer.concat(chunks).toString('utf8');
-                    try {
-                        resolve({ status: res.statusCode ?? 0, body: text ? JSON.parse(text) : {} });
-                    } catch (err) {
-                        reject(err);
-                    }
-                });
-            },
-        );
+        const req = request({ host, port, path: '/jsonrpc', method: 'POST', headers }, (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (c: Buffer) => chunks.push(c));
+            res.on('end', () => {
+                const text = Buffer.concat(chunks).toString('utf8');
+                try {
+                    resolve({ status: res.statusCode ?? 0, body: text ? JSON.parse(text) : {} });
+                } catch (err) {
+                    reject(err);
+                }
+            });
+        });
         req.on('error', reject);
         req.write(payload);
         req.end();
@@ -252,11 +244,7 @@ describe('HttpTransport — adversarial transport spoofing (M13 W6a vector 5)', 
 
     it('[E] calling a non-existent method (not tools/call or tools/list) returns -32601', async () => {
         const tok = mintToken({ sub: 'agent', jti: 'notfound-method-1', aud: 'mcp', exp: FUTURE_EXP });
-        const res = await postJsonRpc(
-            handle.port,
-            { jsonrpc: '2.0', id: 10, method: 'tools/delete', params: { name: 'echo' } },
-            tok,
-        );
+        const res = await postJsonRpc(handle.port, { jsonrpc: '2.0', id: 10, method: 'tools/delete', params: { name: 'echo' } }, tok);
         expect(res.status).toBe(200);
         expect(res.body.error?.code).toBe(-32601);
     });
@@ -264,11 +252,7 @@ describe('HttpTransport — adversarial transport spoofing (M13 W6a vector 5)', 
     // Boundary: missing tools/call params.name → invalid request
     it('tools/call without params.name returns -32600', async () => {
         const tok = mintToken({ sub: 'agent', jti: 'noname-1', aud: 'mcp', exp: FUTURE_EXP });
-        const res = await postJsonRpc(
-            handle.port,
-            { jsonrpc: '2.0', id: 11, method: 'tools/call', params: {} },
-            tok,
-        );
+        const res = await postJsonRpc(handle.port, { jsonrpc: '2.0', id: 11, method: 'tools/call', params: {} }, tok);
         expect(res.status).toBe(200);
         expect(res.body.error?.code).toBe(-32600);
     });

@@ -23,7 +23,7 @@ import { BINANCE_REJECT_CLASSIFICATION, SUBMIT_NETWORK_TIMEOUT_MS, SUBMIT_TIMEOU
 import { SubmitStateEnum } from '../../../src/execution/enum';
 import { ExchangeOrderSubmitter } from '../../../src/execution/service/ExchangeOrderSubmitter';
 import { FillAccumulator } from '../../../src/execution/service/FillAccumulator';
-import { buildExchangeClientMock, buildOrderSnapshot } from '../support/fixtures';
+import { buildExchangeClientMock } from '../support/fixtures';
 
 jest.useFakeTimers();
 

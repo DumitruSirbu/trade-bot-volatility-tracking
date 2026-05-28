@@ -6,15 +6,7 @@ import { IFillPosition } from '../interface/IFillPosition.js';
 import { IFillSeed } from '../interface/IFillSeed.js';
 import { IFillSnapshot } from '../interface/IFillSnapshot.js';
 import { ISimulatedFillCore } from '../interface/ISimulatedFillCore.js';
-import {
-	parseDecimal,
-	formatDecimal,
-	multiplyDecimal,
-	divideDecimal,
-	isGreaterThanOrEqual,
-	isLessThanOrEqual,
-	addDecimal,
-} from './decimalMath.js';
+import { parseDecimal, formatDecimal, multiplyDecimal, divideDecimal } from './decimalMath.js';
 import { computeTierFillPrice, ITierSlippageParams } from './tierSlippageCalculator.js';
 import { isMissedFill, ITickSnapshot } from './missedFillDetector.js';
 import { simulateIntrabarStop, ITickAggregateSnapshot } from './intraBarStopEvaluator.js';
@@ -35,11 +27,13 @@ const BPS_DENOMINATOR = 10_000;
  * FillSimulatorCore — pure functions for simulating order fills.
  * Used by both M7 backtests (HistoricalFillAdapter) and PAPER mode (StreamingFillAdapter).
  *
- * No I/O, no clock, no random: deterministic PRNG is driven externally via IFillSeed.
+ * Deterministic by construction: No I/O, no clock, no randomness. Missed-fill is decided
+ * by tick replay (fully deterministic), not a random roll. The `IFillSeed` parameter is
+ * reserved for a future depth-aware/stochastic fill model and is currently unused.
  * No TypeORM entities, no Nest providers, no engine imports.
  *
  * Pure strategies:
- *   - Input: snapshot + intent + seed + market data
+ *   - Input: snapshot + intent + seed (reserved, unused) + market data
  *   - Output: fill result + low-fidelity flag
  *   - Same snapshot → same fill (byte-deterministic for numerical-equal inputs)
  *
@@ -59,7 +53,7 @@ const BPS_DENOMINATOR = 10_000;
  * @param intent Order intent (side, action, policy, limit, qty)
  * @param coinTier Coin tier classification
  * @param tierSlippageParams Tier slippage configuration
- * @param seed Deterministic seed for missed-fill roll
+ * @param _seed Reserved for future depth-aware/stochastic model; currently unused
  * @param intraBarTicks Intra-bar ticks for missed-fill detection (may be empty)
  * @param signalBarOpenMs Bar open timestamp in ms (used for timeout window)
  * @param orderTimeoutMs Order timeout in ms
@@ -67,41 +61,41 @@ const BPS_DENOMINATOR = 10_000;
  * @returns Simulated fill result
  */
 export function applyFill(
-	snapshot: IFillSnapshot,
-	intent: IFillIntent,
-	coinTier: CoinTierEnum,
-	tierSlippageParams: ITierSlippageParams,
-	seed: IFillSeed,
-	intraBarTicks: ITickSnapshot[],
-	signalBarOpenMs: number,
-	orderTimeoutMs: number,
-	latencyMs: number,
+    snapshot: IFillSnapshot,
+    intent: IFillIntent,
+    coinTier: CoinTierEnum,
+    tierSlippageParams: ITierSlippageParams,
+    _seed: IFillSeed,
+    intraBarTicks: ITickSnapshot[],
+    signalBarOpenMs: number,
+    orderTimeoutMs: number,
+    latencyMs: number,
 ): ISimulatedFillCore {
-	const fillTsMs = computeFillTimestamp(signalBarOpenMs, latencyMs);
+    const fillTsMs = computeFillTimestamp(signalBarOpenMs, latencyMs);
 
-	// Check if order would be missed (limit orders only).
-	if (isMissedFill(intent.policy, intent.limitPrice, intent.side, intraBarTicks, signalBarOpenMs, orderTimeoutMs)) {
-		return buildMissedFill(fillTsMs);
-	}
+    // Check if order would be missed (limit orders only).
+    if (isMissedFill(intent.policy, intent.limitPrice, intent.side, intraBarTicks, signalBarOpenMs, orderTimeoutMs)) {
+        return buildMissedFill(fillTsMs);
+    }
 
-	// Apply tier-floor slippage.
-	const slippageResult = computeTierFillPrice(intent.limitPrice, coinTier, intent.side, intent.action, tierSlippageParams);
-	const fillPrice = parseDecimal(slippageResult.fillPrice);
-	const slippagePct = slippageResult.slippagePct;
+    // Apply tier-floor slippage.
+    const slippageResult = computeTierFillPrice(intent.limitPrice, coinTier, intent.side, intent.action, tierSlippageParams);
+    const fillPrice = parseDecimal(slippageResult.fillPrice);
+    const slippagePct = slippageResult.slippagePct;
 
-	// Compute fee.
-	const feeUsdt = computeFee(fillPrice, parseDecimal(intent.qty), intent.policy);
+    // Compute fee.
+    const feeUsdt = computeFee(fillPrice, parseDecimal(intent.qty), intent.policy);
 
-	return {
-		filled: true,
-		fillPrice: slippageResult.fillPrice, // already formatted
-		qty: intent.qty,
-		feeUsdt: formatDecimal(feeUsdt),
-		slippagePct: formatDecimal(slippagePct),
-		missedReason: null,
-		lowFidelity: true, // M7 uses tier-floor slippage, not depth-aware; per ADR 0032 D15
-		tsMs: fillTsMs,
-	};
+    return {
+        filled: true,
+        fillPrice: slippageResult.fillPrice, // already formatted
+        qty: intent.qty,
+        feeUsdt: formatDecimal(feeUsdt),
+        slippagePct: formatDecimal(slippagePct),
+        missedReason: null,
+        lowFidelity: true, // M7 uses tier-floor slippage, not depth-aware; per ADR 0032 D15
+        tsMs: fillTsMs,
+    };
 }
 
 /**
@@ -115,41 +109,33 @@ export function applyFill(
  * @returns Protective fill result, or null if no stop was hit
  */
 export function applyIntraBarStop(
-	snapshot: IFillSnapshot,
-	position: IFillPosition,
-	intraBarTicks: ITickAggregateSnapshot[],
-	barOpenMs: number,
+    snapshot: IFillSnapshot,
+    position: IFillPosition,
+    intraBarTicks: ITickAggregateSnapshot[],
+    barOpenMs: number,
 ): ISimulatedFillCore | null {
-	const stopResult = simulateIntrabarStop(
-		position.side,
-		position.stopLoss,
-		position.takeProfit,
-		intraBarTicks,
-		snapshot.high,
-		snapshot.low,
-		barOpenMs,
-	);
+    const stopResult = simulateIntrabarStop(position.side, position.stopLoss, position.takeProfit, intraBarTicks, snapshot.high, snapshot.low, barOpenMs);
 
-	if (stopResult.hit === null) {
-		return null; // No SL or TP hit
-	}
+    if (stopResult.hit === null) {
+        return null; // No SL or TP hit
+    }
 
-	// A stop fill closes the position at the hit price.
-	// Fee depends on the exit action; for simplicity, use market fill semantics (taker).
-	// Note: this mimics M7 backtest behavior where protective fills are taken at close price.
-	const hitPrice = parseDecimal(stopResult.hitPrice!);
-	const feeUsdt = computeFee(hitPrice, parseDecimal(position.size), OrderPolicyEnum.REDUCE_MARKET);
+    // A stop fill closes the position at the hit price.
+    // Fee depends on the exit action; for simplicity, use market fill semantics (taker).
+    // Note: this mimics M7 backtest behavior where protective fills are taken at close price.
+    const hitPrice = parseDecimal(stopResult.hitPrice!);
+    const feeUsdt = computeFee(hitPrice, parseDecimal(position.size), OrderPolicyEnum.REDUCE_MARKET);
 
-	return {
-		filled: true,
-		fillPrice: stopResult.hitPrice!,
-		qty: position.size,
-		feeUsdt: formatDecimal(feeUsdt),
-		slippagePct: '0', // SL/TP fills are taken at the level, no slippage model applied
-		missedReason: null,
-		lowFidelity: stopResult.lowFidelity,
-		tsMs: stopResult.hitTsMs!,
-	};
+    return {
+        filled: true,
+        fillPrice: stopResult.hitPrice!,
+        qty: position.size,
+        feeUsdt: formatDecimal(feeUsdt),
+        slippagePct: '0', // SL/TP fills are taken at the level, no slippage model applied
+        missedReason: null,
+        lowFidelity: stopResult.lowFidelity,
+        tsMs: stopResult.hitTsMs!,
+    };
 }
 
 /**
@@ -160,25 +146,25 @@ export function applyIntraBarStop(
  * Pure function.
  */
 function computeFillTimestamp(signalBarOpenMs: number, latencyMs: number): number {
-	const CANDLE_5M_INTERVAL_MS = 5 * 60 * 1000;
-	const nextBarOpenMs = signalBarOpenMs + CANDLE_5M_INTERVAL_MS;
-	return nextBarOpenMs + latencyMs;
+    const CANDLE_5M_INTERVAL_MS = 5 * 60 * 1000;
+    const nextBarOpenMs = signalBarOpenMs + CANDLE_5M_INTERVAL_MS;
+    return nextBarOpenMs + latencyMs;
 }
 
 /**
  * Build a missed-fill result (qty and fee are zero).
  */
 function buildMissedFill(fillTsMs: number): ISimulatedFillCore {
-	return {
-		filled: false,
-		fillPrice: '0',
-		qty: '0',
-		feeUsdt: '0',
-		slippagePct: '0',
-		missedReason: 'timeout',
-		lowFidelity: true, // Consistent with applyFill per ADR 0032 D15
-		tsMs: fillTsMs,
-	};
+    return {
+        filled: false,
+        fillPrice: '0',
+        qty: '0',
+        feeUsdt: '0',
+        slippagePct: '0',
+        missedReason: 'timeout',
+        lowFidelity: true, // Consistent with applyFill per ADR 0032 D15
+        tsMs: fillTsMs,
+    };
 }
 
 /**
@@ -186,9 +172,9 @@ function buildMissedFill(fillTsMs: number): ISimulatedFillCore {
  * POST_ONLY_MAKER uses maker fee (2 bps); IOC and REDUCE_MARKET use taker fee (4 bps).
  */
 function computeFee(fillPrice: DecimalT, qty: DecimalT, policy: string): DecimalT {
-	const notional = multiplyDecimal(fillPrice, qty);
-	const feeRateBps = policy === OrderPolicyEnum.POST_ONLY_MAKER ? FEE_MAKER_BPS : FEE_TAKER_BPS;
-	const feeRate = divideDecimal(parseDecimal(feeRateBps), parseDecimal(BPS_DENOMINATOR));
+    const notional = multiplyDecimal(fillPrice, qty);
+    const feeRateBps = policy === OrderPolicyEnum.POST_ONLY_MAKER ? FEE_MAKER_BPS : FEE_TAKER_BPS;
+    const feeRate = divideDecimal(parseDecimal(feeRateBps), parseDecimal(BPS_DENOMINATOR));
 
-	return multiplyDecimal(notional, feeRate);
+    return multiplyDecimal(notional, feeRate);
 }

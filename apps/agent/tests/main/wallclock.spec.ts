@@ -13,13 +13,7 @@
 import { TerminalStateEnum } from '@bot/shared';
 import pino from 'pino';
 
-import {
-    runUnderWallclock,
-    WallclockExceededError,
-    computeEffectiveLockStaleMs,
-    LOCKFILE_STALE_MS,
-    LOCK_STALE_SAFETY_MARGIN_MS,
-} from '../../src/main.js';
+import { runUnderWallclock, WallclockExceededError, computeEffectiveLockStaleMs, LOCKFILE_STALE_MS, LOCK_STALE_SAFETY_MARGIN_MS } from '../../src/main.js';
 
 function silentLogger(): pino.Logger {
     return pino({ level: 'silent' });

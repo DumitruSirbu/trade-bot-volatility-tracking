@@ -216,9 +216,7 @@ async function authenticateRequest(req: IncomingMessage, res: ServerResponse, co
             const errAsError = err as Error;
             const errName = errAsError?.constructor?.name ?? 'UnknownError';
             const errMessage = (errAsError?.message ?? '').slice(0, 200);
-            process.stderr.write(
-                `[mcp] ERROR auth check failed unexpectedly (not a verifier error). reason=${errName} msg=${errMessage}\n`,
-            );
+            process.stderr.write(`[mcp] ERROR auth check failed unexpectedly (not a verifier error). reason=${errName} msg=${errMessage}\n`);
         }
         const reason = err instanceof BearerVerificationError ? err.reason : AuthFailureReasonEnum.MALFORMED;
         writeAuthFailure(res, null, reason);

@@ -19,10 +19,9 @@
 
 import { FlowTypeEnum, RegimeLabelEnum, StrategyDirectionEnum, StrategyStatusEnum } from '@bot/shared';
 import { promises as fs } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import { DataSource, Repository } from 'typeorm';
 
+import { BACKTEST_ARTEFACT_ROOT } from '../../../src/backtest/const/backtestConsts';
 import { ComparisonRunnerService } from '../../../src/backtest/service/ComparisonRunnerService';
 import { WalkForwardSplitModeEnum } from '../../../src/backtest/enum/WalkForwardSplitModeEnum';
 import { IComparisonReport } from '../../../src/backtest/interface';
@@ -40,14 +39,18 @@ describe('CompareCommand (integration — requires Postgres)', () => {
     let comparisonRepository: Repository<ComparisonReportEntity>;
     let artefactDir: string;
     const versionRows: StrategyVersionEntity[] = [];
+    const writtenArtefactPaths: string[] = [];
 
     beforeAll(async () => {
         dataSource = await getTestDataSource();
         strategyRepository = dataSource.getRepository(StrategyVersionEntity);
         comparisonRepository = dataSource.getRepository(ComparisonReportEntity);
 
-        artefactDir = await fs.mkdtemp(join(tmpdir(), 'compare-cli-'));
-        process.env['BACKTEST_ARTEFACT_DIR'] = artefactDir;
+        // CompareCommand writes artefacts under BACKTEST_ARTEFACT_ROOT, which is
+        // frozen at module-load from env — setting process.env here would be a
+        // no-op. Use the resolved root directly (the production write target).
+        artefactDir = BACKTEST_ARTEFACT_ROOT;
+        await fs.mkdir(artefactDir, { recursive: true });
 
         for (const version of [1, 2]) {
             const row = await strategyRepository.save(
@@ -68,10 +71,11 @@ describe('CompareCommand (integration — requires Postgres)', () => {
             await dataSource.query(`DELETE FROM "comparison_reports" WHERE "run_label" LIKE $1`, [`${NAME_PREFIX}%`]);
             await dataSource.query(`DELETE FROM "strategy_versions" WHERE "name" LIKE $1`, [`${NAME_PREFIX}%`]);
         }
-        if (artefactDir !== undefined) {
-            await fs.rm(artefactDir, { recursive: true, force: true });
+        // artefactDir is the shared BACKTEST_ARTEFACT_ROOT — never remove the
+        // directory itself; only the specific artefact files this test wrote.
+        for (const file of writtenArtefactPaths) {
+            await fs.unlink(file).catch(() => undefined);
         }
-        delete process.env['BACKTEST_ARTEFACT_DIR'];
     }, 30_000);
 
     it('writes the artefact, persists comparison_reports row, returns a summary table', async () => {
@@ -175,6 +179,8 @@ describe('CompareCommand (integration — requires Postgres)', () => {
             splitPolicy: fakeReport.splitPolicy,
             runLabel,
         });
+
+        writtenArtefactPaths.push(result.artefactPath);
 
         // (1) Artefact written
         expect(result.artefactPath).toMatch(new RegExp(`^${escapeRegExp(artefactDir)}/comparison-${escapeRegExp(runLabel)}-.*\\.json$`));

@@ -1,14 +1,4 @@
-import {
-    CoinTierEnum,
-    CorrelationModeEnum,
-    HaltSourceEnum,
-    IModelDivergenceEvent,
-    IRiskHaltEvent,
-    OrderIntentActionEnum,
-    PositionSideEnum,
-    RejectReasonEnum,
-    RiskOutcomeEnum,
-} from '@bot/shared';
+import { CoinTierEnum, CorrelationModeEnum, HaltSourceEnum, IModelDivergenceEvent, IRiskHaltEvent, OrderIntentActionEnum, PositionSideEnum } from '@bot/shared';
 
 import { MODEL_DIVERGENCE_TRIGGERED_EVENT, RISK_HALT_TRIGGERED_EVENT } from '../../src/alert/const/alertEvents';
 import { Money } from '../../src/common/utils/money';
@@ -17,7 +7,7 @@ import { ReservationLedger } from '../../src/risk/service/ReservationLedger';
 import { RiskGateService } from '../../src/risk/service/RiskGateService';
 import { SlotManager } from '../../src/risk/service/SlotManager';
 import { StressHaltEvaluator } from '../../src/risk/service/StressHaltEvaluator';
-import { buildGateContext, buildOrderIntent, buildProposedExit, buildRiskStatePort, buildRiskStateDay, buildSizing } from './support/fixtures';
+import { buildGateContext, buildOrderIntent, buildProposedExit, buildSizing } from './support/fixtures';
 import { buildSnapshot } from '../strategy/support/fixtures';
 
 // M9 QA — adversarial extension to RiskGateService.bus.spec.ts.

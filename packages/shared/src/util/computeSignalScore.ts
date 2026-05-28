@@ -9,17 +9,17 @@ const WEIGHT_IDIOSYNCRASY = 0.25;
 const WEIGHT_FUNDING_COST = 0.15;
 
 // Volume normalization thresholds
-const VOLUME_RATIO_MIN = 1.5;  // baseline confirmation
-const VOLUME_RATIO_MAX = 5.0;  // hard ceiling for scoring
+const VOLUME_RATIO_MIN = 1.5; // baseline confirmation
+const VOLUME_RATIO_MAX = 5.0; // hard ceiling for scoring
 
 // Idiosyncrasy scoring rules
-const IDIOSYNCRASY_REVERSION_PENALTY_FACTOR = 0.7;  // penalize high idio on reversion branches
-const IDIOSYNCRASY_NEUTRAL_SCORE = 50;  // neutral contribution for market-beta / noise flows
+const IDIOSYNCRASY_REVERSION_PENALTY_FACTOR = 0.7; // penalize high idio on reversion branches
+const IDIOSYNCRASY_NEUTRAL_SCORE = 50; // neutral contribution for market-beta / noise flows
 
 // Funding cost (per-period rate, matches seed funding_rate_suppress_threshold)
 // Unit: periodic rate (e.g., 0.001 = 0.1% per 8h), consistent with M2 seed
-const FUNDING_COST_SUPPRESS_LEVEL = 0.001;  // suppress scoring below this periodic rate
-const FUNDING_COST_NEUTRAL_LEVEL = 0.01;  // 1% per 8h = cap for cost scaling
+const FUNDING_COST_SUPPRESS_LEVEL = 0.001; // suppress scoring below this periodic rate
+const FUNDING_COST_NEUTRAL_LEVEL = 0.01; // 1% per 8h = cap for cost scaling
 
 /**
  * Compute signal quality score (0–100) from market snapshot deterministically.
@@ -33,11 +33,7 @@ const FUNDING_COST_NEUTRAL_LEVEL = 0.01;  // 1% per 8h = cap for cost scaling
  *
  * Pure `number` math; identical inputs → identical score, live and backtest.
  */
-export function computeSignalScore(
-    event: IVolatilityDetectedEvent,
-    params: IStrategyParams,
-    flowType: FlowTypeEnum,
-): number {
+export function computeSignalScore(event: IVolatilityDetectedEvent, params: IStrategyParams, flowType: FlowTypeEnum): number {
     // 1. Normalize vwapDeviationPct to tier band (from params)
     const tierMinMove = getTierMinAbsMove(event.coinTier, params);
     const tierMaxMove = getTierMaxAbsMove(event.coinTier, params);
@@ -48,10 +44,7 @@ export function computeSignalScore(
     const deviationScore = deviationClamped * 100;
 
     // 2. Volume ratio confirmation
-    const volumeNormalized = Math.max(
-        0,
-        Math.min(1, (event.volumeRatio - VOLUME_RATIO_MIN) / (VOLUME_RATIO_MAX - VOLUME_RATIO_MIN)),
-    );
+    const volumeNormalized = Math.max(0, Math.min(1, (event.volumeRatio - VOLUME_RATIO_MIN) / (VOLUME_RATIO_MAX - VOLUME_RATIO_MIN)));
     const volumeScore = volumeNormalized * 100;
 
     // 3. Idiosyncrasy (flow-aware contribution per ADR §5)
@@ -85,10 +78,7 @@ export function computeSignalScore(
 
     // Weighted sum
     const rawScore =
-        WEIGHT_DEVIATION * deviationScore +
-        WEIGHT_VOLUME * volumeScore +
-        WEIGHT_IDIOSYNCRASY * idiosyncrasyScore +
-        WEIGHT_FUNDING_COST * fundingCostScore;
+        WEIGHT_DEVIATION * deviationScore + WEIGHT_VOLUME * volumeScore + WEIGHT_IDIOSYNCRASY * idiosyncrasyScore + WEIGHT_FUNDING_COST * fundingCostScore;
 
     // Clamp to [0, 100]
 

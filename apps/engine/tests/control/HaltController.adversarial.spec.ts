@@ -1,17 +1,16 @@
-import { AlertTypeEnum, AuthScopeEnum, HaltAuditActionEnum, HaltSourceEnum, HaltStateEnum, IAlertPayload, IHaltAuditEntry } from '@bot/shared';
+import { AuthScopeEnum, HaltAuditActionEnum, HaltSourceEnum, IAlertPayload, IHaltAuditEntry } from '@bot/shared';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { Response } from 'express';
 
 import { IAlertSink } from '../../src/alert/AlertModule';
 import { HaltStateRestoreService } from '../../src/bootstrap/HaltStateRestoreService';
-import { CLOCK, IClock } from '../../src/common/clock/Clock';
+import { IClock } from '../../src/common/clock/Clock';
 import { HaltController } from '../../src/control/HaltController';
 import { HaltRateLimiter } from '../../src/control/HaltRateLimiter';
 import { HaltService } from '../../src/control/HaltService';
 import { IFlattenCoordinator, IFlattenRequest } from '../../src/control/interface/IFlattenCoordinator';
 import { ControlAuditRepository, IAppendOperatorParams, IAppendProgrammaticParams } from '../../src/control/repository/ControlAuditRepository';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
-import { AuthGuard } from '../../src/auth/AuthGuard';
 
 // M9 QA — adversarial extension to HaltController.spec.ts.
 // Covers: rate-limit window boundary precision, simultaneous programmatic +

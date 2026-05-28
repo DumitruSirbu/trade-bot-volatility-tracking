@@ -38,10 +38,11 @@ function runEslintOnStdin(source: string, virtualFilename: string): EslintResult
     let output = '';
     let exitCode = 0;
     try {
-        output = execSync(
-            `echo ${JSON.stringify(source)} | "${ESLINT_BIN}" --stdin --stdin-filename "${virtualFilename}"`,
-            { cwd: REPO_ROOT, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
-        );
+        output = execSync(`echo ${JSON.stringify(source)} | "${ESLINT_BIN}" --stdin --stdin-filename "${virtualFilename}"`, {
+            cwd: REPO_ROOT,
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+        });
     } catch (err) {
         const spawnErr = err as { status?: number; stdout?: string; stderr?: string };
         exitCode = spawnErr.status ?? 1;
@@ -62,66 +63,45 @@ describe('ESLint boundary â€” adversarial banned imports (ADR 0035 Â§2.3, W6a ve
     // re-asserted here for completeness â€” each adversarial spec is self-contained.
 
     it('import from @bot/engine is blocked', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import { RiskService } from '@bot/engine';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import { RiskService } from '@bot/engine';", VIRTUAL_AGENT_SRC);
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/no-restricted-imports/);
     });
 
     it('import from @bot/analysis is blocked', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import { queryPerformance } from '@bot/analysis';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import { queryPerformance } from '@bot/analysis';", VIRTUAL_AGENT_SRC);
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/no-restricted-imports/);
     });
 
     it('import from @bot/mcp is blocked', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import { ToolRegistry } from '@bot/mcp';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import { ToolRegistry } from '@bot/mcp';", VIRTUAL_AGENT_SRC);
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/no-restricted-imports/);
     });
 
     // Adversarial: deep-relative path reaches outside apps/agent/
     it('deep relative import ../../engine/foo is blocked', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import { foo } from '../../engine/foo';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import { foo } from '../../engine/foo';", VIRTUAL_AGENT_SRC);
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/no-restricted-imports/);
     });
 
     it('deep relative import ../../packages/analysis/foo is blocked', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import { bar } from '../../packages/analysis/foo';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import { bar } from '../../packages/analysis/foo';", VIRTUAL_AGENT_SRC);
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/no-restricted-imports/);
     });
 
     it('deep relative import apps/mcp/src/tools via relative path is blocked', () => {
-        const { exitCode, output } = runEslintOnStdin(
-            "import { ToolRegistry } from '../../mcp/src/tools/ToolRegistry';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { exitCode, output } = runEslintOnStdin("import { ToolRegistry } from '../../mcp/src/tools/ToolRegistry';", VIRTUAL_AGENT_SRC);
         expect(exitCode).not.toBe(0);
         expect(output).toMatch(/no-restricted-imports/);
     });
 
     // Allowlist sanity: @bot/shared must pass
     it('@bot/shared import is NOT blocked', () => {
-        const { output } = runEslintOnStdin(
-            "import { AuthFailureReasonEnum } from '@bot/shared';",
-            VIRTUAL_AGENT_SRC,
-        );
+        const { output } = runEslintOnStdin("import { AuthFailureReasonEnum } from '@bot/shared';", VIRTUAL_AGENT_SRC);
         expect(output).not.toMatch(/no-restricted-imports.*@bot\/shared/);
         expect(output).not.toMatch(/@bot\/shared.*no-restricted-imports/);
     });
@@ -134,14 +114,14 @@ describe('ESLint boundary â€” adversarial banned imports (ADR 0035 Â§2.3, W6a ve
 describe('package.json boundary â€” banned deps absent from @bot/agent (ADR 0035 Â§2.2)', () => {
     const PKG_PATH = resolve(REPO_ROOT, 'apps', 'agent', 'package.json');
 
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic path built at runtime from REPO_ROOT; static import cannot resolve this
     const pkg = require(PKG_PATH) as Record<string, unknown>;
 
     const allDeps: Record<string, string> = {
-        ...(pkg.dependencies as Record<string, string> ?? {}),
-        ...(pkg.devDependencies as Record<string, string> ?? {}),
-        ...(pkg.peerDependencies as Record<string, string> ?? {}),
-        ...(pkg.optionalDependencies as Record<string, string> ?? {}),
+        ...((pkg.dependencies as Record<string, string>) ?? {}),
+        ...((pkg.devDependencies as Record<string, string>) ?? {}),
+        ...((pkg.peerDependencies as Record<string, string>) ?? {}),
+        ...((pkg.optionalDependencies as Record<string, string>) ?? {}),
     };
 
     it('@bot/engine is absent from all dep sections', () => {
@@ -187,13 +167,9 @@ function minimalAgentBoundaryGuard(deps: IRuntimeGuardDeps): void {
         return;
     }
     const BANNED_FRAGMENTS = ['/apps/engine/', '/apps/mcp/', '/packages/analysis/'];
-    const violations = deps
-        .getLoadedModulePaths()
-        .filter((p) => BANNED_FRAGMENTS.some((f) => p.includes(f)));
+    const violations = deps.getLoadedModulePaths().filter((p) => BANNED_FRAGMENTS.some((f) => p.includes(f)));
     if (violations.length > 0) {
-        deps.logError(
-            `[agent:boundary] FATAL: banned module(s) loaded: ${violations[0]}. Exiting.`,
-        );
+        deps.logError(`[agent:boundary] FATAL: banned module(s) loaded: ${violations[0]}. Exiting.`);
         deps.exit(1);
     }
 }
@@ -212,11 +188,11 @@ describe('RuntimeBoundaryGuard â€” desired agent boot-path behaviour (ADR 0035 Â
         const exits: number[] = [];
         expect(() =>
             minimalAgentBoundaryGuard({
-                getLoadedModulePaths: () => [
-                    '/Users/x/apps/agent/dist/main.js',
-                    '/Users/x/packages/shared/dist/index.js',
-                ],
-                exit: (code) => { exits.push(code); throw new Error(`__SPY_EXIT__:${code}`); },
+                getLoadedModulePaths: () => ['/Users/x/apps/agent/dist/main.js', '/Users/x/packages/shared/dist/index.js'],
+                exit: (code) => {
+                    exits.push(code);
+                    throw new Error(`__SPY_EXIT__:${code}`);
+                },
                 logError: (m) => logs.push(m),
             }),
         ).not.toThrow();
@@ -228,11 +204,11 @@ describe('RuntimeBoundaryGuard â€” desired agent boot-path behaviour (ADR 0035 Â
         const logs: string[] = [];
         expect(() =>
             minimalAgentBoundaryGuard({
-                getLoadedModulePaths: () => [
-                    '/Users/x/apps/agent/dist/main.js',
-                    '/Users/x/apps/engine/dist/risk/RiskService.js',
-                ],
-                exit: (code) => { exits.push(code); throw new Error(`__SPY_EXIT__:${code}`); },
+                getLoadedModulePaths: () => ['/Users/x/apps/agent/dist/main.js', '/Users/x/apps/engine/dist/risk/RiskService.js'],
+                exit: (code) => {
+                    exits.push(code);
+                    throw new Error(`__SPY_EXIT__:${code}`);
+                },
                 logError: (m) => logs.push(m),
             }),
         ).toThrow(/__SPY_EXIT__:1/);
@@ -246,7 +222,10 @@ describe('RuntimeBoundaryGuard â€” desired agent boot-path behaviour (ADR 0035 Â
         expect(() =>
             minimalAgentBoundaryGuard({
                 getLoadedModulePaths: () => ['/Users/x/apps/mcp/dist/tools/ToolRegistry.js'],
-                exit: (code) => { exits.push(code); throw new Error(`__SPY_EXIT__:${code}`); },
+                exit: (code) => {
+                    exits.push(code);
+                    throw new Error(`__SPY_EXIT__:${code}`);
+                },
                 logError: () => undefined,
             }),
         ).toThrow(/__SPY_EXIT__:1/);
@@ -258,7 +237,10 @@ describe('RuntimeBoundaryGuard â€” desired agent boot-path behaviour (ADR 0035 Â
         expect(() =>
             minimalAgentBoundaryGuard({
                 getLoadedModulePaths: () => ['/Users/x/packages/analysis/dist/queries.js'],
-                exit: (code) => { exits.push(code); throw new Error(`__SPY_EXIT__:${code}`); },
+                exit: (code) => {
+                    exits.push(code);
+                    throw new Error(`__SPY_EXIT__:${code}`);
+                },
                 logError: () => undefined,
             }),
         ).toThrow(/__SPY_EXIT__:1/);
@@ -271,7 +253,10 @@ describe('RuntimeBoundaryGuard â€” desired agent boot-path behaviour (ADR 0035 Â
         expect(() =>
             minimalAgentBoundaryGuard({
                 getLoadedModulePaths: () => ['/Users/x/apps/engine/dist/foo.js'],
-                exit: (code) => { exits.push(code); throw new Error(`__SPY_EXIT__:${code}`); },
+                exit: (code) => {
+                    exits.push(code);
+                    throw new Error(`__SPY_EXIT__:${code}`);
+                },
                 logError: (m) => logs.push(m),
                 env: { AGENT_BOUNDARY_GUARD: 'disabled' },
             }),
@@ -302,7 +287,10 @@ describe('RuntimeBoundaryGuard â€” desired agent boot-path behaviour (ADR 0035 Â
         expect(() =>
             runBoundaryGuard({
                 getLoadedModulePaths: () => ['/Users/x/apps/engine/dist/risk/RiskService.js'],
-                exit: (code) => { exits.push(code); throw new Error(`__SPY_EXIT__:${code}`); },
+                exit: (code) => {
+                    exits.push(code);
+                    throw new Error(`__SPY_EXIT__:${code}`);
+                },
                 logError: (m) => logs.push(m),
                 logWarn: () => undefined,
                 env: {},
@@ -316,11 +304,11 @@ describe('RuntimeBoundaryGuard â€” desired agent boot-path behaviour (ADR 0035 Â
         const exits: number[] = [];
         expect(() =>
             runBoundaryGuard({
-                getLoadedModulePaths: () => [
-                    '/Users/x/apps/agent/dist/main.js',
-                    '/Users/x/packages/shared/dist/index.js',
-                ],
-                exit: (code) => { exits.push(code); throw new Error(`__SPY_EXIT__:${code}`); },
+                getLoadedModulePaths: () => ['/Users/x/apps/agent/dist/main.js', '/Users/x/packages/shared/dist/index.js'],
+                exit: (code) => {
+                    exits.push(code);
+                    throw new Error(`__SPY_EXIT__:${code}`);
+                },
                 logError: () => undefined,
                 logWarn: () => undefined,
                 env: {},
@@ -335,7 +323,10 @@ describe('RuntimeBoundaryGuard â€” desired agent boot-path behaviour (ADR 0035 Â
         expect(() =>
             runBoundaryGuard({
                 getLoadedModulePaths: () => ['/Users/x/apps/engine/dist/foo.js'],
-                exit: (code) => { exits.push(code); throw new Error(`__SPY_EXIT__:${code}`); },
+                exit: (code) => {
+                    exits.push(code);
+                    throw new Error(`__SPY_EXIT__:${code}`);
+                },
                 logError: () => undefined,
                 logWarn: (m) => warns.push(m),
                 env: { AGENT_BOUNDARY_GUARD: 'disabled' },

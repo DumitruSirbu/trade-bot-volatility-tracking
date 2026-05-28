@@ -20,14 +20,14 @@
  *  14. extraParams allow-list: non-listed keys stripped from ICreateOrderRequest params.
  */
 
-import { FlowTypeEnum, OrderIntentActionEnum, OrderPolicyEnum, PositionSideEnum, PositionSlotEnum, StrategyDirectionEnum, CoinTierEnum } from '@bot/shared';
+import { FlowTypeEnum, OrderIntentActionEnum, OrderPolicyEnum, PositionSideEnum, StrategyDirectionEnum, CoinTierEnum } from '@bot/shared';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { ORDER_INTENT_EXPIRED_EVENT, ORDER_INTENT_UNKNOWN_EVENT } from '../../../src/common/const';
+import { ORDER_INTENT_EXPIRED_EVENT } from '../../../src/common/const';
 import { HaltFlagService } from '../../../src/common/service/HaltFlagService';
 import { Money, MoneyValue } from '../../../src/common/utils/money';
 import { AppConfigService } from '../../../src/config/service';
-import { MAX_REDUCE_REMAINDER_ATTEMPTS, SUBMIT_NETWORK_TIMEOUT_MS } from '../../../src/execution/const';
+import { MAX_REDUCE_REMAINDER_ATTEMPTS } from '../../../src/execution/const';
 import { SubmitStateEnum } from '../../../src/execution/enum';
 import { ClientOrderIdFactory } from '../../../src/execution/service/ClientOrderIdFactory';
 import { ExecutionService } from '../../../src/execution/service/ExecutionService';
@@ -767,7 +767,7 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
 
         let submitCount = 0;
         const submitter = {
-            submit: jest.fn().mockImplementation(async (input: { amount: string }) => {
+            submit: jest.fn().mockImplementation(async (_input: { amount: string }) => {
                 submitCount += 1;
                 if (submitCount === 1) {
                     // First submit: OPEN → goes to awaitPolicyTimeout → resolveReduceTerminal

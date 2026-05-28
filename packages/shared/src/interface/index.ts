@@ -43,12 +43,12 @@ export { ILiveModeProfile } from './ILiveModeProfile.js';
 export { ISimulatedFill } from './ISimulatedFill.js';
 export { IVirtualLedgerSnapshot, IVirtualOpenPosition, IVirtualClosedTradeLogEntry } from './IVirtualLedgerSnapshot.js';
 export {
-	IVirtualPositionLedger,
-	IVirtualGateInput,
-	IVirtualGateOutcome,
-	IVirtualOpenInput,
-	IVirtualCloseInput,
-	IVirtualMutationResult,
+    IVirtualPositionLedger,
+    IVirtualGateInput,
+    IVirtualGateOutcome,
+    IVirtualOpenInput,
+    IVirtualCloseInput,
+    IVirtualMutationResult,
 } from './IVirtualPositionLedger.js';
 export { IShadowDecision } from './IShadowDecision.js';
 export { IOrder } from './IOrder.js';

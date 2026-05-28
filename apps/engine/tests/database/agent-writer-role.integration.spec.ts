@@ -38,8 +38,7 @@ import { buildDataSourceOptions } from '../../src/database/dataSourceOptions';
 // Connection config
 // ---------------------------------------------------------------------------
 
-const ENGINE_DB_URL =
-    process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
+const ENGINE_DB_URL = process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
 
 const AGENT_WRITER_PASSWORD = process.env['AGENT_WRITER_PASSWORD'] ?? 'CHANGE_ME_BEFORE_PROD';
 
@@ -116,18 +115,33 @@ async function assertSqlstateRejection(client: Client, sql: string, expectedCode
         throw new Error(`Expected SQL to fail with SQLSTATE ${expectedCode} but it succeeded: ${sql}`);
     } catch (err) {
         const pgErr = err as PgError;
-        const validCodes =
-            expectedCode === INSUFFICIENT_PRIVILEGE
-                ? [INSUFFICIENT_PRIVILEGE, READ_ONLY_SQL_TRANSACTION]
-                : [expectedCode];
+        const validCodes = expectedCode === INSUFFICIENT_PRIVILEGE ? [INSUFFICIENT_PRIVILEGE, READ_ONLY_SQL_TRANSACTION] : [expectedCode];
 
         if (!validCodes.includes(pgErr.code ?? '')) {
-            throw new Error(
-                `Expected SQLSTATE ${expectedCode} (or ${validCodes.join('/')}) but got ${pgErr.code ?? 'no code'}: ${pgErr.message}`,
-            );
+            throw new Error(`Expected SQLSTATE ${expectedCode} (or ${validCodes.join('/')}) but got ${pgErr.code ?? 'no code'}: ${pgErr.message}`);
         }
 
         expect(validCodes).toContain(pgErr.code);
+    }
+}
+
+/**
+ * Calls a write SDF the way the fixed production caller (AgentPgClient) does:
+ * inside an explicit transaction whose first statement is SET TRANSACTION READ
+ * WRITE. The agent_writer role has `default_transaction_read_only = on`, so a
+ * bare autocommit SELECT of the SDF fails with 25006 ("transaction read-write
+ * mode must be set before any query"). Mirrors the production statement order.
+ */
+async function callWriteSdf<T extends { [k: string]: unknown }>(client: Client, sql: string, params: ReadonlyArray<unknown>): Promise<T[]> {
+    try {
+        await client.query('BEGIN');
+        await client.query('SET TRANSACTION READ WRITE');
+        const result = await client.query<T>(sql, params as unknown[]);
+        await client.query('COMMIT');
+        return result.rows;
+    } catch (cause) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw cause;
     }
 }
 
@@ -144,12 +158,14 @@ interface ISeedResult {
 async function seedActiveStrategyVersion(adminClient: Client): Promise<ISeedResult> {
     const name = `test-agent-writer-${Date.now()}`;
 
-    const rows = (await adminClient.query<{ strategy_versions_id: number }>(
-        `INSERT INTO strategy_versions (name, version, direction, params, status)
+    const rows = (
+        await adminClient.query<{ strategy_versions_id: number }>(
+            `INSERT INTO strategy_versions (name, version, direction, params, status)
          VALUES ($1, 1, 'mean_reversion', $2::jsonb, 'active')
          RETURNING strategy_versions_id`,
-        [name, JSON.stringify({ trade_enabled: false })],
-    )).rows;
+            [name, JSON.stringify({ trade_enabled: false })],
+        )
+    ).rows;
 
     const parentVersionId = rows[0]!.strategy_versions_id;
 
@@ -157,14 +173,8 @@ async function seedActiveStrategyVersion(adminClient: Client): Promise<ISeedResu
         parentVersionId,
         cleanup: async () => {
             // Remove draft rows first (FK from parent_version_id) then the parent.
-            await adminClient.query(
-                `DELETE FROM strategy_versions WHERE parent_version_id = $1`,
-                [parentVersionId],
-            );
-            await adminClient.query(
-                `DELETE FROM strategy_versions WHERE strategy_versions_id = $1`,
-                [parentVersionId],
-            );
+            await adminClient.query(`DELETE FROM strategy_versions WHERE parent_version_id = $1`, [parentVersionId]);
+            await adminClient.query(`DELETE FROM strategy_versions WHERE strategy_versions_id = $1`, [parentVersionId]);
         },
     };
 }
@@ -207,7 +217,7 @@ describe('agent_writer migration — reversibility (ADR 0036)', () => {
 
     function skipIfNotReachable(): boolean {
         if (suiteSkipped) {
-            console.info('[SKIP] Postgres not reachable — test skipped');
+            console.warn('[SKIP] Postgres not reachable — test skipped');
             return true;
         }
         return false;
@@ -216,9 +226,7 @@ describe('agent_writer migration — reversibility (ADR 0036)', () => {
     it('[1a] function draft_strategy_version exists after migration up()', async () => {
         if (skipIfNotReachable()) return;
 
-        const rows = await adminClient!.query<{ proname: string }>(
-            `SELECT proname FROM pg_proc WHERE proname = 'draft_strategy_version'`,
-        );
+        const rows = await adminClient!.query<{ proname: string }>(`SELECT proname FROM pg_proc WHERE proname = 'draft_strategy_version'`);
 
         expect(rows.rows.length).toBe(1);
     });
@@ -226,9 +234,7 @@ describe('agent_writer migration — reversibility (ADR 0036)', () => {
     it('[1b] agent_writer role exists after migration up()', async () => {
         if (skipIfNotReachable()) return;
 
-        const rows = await adminClient!.query<{ rolname: string }>(
-            `SELECT rolname FROM pg_roles WHERE rolname = 'agent_writer'`,
-        );
+        const rows = await adminClient!.query<{ rolname: string }>(`SELECT rolname FROM pg_roles WHERE rolname = 'agent_writer'`);
 
         expect(rows.rows.length).toBe(1);
     });
@@ -236,23 +242,31 @@ describe('agent_writer migration — reversibility (ADR 0036)', () => {
     it('[1c] down() cleans up, then up() restores — full round-trip', async () => {
         if (skipIfNotReachable()) return;
 
-        // Undo the two M13 migrations (agent_run_history + agent_writer/SDF).
-        await dataSource.undoLastMigration({ transaction: 'each' }); // agent_run_history
-        await dataSource.undoLastMigration({ transaction: 'each' }); // agent_writer + SDF
+        // draft_strategy_version is created by the first M13 migration
+        // (20260620000000). Later M13 migrations (agent_run_history table, the
+        // record_agent_run_history SDF, the revoked_jti grant) were stacked on
+        // top, so undoing a fixed count rots whenever a migration is added.
+        // Undo migrations one at a time until the function is gone (bounded so a
+        // genuinely irreversible down() surfaces as a clear failure, not a hang).
+        const MAX_UNDO = 8;
+        let undone = 0;
+        for (; undone < MAX_UNDO; undone += 1) {
+            const stillPresent = await adminClient!.query<{ proname: string }>(`SELECT proname FROM pg_proc WHERE proname = 'draft_strategy_version'`);
+            if (stillPresent.rows.length === 0) {
+                break;
+            }
+            await dataSource.undoLastMigration({ transaction: 'each' });
+        }
 
         // After revert: function must be gone.
-        const afterDown = await adminClient!.query<{ proname: string }>(
-            `SELECT proname FROM pg_proc WHERE proname = 'draft_strategy_version'`,
-        );
+        const afterDown = await adminClient!.query<{ proname: string }>(`SELECT proname FROM pg_proc WHERE proname = 'draft_strategy_version'`);
         expect(afterDown.rows.length).toBe(0);
 
-        // Re-apply both migrations.
+        // Re-apply all migrations.
         await dataSource.runMigrations({ transaction: 'each' });
 
         // After re-apply: function must be present again.
-        const afterReapply = await adminClient!.query<{ proname: string }>(
-            `SELECT proname FROM pg_proc WHERE proname = 'draft_strategy_version'`,
-        );
+        const afterReapply = await adminClient!.query<{ proname: string }>(`SELECT proname FROM pg_proc WHERE proname = 'draft_strategy_version'`);
         expect(afterReapply.rows.length).toBe(1);
     }, 60_000);
 });
@@ -269,9 +283,7 @@ describe('agent_writer SDF — source-code invariant (ADR 0036 §2.3)', () => {
         adminClient = await buildAdminClient();
         if (adminClient === null) {
             suiteSkipped = true;
-            console.warn(
-                '[SKIPPED] agent-writer-role.integration (prosrc): no live Postgres reachable.',
-            );
+            console.warn('[SKIPPED] agent-writer-role.integration (prosrc): no live Postgres reachable.');
         }
     }, 15_000);
 
@@ -283,7 +295,7 @@ describe('agent_writer SDF — source-code invariant (ADR 0036 §2.3)', () => {
 
     function skipIfNotReachable(): boolean {
         if (suiteSkipped) {
-            console.info('[SKIP] Postgres not reachable — test skipped');
+            console.warn('[SKIP] Postgres not reachable — test skipped');
             return true;
         }
         return false;
@@ -292,9 +304,7 @@ describe('agent_writer SDF — source-code invariant (ADR 0036 §2.3)', () => {
     it("[2] pg_proc.prosrc contains 'draft' and does NOT contain 'active' string literal", async () => {
         if (skipIfNotReachable()) return;
 
-        const rows = await adminClient!.query<{ prosrc: string }>(
-            `SELECT prosrc FROM pg_proc WHERE proname = 'draft_strategy_version'`,
-        );
+        const rows = await adminClient!.query<{ prosrc: string }>(`SELECT prosrc FROM pg_proc WHERE proname = 'draft_strategy_version'`);
 
         expect(rows.rows.length).toBe(1);
 
@@ -355,7 +365,7 @@ describe('agent_writer role — privilege enforcement (ADR 0036 §5)', () => {
 
     function skipIfNotReachable(): boolean {
         if (suiteSkipped) {
-            console.info('[SKIP] Postgres not reachable — test skipped');
+            console.warn('[SKIP] Postgres not reachable — test skipped');
             return true;
         }
         return false;
@@ -366,21 +376,19 @@ describe('agent_writer role — privilege enforcement (ADR 0036 §5)', () => {
 
         const weekIso = `2099-W01-test-${Date.now()}`;
 
-        const result = await writerClient!.query<{ draft_strategy_version: number | null }>(
+        const sdfRows = await callWriteSdf<{ draft_strategy_version: number | null }>(
+            writerClient!,
             `SELECT draft_strategy_version($1, $2::jsonb, $3, $4) AS draft_strategy_version`,
             [seed!.parentVersionId, JSON.stringify({ trade_enabled: false }), 'test rationale', weekIso],
         );
 
-        const draftId = result.rows[0]!.draft_strategy_version;
+        const draftId = sdfRows[0]!.draft_strategy_version;
 
         expect(typeof draftId).toBe('number');
         expect(draftId).toBeGreaterThan(0);
 
         // Verify the persisted row via admin client.
-        const rows = await adminClient!.query<{ status: string }>(
-            `SELECT status FROM strategy_versions WHERE strategy_versions_id = $1`,
-            [draftId],
-        );
+        const rows = await adminClient!.query<{ status: string }>(`SELECT status FROM strategy_versions WHERE strategy_versions_id = $1`, [draftId]);
 
         expect(rows.rows[0]!.status).toBe('draft');
     });
@@ -392,18 +400,22 @@ describe('agent_writer role — privilege enforcement (ADR 0036 §5)', () => {
         const weekIso = `2099-W02-idempotent-${seed!.parentVersionId}`;
 
         // First call — should insert.
-        const first = await writerClient!.query<{ draft_strategy_version: number | null }>(
-            `SELECT draft_strategy_version($1, $2::jsonb, $3, $4)`,
-            [seed!.parentVersionId, JSON.stringify({ trade_enabled: false }), 'first', weekIso],
-        );
-        expect(first.rows[0]!.draft_strategy_version).not.toBeNull();
+        const first = await callWriteSdf<{ draft_strategy_version: number | null }>(writerClient!, `SELECT draft_strategy_version($1, $2::jsonb, $3, $4)`, [
+            seed!.parentVersionId,
+            JSON.stringify({ trade_enabled: false }),
+            'first',
+            weekIso,
+        ]);
+        expect(first[0]!.draft_strategy_version).not.toBeNull();
 
         // Second call with identical (parent_version_id, week_iso) — ON CONFLICT DO NOTHING.
-        const second = await writerClient!.query<{ draft_strategy_version: number | null }>(
-            `SELECT draft_strategy_version($1, $2::jsonb, $3, $4)`,
-            [seed!.parentVersionId, JSON.stringify({ trade_enabled: true }), 'second', weekIso],
-        );
-        expect(second.rows[0]!.draft_strategy_version).toBeNull();
+        const second = await callWriteSdf<{ draft_strategy_version: number | null }>(writerClient!, `SELECT draft_strategy_version($1, $2::jsonb, $3, $4)`, [
+            seed!.parentVersionId,
+            JSON.stringify({ trade_enabled: true }),
+            'second',
+            weekIso,
+        ]);
+        expect(second[0]!.draft_strategy_version).toBeNull();
     });
 
     it('[5] agent_writer cannot INSERT INTO strategy_versions directly → 42501', async () => {
@@ -429,20 +441,16 @@ describe('agent_writer role — privilege enforcement (ADR 0036 §5)', () => {
     it('[7] agent_writer cannot ALTER FUNCTION draft_strategy_version → 42501', async () => {
         if (skipIfNotReachable()) return;
 
-        await assertSqlstateRejection(
-            writerClient!,
-            `ALTER FUNCTION draft_strategy_version(integer, jsonb, text, text) COST 200`,
-            INSUFFICIENT_PRIVILEGE,
-        );
+        await assertSqlstateRejection(writerClient!, `ALTER FUNCTION draft_strategy_version(integer, jsonb, text, text) COST 200`, INSUFFICIENT_PRIVILEGE);
     });
 
-    it('[8] agent_writer cannot SELECT * FROM auth_tokens → 42501', async () => {
+    // Auth is stateless HS256 JWT — there is no `auth_tokens` table and there
+    // never should be. This asserts the least-privilege intent: agent_writer
+    // must not be able to read an auth-adjacent table (login_rate_limit_state)
+    // that is outside its narrow write surface.
+    it('[8] agent_writer cannot SELECT * FROM login_rate_limit_state → 42501', async () => {
         if (skipIfNotReachable()) return;
 
-        await assertSqlstateRejection(
-            writerClient!,
-            `SELECT * FROM auth_tokens LIMIT 1`,
-            INSUFFICIENT_PRIVILEGE,
-        );
+        await assertSqlstateRejection(writerClient!, `SELECT * FROM login_rate_limit_state LIMIT 1`, INSUFFICIENT_PRIVILEGE);
     });
 });

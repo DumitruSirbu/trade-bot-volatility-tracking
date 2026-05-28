@@ -1,0 +1,340 @@
+# Deterministic CI gates (M14 W1) — ADR 0039.
+# Every job below is wired as a separate required status check on `main`.
+# Job names are a contract (ADR 0039 §2.6): renaming a job breaks the
+# branch-protection binding, so do not rename without updating the protection rule.
+#
+# Third-party actions are pinned by full commit SHA (CI supply-chain hygiene,
+# ADR 0039 §2.7). The trailing `# vX.Y.Z` comment records the tag the SHA maps to.
+name: ci
+
+on:
+    pull_request:
+        branches: [main]
+    push:
+        branches: [main]
+
+# Supersede an in-flight run when the same PR ref is pushed again (ADR 0039 §2.7).
+# Only PR runs are cancelled; post-merge `main` runs always complete so the
+# branch's gate history is never left half-finished by a fast follow-up push.
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: deterministic gates never write to the repo (ADR 0039 §2.7).
+permissions:
+    contents: read
+
+env:
+    PNPM_VERSION: 9.15.9
+    NODE_VERSION: 22
+
+jobs:
+    install:
+        name: install
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - name: Setup pnpm
+              uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+              with:
+                  version: ${{ env.PNPM_VERSION }}
+            - name: Setup Node
+              uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: pnpm
+            - name: Install (frozen lockfile)
+              run: pnpm install --frozen-lockfile
+
+    build:
+        name: build
+        runs-on: ubuntu-latest
+        needs: install
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - name: Setup pnpm
+              uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+              with:
+                  version: ${{ env.PNPM_VERSION }}
+            - name: Setup Node
+              uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: pnpm
+            - name: Install (frozen lockfile)
+              run: pnpm install --frozen-lockfile
+            - name: Build
+              run: pnpm -r build
+
+    typecheck:
+        name: typecheck
+        runs-on: ubuntu-latest
+        needs: install
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - name: Setup pnpm
+              uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+              with:
+                  version: ${{ env.PNPM_VERSION }}
+            - name: Setup Node
+              uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: pnpm
+            - name: Install (frozen lockfile)
+              run: pnpm install --frozen-lockfile
+            - name: Build (typecheck consumes built shared types)
+              run: pnpm -r build
+            - name: Typecheck
+              run: pnpm -r --if-present typecheck
+
+    lint:
+        name: lint
+        runs-on: ubuntu-latest
+        needs: install
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - name: Setup pnpm
+              uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+              with:
+                  version: ${{ env.PNPM_VERSION }}
+            - name: Setup Node
+              uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: pnpm
+            - name: Install (frozen lockfile)
+              run: pnpm install --frozen-lockfile
+            - name: Lint
+              run: pnpm lint
+
+    format:
+        name: format
+        runs-on: ubuntu-latest
+        needs: install
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - name: Setup pnpm
+              uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+              with:
+                  version: ${{ env.PNPM_VERSION }}
+            - name: Setup Node
+              uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: pnpm
+            - name: Install (frozen lockfile)
+              run: pnpm install --frozen-lockfile
+            - name: Format check
+              run: pnpm format
+
+    test:
+        name: test
+        runs-on: ubuntu-latest
+        needs: install
+        # Ephemeral CI Postgres for the engine's DB-integration suites. The
+        # password below is a THROWAWAY value for a container that is destroyed
+        # with the runner — it is deliberately a plain workflow value, not a
+        # repo secret (the DB has no real data and is unreachable off-runner).
+        services:
+            postgres:
+                image: postgres:16
+                env:
+                    POSTGRES_USER: trade_bot
+                    POSTGRES_PASSWORD: ci_ephemeral_test_password
+                    POSTGRES_DB: trade_bot
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U trade_bot -d trade_bot"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 10
+        env:
+            # Engine + migration CLI read DATABASE_URL; the role-integration
+            # suites connect as mcp_reader / agent_writer using the sentinel
+            # passwords the role-creating migrations set (so no manual ALTER ROLE).
+            #
+            # SECURITY: every value below is a throwaway CI-only migration sentinel
+            # for an ephemeral, off-runner-unreachable DB. It MUST NEVER be reused
+            # for testnet, paper, staging, or any non-CI environment — those rotate
+            # the role passwords away from these sentinels at deploy.
+            DATABASE_URL: postgresql://trade_bot:ci_ephemeral_test_password@localhost:5432/trade_bot
+            MCP_DB_PASSWORD: mcp_reader_change_me_at_deploy
+            AGENT_WRITER_PASSWORD: CHANGE_ME_BEFORE_PROD
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - name: Setup pnpm
+              uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+              with:
+                  version: ${{ env.PNPM_VERSION }}
+            - name: Setup Node
+              uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: pnpm
+            - name: Install (frozen lockfile)
+              run: pnpm install --frozen-lockfile
+            - name: Build (tests consume built shared types)
+              run: pnpm -r build
+            - name: Run DB migrations (creates schema + mcp_reader/agent_writer roles)
+              run: pnpm --filter @bot/engine migration:run
+            - name: Test
+              run: pnpm -r --if-present test
+
+    boundary:
+        name: boundary
+        runs-on: ubuntu-latest
+        needs: install
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - name: Setup pnpm
+              uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+              with:
+                  version: ${{ env.PNPM_VERSION }}
+            - name: Setup Node
+              uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: pnpm
+            - name: Install (frozen lockfile)
+              run: pnpm install --frozen-lockfile
+            - name: Build (boundary specs import built workspace packages)
+              run: pnpm -r build
+            # ADR 0033 §5.1 — apps/mcp and packages/analysis must not reach the
+            # engine. Scoped to actual `import ... from`/`export ... from` edges in
+            # source (test fixtures intentionally import banned symbols and are
+            # excluded); a bare-string grep over the ADR would false-positive on the
+            # boundary-documenting comments and the Dockerfile `COPY apps/engine/...`
+            # plumbing. `git grep` exits 1 (no match) on a clean tree; a match fails.
+            - name: Grep — MCP/analysis must not import @bot/engine (ADR 0033 §5.1)
+              run: |
+                  if git grep -nE "^\s*(import|export)\b.*from\s+['\"](@bot/engine|.*apps/engine)" -- 'apps/mcp/**/*.ts' 'packages/analysis/**/*.ts' ':!apps/mcp/tests' ':!**/__tests__/**'; then
+                      echo "BOUNDARY VIOLATION: apps/mcp / packages/analysis imports the engine (ADR 0033 §2.2)."
+                      exit 1
+                  fi
+            # ADR 0035 §2.4 — apps/agent must not import engine/mcp/analysis.
+            - name: Grep — agent must not import engine/mcp/analysis (ADR 0035 §2.4)
+              run: |
+                  if git grep -nE "^\s*(import|export)\b.*from\s+['\"](@bot/engine|@bot/analysis|@bot/mcp|.*apps/engine|.*apps/mcp|.*packages/analysis)" -- 'apps/agent/**/*.ts' ':!apps/agent/tests'; then
+                      echo "BOUNDARY VIOLATION: apps/agent imports engine/mcp/analysis (ADR 0035 §2.2)."
+                      exit 1
+                  fi
+            # The no-restricted-imports boundary rules (ADR 0033 §2.4 / ADR 0035
+            # §2.3 layer B) are enforced by the dedicated `lint` job; not duplicated
+            # here so the boundary gate stays decoupled from unrelated lint debt.
+            # This job's distinct signal is the import greps above + the spec suites.
+            # Re-run the structural boundary spec suites as a focused check (these
+            # also run inside the `test` job; here they are an isolated required signal).
+            - name: Boundary specs — MCP (compile-time + runtime guard)
+              run: pnpm --filter @bot/mcp exec jest tests/boundary
+            - name: Boundary specs — agent (eslint + package-graph + runtime guard)
+              run: pnpm --filter @bot/agent exec jest tests/eslint.boundary tests/package.boundary tests/adversarial/boundary
+
+    sca:
+        name: sca
+        runs-on: ubuntu-latest
+        needs: install
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - name: Setup pnpm
+              uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+              with:
+                  version: ${{ env.PNPM_VERSION }}
+            - name: Setup Node
+              uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: pnpm
+            - name: Install (frozen lockfile)
+              run: pnpm install --frozen-lockfile
+            - name: Allowlist-filter unit tests (ADR 0040 §2.2)
+              run: pnpm --filter @bot/engine exec jest tests/ci/auditAllowlistFilter tests/ci/auditConfigSync
+            # `pnpm audit` exits non-zero when it finds advisories, so the root
+            # `audit:ci` script captures its output with `|| true` and the
+            # deterministic filter (with expiry + 90-day + allowlist semantics that
+            # auditConfig alone cannot enforce — and that ignoreGhsas would blind by
+            # stripping advisories pre-filter) decides the verdict + exit code (ADR
+            # 0040 §2.2). CI runs the SAME script local devs run, so there is no drift.
+            - name: SCA gate — prod HIGH/CRITICAL blocks (allowlist-filtered)
+              run: pnpm run audit:ci
+            # Advisory (non-blocking) dev-scope audit — logged for visibility, never
+            # blocks: a vuln in a test-only tool is not a runtime exposure (ADR 0040 §2.1).
+            - name: SCA advisory — dev-scope audit (non-blocking)
+              run: pnpm audit --audit-level=high --dev || true
+
+    lockfile:
+        name: lockfile:single-source
+        runs-on: ubuntu-latest
+        needs: install
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            # Exactly one root pnpm-lock.yaml; no foreign or nested lockfiles in the
+            # project tree (a second lockfile is a supply-chain ambiguity / injection
+            # vector, ADR 0040 §2.3). Vendored tooling (.agents/, .claude/) ships its
+            # own lockfiles and is not part of the monorepo graph, so it is excluded
+            # (consistent with the .prettierignore vendored-artifact exclusion).
+            - name: Assert no foreign lockfiles (package-lock.json / yarn.lock)
+              run: |
+                  foreign="$(git ls-files -- ':!.agents/**' ':!.claude/**' | grep -E '(package-lock\.json|yarn\.lock)$' || true)"
+                  if [ -n "$foreign" ]; then
+                      echo "FOREIGN LOCKFILE(S) present in project tree:"; echo "$foreign"; exit 1
+                  fi
+            - name: Assert exactly one pnpm-lock.yaml at the repo root
+              run: |
+                  count="$(git ls-files -- ':!.agents/**' ':!.claude/**' | grep -E '(^|/)pnpm-lock\.yaml$' | wc -l | tr -d ' ')"
+                  if [ "$count" != "1" ] || [ ! -f pnpm-lock.yaml ]; then
+                      echo "Expected exactly one root pnpm-lock.yaml, found $count:"; git ls-files | grep -E 'pnpm-lock\.yaml$'; exit 1
+                  fi
+
+    deps-pin-provenance:
+        name: deps:pin-and-provenance
+        runs-on: ubuntu-latest
+        needs: install
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            - name: Setup pnpm
+              uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+              with:
+                  version: ${{ env.PNPM_VERSION }}
+            - name: Setup Node
+              uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: pnpm
+            - name: Install (frozen lockfile)
+              run: pnpm install --frozen-lockfile
+            - name: Pin/skew unit tests (ADR 0041 §2.2/§2.3)
+              run: pnpm --filter @bot/engine exec jest tests/ci/exchangeDepPinCheck
+            # BLOCKING part of this job is the exact-pin + cross-workspace-skew check above.
+            - name: Exact-pin + cross-workspace version-consistency check
+              run: pnpm --filter @bot/engine exec ts-node tests/ci/runPinGate.ts
+            # Provenance (ADR 0041 §2.4, R1 contract). Layer 1 (binding) is the
+            # per-package sha512 integrity hash, already enforced by --frozen-lockfile
+            # in install/build/test — a substituted critical-dep tarball fails install.
+            # Layer 2 below is an ADVISORY attestation LOOKUP only: it records whether
+            # the npm registry publishes a provenance attestation for each pinned
+            # critical dep. It makes NO verification claim and NEVER fails the gate
+            # (`|| true`). (`npm/pnpm audit signatures` is not a meaningful check on a
+            # pnpm-managed tree, so it is intentionally NOT used.)
+            - name: Provenance — advisory attestation-presence lookup (non-blocking)
+              continue-on-error: true
+              run: |
+                  for dep in ccxt@4.5.54 decimal.js@10.6.0 pg@8.21.0; do
+                      att="$(npm view "$dep" dist.attestations --json 2>/dev/null || true)"
+                      if [ -n "$att" ]; then
+                          echo "PROVENANCE_ATTESTATION_PRESENT $dep"
+                      else
+                          echo "PROVENANCE_ATTESTATION_ABSENT $dep"
+                      fi
+                  done || true

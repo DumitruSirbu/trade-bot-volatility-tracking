@@ -1,14 +1,7 @@
 import { AuthFailureReasonEnum, AuthScopeEnum, IAuthSubject, WsRoomEnum } from '@bot/shared';
 
 import { LiveGateway } from '../../src/ws/LiveGateway';
-import {
-    LIVE_NAMESPACE,
-    WS_EVENT_AUTH_EXPIRED,
-    WS_EVENT_AUTH_ERROR,
-    WS_EVENT_STREAM_LAGGED,
-    WS_QUEUE_FULL_DISCONNECT_MS,
-    WS_QUEUE_SOFT_CAP,
-} from '../../src/ws/WsConstants';
+import { LIVE_NAMESPACE, WS_EVENT_AUTH_EXPIRED, WS_EVENT_STREAM_LAGGED, WS_QUEUE_FULL_DISCONNECT_MS, WS_QUEUE_SOFT_CAP } from '../../src/ws/WsConstants';
 import { ISweeperSocketSource, WsAuthAdapter } from '../../src/ws/auth/WsAuthHandshake';
 import { PerSocketQueue } from '../../src/ws/backpressure/PerSocketQueue';
 import { PositionRepository } from '../../src/position/repository/PositionRepository';

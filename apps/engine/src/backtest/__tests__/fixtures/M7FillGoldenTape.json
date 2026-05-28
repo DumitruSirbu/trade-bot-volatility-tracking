@@ -1,411 +1,411 @@
 [
-  {
-    "label": "long IOC fills — tier1 — tick touches limit",
-    "request": {
-      "eventId": "evt-1",
-      "symbol": "BTCUSDT",
-      "side": "long",
-      "intent": "open",
-      "policy": "marketable_limit_ioc",
-      "limitPrice": "40000",
-      "qty": "0.05",
-      "coinTier": "tier1",
-      "signalBarOpenMs": 1700000000000,
-      "barHigh": "40100",
-      "barLow": "39950",
-      "ticks": [
-        {
-          "high": "40000",
-          "low": "39990",
-          "close": "39995",
-          "tsMs": 1700000000500
+    {
+        "label": "long IOC fills — tier1 — tick touches limit",
+        "request": {
+            "eventId": "evt-1",
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "intent": "open",
+            "policy": "marketable_limit_ioc",
+            "limitPrice": "40000",
+            "qty": "0.05",
+            "coinTier": "tier1",
+            "signalBarOpenMs": 1700000000000,
+            "barHigh": "40100",
+            "barLow": "39950",
+            "ticks": [
+                {
+                    "high": "40000",
+                    "low": "39990",
+                    "close": "39995",
+                    "tsMs": 1700000000500
+                }
+            ],
+            "tierSlippageParams": {
+                "slippage_tier1_pct": 0.15,
+                "slippage_tier2_pct": 0.5,
+                "slippage_tier3_pct": 1
+            },
+            "latencyMs": 150
+        },
+        "expected": {
+            "eventId": "evt-1",
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "intent": "open",
+            "priceUsdt": "40060",
+            "qty": "0.05",
+            "feeUsdt": "0.8012",
+            "slippagePct": "0.15",
+            "tsMs": 1700000300150,
+            "missed": false,
+            "depthAware": false
         }
-      ],
-      "tierSlippageParams": {
-        "slippage_tier1_pct": 0.15,
-        "slippage_tier2_pct": 0.5,
-        "slippage_tier3_pct": 1
-      },
-      "latencyMs": 150
     },
-    "expected": {
-      "eventId": "evt-1",
-      "symbol": "BTCUSDT",
-      "side": "long",
-      "intent": "open",
-      "priceUsdt": "40060",
-      "qty": "0.05",
-      "feeUsdt": "0.8012",
-      "slippagePct": "0.15",
-      "tsMs": 1700000300150,
-      "missed": false,
-      "depthAware": false
-    }
-  },
-  {
-    "label": "short IOC fills — tier2 — tick touches limit",
-    "request": {
-      "eventId": "evt-2",
-      "symbol": "ETHUSDT",
-      "side": "short",
-      "intent": "open",
-      "policy": "marketable_limit_ioc",
-      "limitPrice": "2000",
-      "qty": "0.5",
-      "coinTier": "tier2",
-      "signalBarOpenMs": 1700000000000,
-      "barHigh": "2005",
-      "barLow": "1995",
-      "ticks": [
-        {
-          "high": "2001",
-          "low": "1999",
-          "close": "2000",
-          "tsMs": 1700000001000
+    {
+        "label": "short IOC fills — tier2 — tick touches limit",
+        "request": {
+            "eventId": "evt-2",
+            "symbol": "ETHUSDT",
+            "side": "short",
+            "intent": "open",
+            "policy": "marketable_limit_ioc",
+            "limitPrice": "2000",
+            "qty": "0.5",
+            "coinTier": "tier2",
+            "signalBarOpenMs": 1700000000000,
+            "barHigh": "2005",
+            "barLow": "1995",
+            "ticks": [
+                {
+                    "high": "2001",
+                    "low": "1999",
+                    "close": "2000",
+                    "tsMs": 1700000001000
+                }
+            ],
+            "tierSlippageParams": {
+                "slippage_tier1_pct": 0.15,
+                "slippage_tier2_pct": 0.5,
+                "slippage_tier3_pct": 1
+            },
+            "latencyMs": 150
+        },
+        "expected": {
+            "eventId": "evt-2",
+            "symbol": "ETHUSDT",
+            "side": "short",
+            "intent": "open",
+            "priceUsdt": "1990",
+            "qty": "0.5",
+            "feeUsdt": "0.398",
+            "slippagePct": "0.5",
+            "tsMs": 1700000300150,
+            "missed": false,
+            "depthAware": false
         }
-      ],
-      "tierSlippageParams": {
-        "slippage_tier1_pct": 0.15,
-        "slippage_tier2_pct": 0.5,
-        "slippage_tier3_pct": 1
-      },
-      "latencyMs": 150
     },
-    "expected": {
-      "eventId": "evt-2",
-      "symbol": "ETHUSDT",
-      "side": "short",
-      "intent": "open",
-      "priceUsdt": "1990",
-      "qty": "0.5",
-      "feeUsdt": "0.398",
-      "slippagePct": "0.5",
-      "tsMs": 1700000300150,
-      "missed": false,
-      "depthAware": false
-    }
-  },
-  {
-    "label": "long POST_ONLY fills — tier1 — tick crosses passive bid",
-    "request": {
-      "eventId": "evt-3",
-      "symbol": "BTCUSDT",
-      "side": "long",
-      "intent": "open",
-      "policy": "post_only_maker",
-      "limitPrice": "40000",
-      "qty": "0.05",
-      "coinTier": "tier1",
-      "signalBarOpenMs": 1700000000000,
-      "barHigh": "40050",
-      "barLow": "39900",
-      "ticks": [
-        {
-          "high": "40020",
-          "low": "39990",
-          "close": "39995",
-          "tsMs": 1700000010000
+    {
+        "label": "long POST_ONLY fills — tier1 — tick crosses passive bid",
+        "request": {
+            "eventId": "evt-3",
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "intent": "open",
+            "policy": "post_only_maker",
+            "limitPrice": "40000",
+            "qty": "0.05",
+            "coinTier": "tier1",
+            "signalBarOpenMs": 1700000000000,
+            "barHigh": "40050",
+            "barLow": "39900",
+            "ticks": [
+                {
+                    "high": "40020",
+                    "low": "39990",
+                    "close": "39995",
+                    "tsMs": 1700000010000
+                }
+            ],
+            "tierSlippageParams": {
+                "slippage_tier1_pct": 0.15,
+                "slippage_tier2_pct": 0.5,
+                "slippage_tier3_pct": 1
+            },
+            "latencyMs": 150
+        },
+        "expected": {
+            "eventId": "evt-3",
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "intent": "open",
+            "priceUsdt": "40060",
+            "qty": "0.05",
+            "feeUsdt": "0.4006",
+            "slippagePct": "0.15",
+            "tsMs": 1700000300150,
+            "missed": false,
+            "depthAware": false
         }
-      ],
-      "tierSlippageParams": {
-        "slippage_tier1_pct": 0.15,
-        "slippage_tier2_pct": 0.5,
-        "slippage_tier3_pct": 1
-      },
-      "latencyMs": 150
     },
-    "expected": {
-      "eventId": "evt-3",
-      "symbol": "BTCUSDT",
-      "side": "long",
-      "intent": "open",
-      "priceUsdt": "40060",
-      "qty": "0.05",
-      "feeUsdt": "0.4006",
-      "slippagePct": "0.15",
-      "tsMs": 1700000300150,
-      "missed": false,
-      "depthAware": false
-    }
-  },
-  {
-    "label": "short POST_ONLY fills — tier3 — tick crosses passive ask",
-    "request": {
-      "eventId": "evt-4",
-      "symbol": "SOMETHINGUSDT",
-      "side": "short",
-      "intent": "open",
-      "policy": "post_only_maker",
-      "limitPrice": "100",
-      "qty": "10",
-      "coinTier": "tier3",
-      "signalBarOpenMs": 1700000000000,
-      "barHigh": "101",
-      "barLow": "99",
-      "ticks": [
-        {
-          "high": "100.5",
-          "low": "99.5",
-          "close": "100.1",
-          "tsMs": 1700000005000
+    {
+        "label": "short POST_ONLY fills — tier3 — tick crosses passive ask",
+        "request": {
+            "eventId": "evt-4",
+            "symbol": "SOMETHINGUSDT",
+            "side": "short",
+            "intent": "open",
+            "policy": "post_only_maker",
+            "limitPrice": "100",
+            "qty": "10",
+            "coinTier": "tier3",
+            "signalBarOpenMs": 1700000000000,
+            "barHigh": "101",
+            "barLow": "99",
+            "ticks": [
+                {
+                    "high": "100.5",
+                    "low": "99.5",
+                    "close": "100.1",
+                    "tsMs": 1700000005000
+                }
+            ],
+            "tierSlippageParams": {
+                "slippage_tier1_pct": 0.15,
+                "slippage_tier2_pct": 0.5,
+                "slippage_tier3_pct": 1
+            },
+            "latencyMs": 150
+        },
+        "expected": {
+            "eventId": "evt-4",
+            "symbol": "SOMETHINGUSDT",
+            "side": "short",
+            "intent": "open",
+            "priceUsdt": "99",
+            "qty": "10",
+            "feeUsdt": "0.198",
+            "slippagePct": "1",
+            "tsMs": 1700000300150,
+            "missed": false,
+            "depthAware": false
         }
-      ],
-      "tierSlippageParams": {
-        "slippage_tier1_pct": 0.15,
-        "slippage_tier2_pct": 0.5,
-        "slippage_tier3_pct": 1
-      },
-      "latencyMs": 150
     },
-    "expected": {
-      "eventId": "evt-4",
-      "symbol": "SOMETHINGUSDT",
-      "side": "short",
-      "intent": "open",
-      "priceUsdt": "99",
-      "qty": "10",
-      "feeUsdt": "0.198",
-      "slippagePct": "1",
-      "tsMs": 1700000300150,
-      "missed": false,
-      "depthAware": false
-    }
-  },
-  {
-    "label": "long REDUCE_MARKET always fills — tier1",
-    "request": {
-      "eventId": "evt-5",
-      "symbol": "BTCUSDT",
-      "side": "long",
-      "intent": "close",
-      "policy": "reduce_market",
-      "limitPrice": "41000",
-      "qty": "0.05",
-      "coinTier": "tier1",
-      "signalBarOpenMs": 1700000000000,
-      "barHigh": "41050",
-      "barLow": "40950",
-      "ticks": [],
-      "tierSlippageParams": {
-        "slippage_tier1_pct": 0.15,
-        "slippage_tier2_pct": 0.5,
-        "slippage_tier3_pct": 1
-      },
-      "latencyMs": 150
-    },
-    "expected": {
-      "eventId": "evt-5",
-      "symbol": "BTCUSDT",
-      "side": "long",
-      "intent": "close",
-      "priceUsdt": "40938.5",
-      "qty": "0.05",
-      "feeUsdt": "0.81877",
-      "slippagePct": "0.15",
-      "tsMs": 1700000300150,
-      "missed": false,
-      "depthAware": false
-    }
-  },
-  {
-    "label": "short REDUCE_MARKET always fills — tier2",
-    "request": {
-      "eventId": "evt-6",
-      "symbol": "ETHUSDT",
-      "side": "short",
-      "intent": "reduce",
-      "policy": "reduce_market",
-      "limitPrice": "1900",
-      "qty": "0.25",
-      "coinTier": "tier2",
-      "signalBarOpenMs": 1700000000000,
-      "barHigh": "1905",
-      "barLow": "1895",
-      "ticks": [],
-      "tierSlippageParams": {
-        "slippage_tier1_pct": 0.15,
-        "slippage_tier2_pct": 0.5,
-        "slippage_tier3_pct": 1
-      },
-      "latencyMs": 150
-    },
-    "expected": {
-      "eventId": "evt-6",
-      "symbol": "ETHUSDT",
-      "side": "short",
-      "intent": "reduce",
-      "priceUsdt": "1909.5",
-      "qty": "0.25",
-      "feeUsdt": "0.19095",
-      "slippagePct": "0.5",
-      "tsMs": 1700000300150,
-      "missed": false,
-      "depthAware": false
-    }
-  },
-  {
-    "label": "long IOC missed — no ticks within timeout window",
-    "request": {
-      "eventId": "evt-7",
-      "symbol": "BTCUSDT",
-      "side": "long",
-      "intent": "open",
-      "policy": "marketable_limit_ioc",
-      "limitPrice": "40000",
-      "qty": "0.05",
-      "coinTier": "tier1",
-      "signalBarOpenMs": 1700000000000,
-      "barHigh": "40100",
-      "barLow": "39950",
-      "ticks": [
-        {
-          "high": "40000",
-          "low": "39990",
-          "close": "39995",
-          "tsMs": 1700000005000
+    {
+        "label": "long REDUCE_MARKET always fills — tier1",
+        "request": {
+            "eventId": "evt-5",
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "intent": "close",
+            "policy": "reduce_market",
+            "limitPrice": "41000",
+            "qty": "0.05",
+            "coinTier": "tier1",
+            "signalBarOpenMs": 1700000000000,
+            "barHigh": "41050",
+            "barLow": "40950",
+            "ticks": [],
+            "tierSlippageParams": {
+                "slippage_tier1_pct": 0.15,
+                "slippage_tier2_pct": 0.5,
+                "slippage_tier3_pct": 1
+            },
+            "latencyMs": 150
+        },
+        "expected": {
+            "eventId": "evt-5",
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "intent": "close",
+            "priceUsdt": "40938.5",
+            "qty": "0.05",
+            "feeUsdt": "0.81877",
+            "slippagePct": "0.15",
+            "tsMs": 1700000300150,
+            "missed": false,
+            "depthAware": false
         }
-      ],
-      "tierSlippageParams": {
-        "slippage_tier1_pct": 0.15,
-        "slippage_tier2_pct": 0.5,
-        "slippage_tier3_pct": 1
-      },
-      "latencyMs": 150
     },
-    "expected": {
-      "eventId": "evt-7",
-      "symbol": "BTCUSDT",
-      "side": "long",
-      "intent": "open",
-      "priceUsdt": "0",
-      "qty": "0",
-      "feeUsdt": "0",
-      "slippagePct": "0",
-      "tsMs": 1700000300150,
-      "missed": true,
-      "depthAware": false
-    }
-  },
-  {
-    "label": "long POST_ONLY missed — no ticks at all",
-    "request": {
-      "eventId": "evt-8",
-      "symbol": "BTCUSDT",
-      "side": "long",
-      "intent": "open",
-      "policy": "post_only_maker",
-      "limitPrice": "40000",
-      "qty": "0.05",
-      "coinTier": "tier1",
-      "signalBarOpenMs": 1700000000000,
-      "barHigh": "40100",
-      "barLow": "39950",
-      "ticks": [],
-      "tierSlippageParams": {
-        "slippage_tier1_pct": 0.15,
-        "slippage_tier2_pct": 0.5,
-        "slippage_tier3_pct": 1
-      },
-      "latencyMs": 150
-    },
-    "expected": {
-      "eventId": "evt-8",
-      "symbol": "BTCUSDT",
-      "side": "long",
-      "intent": "open",
-      "priceUsdt": "0",
-      "qty": "0",
-      "feeUsdt": "0",
-      "slippagePct": "0",
-      "tsMs": 1700000300150,
-      "missed": true,
-      "depthAware": false
-    }
-  },
-  {
-    "label": "short IOC missed — ticks present but never touch limit",
-    "request": {
-      "eventId": "evt-9",
-      "symbol": "ETHUSDT",
-      "side": "short",
-      "intent": "open",
-      "policy": "marketable_limit_ioc",
-      "limitPrice": "2010",
-      "qty": "1",
-      "coinTier": "tier2",
-      "signalBarOpenMs": 1700000000000,
-      "barHigh": "2005",
-      "barLow": "1995",
-      "ticks": [
-        {
-          "high": "2005",
-          "low": "1999",
-          "close": "2002",
-          "tsMs": 1700000000500
+    {
+        "label": "short REDUCE_MARKET always fills — tier2",
+        "request": {
+            "eventId": "evt-6",
+            "symbol": "ETHUSDT",
+            "side": "short",
+            "intent": "reduce",
+            "policy": "reduce_market",
+            "limitPrice": "1900",
+            "qty": "0.25",
+            "coinTier": "tier2",
+            "signalBarOpenMs": 1700000000000,
+            "barHigh": "1905",
+            "barLow": "1895",
+            "ticks": [],
+            "tierSlippageParams": {
+                "slippage_tier1_pct": 0.15,
+                "slippage_tier2_pct": 0.5,
+                "slippage_tier3_pct": 1
+            },
+            "latencyMs": 150
+        },
+        "expected": {
+            "eventId": "evt-6",
+            "symbol": "ETHUSDT",
+            "side": "short",
+            "intent": "reduce",
+            "priceUsdt": "1909.5",
+            "qty": "0.25",
+            "feeUsdt": "0.19095",
+            "slippagePct": "0.5",
+            "tsMs": 1700000300150,
+            "missed": false,
+            "depthAware": false
         }
-      ],
-      "tierSlippageParams": {
-        "slippage_tier1_pct": 0.15,
-        "slippage_tier2_pct": 0.5,
-        "slippage_tier3_pct": 1
-      },
-      "latencyMs": 150
     },
-    "expected": {
-      "eventId": "evt-9",
-      "symbol": "ETHUSDT",
-      "side": "short",
-      "intent": "open",
-      "priceUsdt": "0",
-      "qty": "0",
-      "feeUsdt": "0",
-      "slippagePct": "0",
-      "tsMs": 1700000300150,
-      "missed": true,
-      "depthAware": false
-    }
-  },
-  {
-    "label": "long IOC fills — tier3 high-slippage path",
-    "request": {
-      "eventId": "evt-10",
-      "symbol": "OBSCUREUSDT",
-      "side": "long",
-      "intent": "open",
-      "policy": "marketable_limit_ioc",
-      "limitPrice": "5",
-      "qty": "100",
-      "coinTier": "tier3",
-      "signalBarOpenMs": 1700000000000,
-      "barHigh": "5.05",
-      "barLow": "4.95",
-      "ticks": [
-        {
-          "high": "5",
-          "low": "4.99",
-          "close": "4.995",
-          "tsMs": 1700000000800
+    {
+        "label": "long IOC missed — no ticks within timeout window",
+        "request": {
+            "eventId": "evt-7",
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "intent": "open",
+            "policy": "marketable_limit_ioc",
+            "limitPrice": "40000",
+            "qty": "0.05",
+            "coinTier": "tier1",
+            "signalBarOpenMs": 1700000000000,
+            "barHigh": "40100",
+            "barLow": "39950",
+            "ticks": [
+                {
+                    "high": "40000",
+                    "low": "39990",
+                    "close": "39995",
+                    "tsMs": 1700000005000
+                }
+            ],
+            "tierSlippageParams": {
+                "slippage_tier1_pct": 0.15,
+                "slippage_tier2_pct": 0.5,
+                "slippage_tier3_pct": 1
+            },
+            "latencyMs": 150
+        },
+        "expected": {
+            "eventId": "evt-7",
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "intent": "open",
+            "priceUsdt": "0",
+            "qty": "0",
+            "feeUsdt": "0",
+            "slippagePct": "0",
+            "tsMs": 1700000300150,
+            "missed": true,
+            "depthAware": false
         }
-      ],
-      "tierSlippageParams": {
-        "slippage_tier1_pct": 0.15,
-        "slippage_tier2_pct": 0.5,
-        "slippage_tier3_pct": 1
-      },
-      "latencyMs": 150
     },
-    "expected": {
-      "eventId": "evt-10",
-      "symbol": "OBSCUREUSDT",
-      "side": "long",
-      "intent": "open",
-      "priceUsdt": "5.05",
-      "qty": "100",
-      "feeUsdt": "0.202",
-      "slippagePct": "1",
-      "tsMs": 1700000300150,
-      "missed": false,
-      "depthAware": false
+    {
+        "label": "long POST_ONLY missed — no ticks at all",
+        "request": {
+            "eventId": "evt-8",
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "intent": "open",
+            "policy": "post_only_maker",
+            "limitPrice": "40000",
+            "qty": "0.05",
+            "coinTier": "tier1",
+            "signalBarOpenMs": 1700000000000,
+            "barHigh": "40100",
+            "barLow": "39950",
+            "ticks": [],
+            "tierSlippageParams": {
+                "slippage_tier1_pct": 0.15,
+                "slippage_tier2_pct": 0.5,
+                "slippage_tier3_pct": 1
+            },
+            "latencyMs": 150
+        },
+        "expected": {
+            "eventId": "evt-8",
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "intent": "open",
+            "priceUsdt": "0",
+            "qty": "0",
+            "feeUsdt": "0",
+            "slippagePct": "0",
+            "tsMs": 1700000300150,
+            "missed": true,
+            "depthAware": false
+        }
+    },
+    {
+        "label": "short IOC missed — ticks present but never touch limit",
+        "request": {
+            "eventId": "evt-9",
+            "symbol": "ETHUSDT",
+            "side": "short",
+            "intent": "open",
+            "policy": "marketable_limit_ioc",
+            "limitPrice": "2010",
+            "qty": "1",
+            "coinTier": "tier2",
+            "signalBarOpenMs": 1700000000000,
+            "barHigh": "2005",
+            "barLow": "1995",
+            "ticks": [
+                {
+                    "high": "2005",
+                    "low": "1999",
+                    "close": "2002",
+                    "tsMs": 1700000000500
+                }
+            ],
+            "tierSlippageParams": {
+                "slippage_tier1_pct": 0.15,
+                "slippage_tier2_pct": 0.5,
+                "slippage_tier3_pct": 1
+            },
+            "latencyMs": 150
+        },
+        "expected": {
+            "eventId": "evt-9",
+            "symbol": "ETHUSDT",
+            "side": "short",
+            "intent": "open",
+            "priceUsdt": "0",
+            "qty": "0",
+            "feeUsdt": "0",
+            "slippagePct": "0",
+            "tsMs": 1700000300150,
+            "missed": true,
+            "depthAware": false
+        }
+    },
+    {
+        "label": "long IOC fills — tier3 high-slippage path",
+        "request": {
+            "eventId": "evt-10",
+            "symbol": "OBSCUREUSDT",
+            "side": "long",
+            "intent": "open",
+            "policy": "marketable_limit_ioc",
+            "limitPrice": "5",
+            "qty": "100",
+            "coinTier": "tier3",
+            "signalBarOpenMs": 1700000000000,
+            "barHigh": "5.05",
+            "barLow": "4.95",
+            "ticks": [
+                {
+                    "high": "5",
+                    "low": "4.99",
+                    "close": "4.995",
+                    "tsMs": 1700000000800
+                }
+            ],
+            "tierSlippageParams": {
+                "slippage_tier1_pct": 0.15,
+                "slippage_tier2_pct": 0.5,
+                "slippage_tier3_pct": 1
+            },
+            "latencyMs": 150
+        },
+        "expected": {
+            "eventId": "evt-10",
+            "symbol": "OBSCUREUSDT",
+            "side": "long",
+            "intent": "open",
+            "priceUsdt": "5.05",
+            "qty": "100",
+            "feeUsdt": "0.202",
+            "slippagePct": "1",
+            "tsMs": 1700000300150,
+            "missed": false,
+            "depthAware": false
+        }
     }
-  }
 ]

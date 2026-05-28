@@ -10,9 +10,7 @@
 import {
     DeviationSideEnum,
     FlowTypeEnum,
-    OrderIntentActionEnum,
     PositionSideEnum,
-    RejectReasonEnum,
     RiskOutcomeEnum,
     SignalActionEnum,
     SignalTypeEnum,
@@ -38,7 +36,6 @@ import {
     MAX_SAME_DIRECTION_EXPOSURE_USDT,
     WEEKLY_LOSS_LIMIT_USDT,
 } from '../../src/risk/const';
-import { CoinTierEnum } from '@bot/shared';
 
 // ─── shared helpers ───────────────────────────────────────────────────────────
 
@@ -66,7 +63,7 @@ function buildVersionRow(
     };
 }
 
-function makeOpenSignal() {
+function _makeOpenSignal() {
     const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
     return {
         action: SignalActionEnum.OPEN,

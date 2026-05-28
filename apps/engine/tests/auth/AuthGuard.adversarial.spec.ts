@@ -3,11 +3,9 @@ import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
 import { AuthGuard } from '../../src/auth/AuthGuard';
-import { AuthTokenService, EnvAuthSecretProvider, IRevokedJtiRepositoryPort } from '../../src/auth/AuthModule';
+import { AuthTokenService, IRevokedJtiRepositoryPort } from '../../src/auth/AuthModule';
 import { AuthCorsInterceptor } from '../../src/auth/AuthCorsInterceptor';
 import { AUTH_CORS_ALLOWLIST_ENV } from '../../src/auth/const/authConsts';
-import { AppConfigService } from '../../src/config/service';
-import { NodeEnvEnum } from '../../src/config/enum';
 
 // M9 QA — adversarial extension to AuthGuard.spec.ts.
 // Covers: expired-in-flight, header injection (CR/LF), CORS preflight on
@@ -40,7 +38,7 @@ class StubRevokedRepo implements IRevokedJtiRepositoryPort {
         return this.revokedSet.has(jti);
     }
 
-    async revoke(jti: string, revokedBy: string, reason: string | null): Promise<void> {
+    async revoke(jti: string, _revokedBy: string, _reason: string | null): Promise<void> {
         this.revokedSet.add(jti);
     }
 

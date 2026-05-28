@@ -37,7 +37,7 @@
  * Failure routing: any test failure → ARCHITECT ROUTING NEEDED per dev-qa-cycle.md §2.2.
  */
 
-import { OrderIntentActionEnum, OrderPolicyEnum, PositionSideEnum, ProtectiveOrderTypeEnum, StrategyDirectionEnum } from '@bot/shared';
+import { OrderIntentActionEnum, OrderPolicyEnum, ProtectiveOrderTypeEnum, StrategyDirectionEnum } from '@bot/shared';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
@@ -54,7 +54,7 @@ import { FillAccumulator } from '../../../src/execution/service/FillAccumulator'
 import { LocalProtectiveMonitor } from '../../../src/execution/service/LocalProtectiveMonitor';
 import { OrderPolicyRouter } from '../../../src/execution/service/OrderPolicyRouter';
 import { ProtectiveOrderAttacher } from '../../../src/execution/service/ProtectiveOrderAttacher';
-import { RiskGateService } from '../../../src/risk/service/RiskGateService';
+
 import { StrategyVersionRepository } from '../../../src/strategy/repository/StrategyVersionRepository';
 import { buildOrderIntent, buildSizing } from '../../risk/support/fixtures';
 import {

@@ -17,14 +17,13 @@ interface ISdfRow {
     readonly strategy_versions_id: number | null;
 }
 
-export async function draftStrategyVersion(
-    pg: IAgentPgClient,
-    args: IDraftStrategyVersionArgs,
-): Promise<number | null> {
-    const rows = await pg.query<ISdfRow>(
-        `SELECT draft_strategy_version($1, $2::jsonb, $3, $4) AS strategy_versions_id`,
-        [args.parentVersionId, JSON.stringify(args.params), args.rationale, args.weekIso],
-    );
+export async function draftStrategyVersion(pg: IAgentPgClient, args: IDraftStrategyVersionArgs): Promise<number | null> {
+    const rows = await pg.query<ISdfRow>(`SELECT draft_strategy_version($1, $2::jsonb, $3, $4) AS strategy_versions_id`, [
+        args.parentVersionId,
+        JSON.stringify(args.params),
+        args.rationale,
+        args.weekIso,
+    ]);
 
     if (rows.length === 0) {
         return null;

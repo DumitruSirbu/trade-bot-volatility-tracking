@@ -77,7 +77,8 @@ export default [
                         'Account-state reads must inject IAccountStateSource (ACCOUNT_STATE_SOURCE); order commands must inject IExecutionClient (EXECUTION_CLIENT or ENGINE_EXECUTION_CLIENT); only EXCHANGE_CLIENT for connection/market-data is allowed in the listed module paths. See ADR 0032 §3 D14.',
                 },
                 {
-                    selector: "Decorator[expression.type='CallExpression'][expression.callee.name='Inject'][expression.arguments.0.type='Identifier'][expression.arguments.0.name='EXCHANGE_CLIENT']",
+                    selector:
+                        "Decorator[expression.type='CallExpression'][expression.callee.name='Inject'][expression.arguments.0.type='Identifier'][expression.arguments.0.name='EXCHANGE_CLIENT']",
                     message:
                         'Account-state reads must inject IAccountStateSource (ACCOUNT_STATE_SOURCE); order commands must inject IExecutionClient (EXECUTION_CLIENT or ENGINE_EXECUTION_CLIENT); only EXCHANGE_CLIENT for connection/market-data is allowed in the listed module paths. See ADR 0032 §3 D14.',
                 },

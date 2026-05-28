@@ -37,8 +37,7 @@ import { Client } from 'pg';
 // Connection config — adapts to CI env vars or the documented local defaults.
 // ---------------------------------------------------------------------------
 
-const ENGINE_DB_URL =
-    process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
+const ENGINE_DB_URL = process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
 
 // The mcp_reader role is provisioned by the migration with a sentinel password.
 // In the test environment the password must match.
@@ -130,15 +129,10 @@ describe('mcp_reader role — permission enforcement (ADR 0034 §5)', () => {
             // Accept either the read-only-tx code or the insufficient-privilege code
             // depending on whether the role-level read-only flag fires first or the
             // explicit REVOKE fires first.
-            const validCodes =
-                expectedCode === INSUFFICIENT_PRIVILEGE
-                    ? [INSUFFICIENT_PRIVILEGE, READ_ONLY_SQL_TRANSACTION]
-                    : [expectedCode];
+            const validCodes = expectedCode === INSUFFICIENT_PRIVILEGE ? [INSUFFICIENT_PRIVILEGE, READ_ONLY_SQL_TRANSACTION] : [expectedCode];
 
             if (!validCodes.includes(pgErr.code ?? '')) {
-                throw new Error(
-                    `Expected SQLSTATE ${expectedCode} (or ${validCodes.join('/')}) but got ${pgErr.code ?? 'no code'}: ${pgErr.message}`,
-                );
+                throw new Error(`Expected SQLSTATE ${expectedCode} (or ${validCodes.join('/')}) but got ${pgErr.code ?? 'no code'}: ${pgErr.message}`);
             }
 
             expect(validCodes).toContain(pgErr.code);
@@ -149,30 +143,21 @@ describe('mcp_reader role — permission enforcement (ADR 0034 §5)', () => {
 
     it('[1] INSERT INTO positions is rejected (read-only role)', async () => {
         skipIfNotReachable();
-        await assertSqlstateRejection(
-            `INSERT INTO positions (symbol, state) VALUES ('BTCUSDT', 'open')`,
-            INSUFFICIENT_PRIVILEGE,
-        );
+        await assertSqlstateRejection(`INSERT INTO positions (symbol, state) VALUES ('BTCUSDT', 'open')`, INSUFFICIENT_PRIVILEGE);
     });
 
     // ---- [2] UPDATE rejected ----
 
     it('[2] UPDATE positions is rejected (read-only role)', async () => {
         skipIfNotReachable();
-        await assertSqlstateRejection(
-            `UPDATE positions SET state = 'closed' WHERE 1=0`,
-            INSUFFICIENT_PRIVILEGE,
-        );
+        await assertSqlstateRejection(`UPDATE positions SET state = 'closed' WHERE 1=0`, INSUFFICIENT_PRIVILEGE);
     });
 
     // ---- [3] DELETE rejected ----
 
     it('[3] DELETE FROM positions is rejected (read-only role)', async () => {
         skipIfNotReachable();
-        await assertSqlstateRejection(
-            `DELETE FROM positions WHERE 1=0`,
-            INSUFFICIENT_PRIVILEGE,
-        );
+        await assertSqlstateRejection(`DELETE FROM positions WHERE 1=0`, INSUFFICIENT_PRIVILEGE);
     });
 
     // ---- [4] SELECT on whitelisted table succeeds ----
@@ -185,14 +170,16 @@ describe('mcp_reader role — permission enforcement (ADR 0034 §5)', () => {
         expect(Array.isArray(result.rows)).toBe(true);
     });
 
-    // ---- [5] SELECT from auth_tokens is rejected (sensitive, no grant) ----
-
-    it('[5] SELECT FROM auth_tokens is rejected (not in whitelist)', async () => {
+    // ---- [5] SELECT from an auth-adjacent table is rejected (sensitive, no grant) ----
+    //
+    // Auth is stateless HS256 JWT — there is no `auth_tokens` table and there
+    // never should be (the revocation list is `revoked_jti`, the rate-limit
+    // ledger is `login_rate_limit_state`). This asserts the least-privilege
+    // intent: mcp_reader must not be able to read an auth-adjacent table that
+    // is deliberately excluded from the ADR-0034 whitelist.
+    it('[5] SELECT FROM login_rate_limit_state is rejected (auth-adjacent, not in whitelist)', async () => {
         skipIfNotReachable();
-        await assertSqlstateRejection(
-            `SELECT * FROM auth_tokens LIMIT 1`,
-            INSUFFICIENT_PRIVILEGE,
-        );
+        await assertSqlstateRejection(`SELECT * FROM login_rate_limit_state LIMIT 1`, INSUFFICIENT_PRIVILEGE);
     });
 
     // ---- [6] SELECT from revoked_jti succeeds (M13 ADR 0038 grant);
@@ -207,46 +194,37 @@ describe('mcp_reader role — permission enforcement (ADR 0034 §5)', () => {
 
     it('[6b] INSERT INTO revoked_jti is rejected (read-only role)', async () => {
         skipIfNotReachable();
+        // jti is a UUID column — use a syntactically valid UUID so the query
+        // reaches the privilege/read-only check rather than failing earlier at
+        // 22P02 (invalid uuid syntax).
         await assertSqlstateRejection(
-            `INSERT INTO revoked_jti (jti, revoked_at) VALUES ('test-jti', NOW())`,
+            `INSERT INTO revoked_jti (jti, revoked_at) VALUES ('00000000-0000-4000-8000-000000000001', NOW())`,
             INSUFFICIENT_PRIVILEGE,
         );
     });
 
     it('[6c] UPDATE revoked_jti is rejected (read-only role)', async () => {
         skipIfNotReachable();
-        await assertSqlstateRejection(
-            `UPDATE revoked_jti SET jti = 'x' WHERE 1=0`,
-            INSUFFICIENT_PRIVILEGE,
-        );
+        await assertSqlstateRejection(`UPDATE revoked_jti SET jti = '00000000-0000-4000-8000-000000000002' WHERE 1=0`, INSUFFICIENT_PRIVILEGE);
     });
 
     it('[6d] DELETE FROM revoked_jti is rejected (read-only role)', async () => {
         skipIfNotReachable();
-        await assertSqlstateRejection(
-            `DELETE FROM revoked_jti WHERE 1=0`,
-            INSUFFICIENT_PRIVILEGE,
-        );
+        await assertSqlstateRejection(`DELETE FROM revoked_jti WHERE 1=0`, INSUFFICIENT_PRIVILEGE);
     });
 
     // ---- [7] SELECT from boot_mode_history is rejected ----
 
     it('[7] SELECT FROM boot_mode_history is rejected (not in whitelist)', async () => {
         skipIfNotReachable();
-        await assertSqlstateRejection(
-            `SELECT * FROM boot_mode_history LIMIT 1`,
-            INSUFFICIENT_PRIVILEGE,
-        );
+        await assertSqlstateRejection(`SELECT * FROM boot_mode_history LIMIT 1`, INSUFFICIENT_PRIVILEGE);
     });
 
     // ---- [8] SELECT from paper_account_state is rejected ----
 
     it('[8] SELECT FROM paper_account_state is rejected (not in whitelist)', async () => {
         skipIfNotReachable();
-        await assertSqlstateRejection(
-            `SELECT * FROM paper_account_state LIMIT 1`,
-            INSUFFICIENT_PRIVILEGE,
-        );
+        await assertSqlstateRejection(`SELECT * FROM paper_account_state LIMIT 1`, INSUFFICIENT_PRIVILEGE);
     });
 
     // ---- [9] statement_timeout fires for long-running queries ----
