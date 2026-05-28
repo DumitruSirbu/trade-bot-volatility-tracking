@@ -26,9 +26,7 @@ export class WidenControlAuditActionForKeyPermissionAssertion20260605000000 impl
     }
 
     async down(queryRunner: QueryRunner): Promise<void> {
-        await queryRunner.query(
-            `DELETE FROM "control_audit" WHERE "action" IN ('KEY_PERMISSION_ASSERTION_FAILED', 'KEY_PERMISSION_ASSERTION_SKIPPED')`,
-        );
+        await queryRunner.query(`DELETE FROM "control_audit" WHERE "action" IN ('KEY_PERMISSION_ASSERTION_FAILED', 'KEY_PERMISSION_ASSERTION_SKIPPED')`);
         await queryRunner.query('ALTER TABLE "control_audit" DROP CONSTRAINT "ck_control_audit_action"');
         await queryRunner.query(
             'ALTER TABLE "control_audit" ADD CONSTRAINT "ck_control_audit_action" ' +
