@@ -156,14 +156,37 @@ jobs:
                     --health-timeout 5s
                     --health-retries 10
         env:
-            # Engine + migration CLI read DATABASE_URL; the role-integration
-            # suites connect as mcp_reader / agent_writer using the sentinel
-            # passwords the role-creating migrations set (so no manual ALTER ROLE).
+            # The engine's AppConfigModule runs validateEnv() at module load (some
+            # specs import it, e.g. AuthController / readApi), so the FULL required
+            # env set must be present — locally a gitignored .env supplies it; the CI
+            # runner has none, so it is provided here. Required keys + constraints
+            # come from apps/engine/src/config/EnvironmentVariables.ts. Secrets
+            # (AUTH_HMAC_SECRET / AUTH_BOOTSTRAP_SECRET / exchange keys) stay unset —
+            # they only WARN, never fail validateEnv. EXCHANGE_ENV=paper opens no
+            # network at module load. DB_* and DATABASE_URL agree and match the
+            # postgres service password.
             #
-            # SECURITY: every value below is a throwaway CI-only migration sentinel
-            # for an ephemeral, off-runner-unreachable DB. It MUST NEVER be reused
-            # for testnet, paper, staging, or any non-CI environment — those rotate
-            # the role passwords away from these sentinels at deploy.
+            # SECURITY: every value below is a throwaway CI-only value for an
+            # ephemeral, off-runner-unreachable DB / config. NONE of these (DB
+            # passwords, role sentinels, capital/risk limits) may EVER be reused for
+            # testnet, paper, staging, or any non-CI environment — deploy rotates the
+            # role passwords away from these sentinels and supplies real config.
+            NODE_ENV: test
+            ENGINE_PORT: '3000'
+            LOG_LEVEL: log # one of: error|warn|log|debug|verbose
+            DB_HOST: localhost
+            DB_PORT: '5432'
+            DB_USER: trade_bot
+            DB_PASSWORD: ci_ephemeral_test_password # MUST equal the postgres service POSTGRES_PASSWORD
+            DB_NAME: trade_bot
+            ADMINER_PORT: '8081'
+            EXCHANGE_ENV: paper # one of: testnet|paper|live — paper opens no network at module load
+            MAX_OPEN_POSITIONS: '1'
+            MAX_EXPOSURE_PER_COIN_USDT: '100'
+            DAILY_LOSS_LIMIT_USDT: '50'
+            COOLDOWN_AFTER_LOSS_MS: '900000'
+            ACCOUNT_CAPITAL_USDT: '500'
+            ACTIVE_STRATEGY_VERSION_ID: '1'
             DATABASE_URL: postgresql://trade_bot:ci_ephemeral_test_password@localhost:5432/trade_bot
             MCP_DB_PASSWORD: mcp_reader_change_me_at_deploy
             AGENT_WRITER_PASSWORD: CHANGE_ME_BEFORE_PROD
