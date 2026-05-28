@@ -15,6 +15,9 @@ export default {
     // another tries to use the schema).  maxWorkers=1 serialises all suites so DB
     // suites execute one at a time without conflicting on the shared schema.
     maxWorkers: 1,
+    // Loads .env.local from the repo root (gitignored) before any suite runs.
+    // Allows local DB credentials without polluting the global shell environment.
+    globalSetup: '<rootDir>/tests/support/globalSetup.ts',
     // Destroys the shared DataSource after all suites complete so the process exits cleanly.
     globalTeardown: '<rootDir>/tests/support/globalTeardown.ts',
     moduleNameMapper: {
