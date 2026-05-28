@@ -139,7 +139,8 @@ function buildController(
     const alerts = opts.alerts ?? new StubAlertSink();
     const flatten = opts.flatten ?? new StubFlattenCoordinator();
     const haltFlag = opts.haltFlag ?? new HaltFlagService();
-    const service = new HaltService(auditRepo as unknown as ControlAuditRepository, haltFlag, alerts, flatten, new EventEmitter2());
+    const riskHaltState = { clearHaltForDate: async (): Promise<void> => undefined };
+    const service = new HaltService(auditRepo as unknown as ControlAuditRepository, haltFlag, alerts, flatten, riskHaltState, new EventEmitter2());
     const rateLimiter = new HaltRateLimiter();
     const controller = new HaltController(service, rateLimiter, auditRepo as unknown as ControlAuditRepository, clock);
     // M9 R1 fix #2: HaltStateRestoreService now takes (auditRepo, service, haltFlag, riskStateRepo).

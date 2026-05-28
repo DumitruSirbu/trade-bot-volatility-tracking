@@ -477,7 +477,8 @@ describe('HaltService HALT_CHANGED_EVENT', () => {
         const captured: IHaltChangedEvent[] = [];
         events.on(HALT_CHANGED_EVENT, (e: IHaltChangedEvent) => captured.push(e));
 
-        const service = new HaltService(auditRepo as never, haltFlag as never, sink, flatten as never, events);
+        const riskHaltState = { clearHaltForDate: async (): Promise<void> => undefined };
+        const service = new HaltService(auditRepo as never, haltFlag as never, sink, flatten as never, riskHaltState, events);
 
         const now = new Date('2026-05-24T12:00:00.000Z');
         await service.engageHalt({

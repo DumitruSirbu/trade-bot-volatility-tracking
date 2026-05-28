@@ -3,6 +3,7 @@ export * from './OpenPositionsPortAdapter';
 export * from './PositionSizer';
 export * from './ReservationLedger';
 export * from './RiskGateService';
+export * from './RiskHaltStatePortAdapter';
 export * from './RiskStatePortAdapter';
 export * from './SlotManager';
 export * from './StressHaltEvaluator';

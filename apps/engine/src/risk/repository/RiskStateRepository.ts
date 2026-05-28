@@ -27,6 +27,21 @@ export class RiskStateRepository extends BaseRepository<RiskStateEntity> {
         return rows.reduce((sum, row) => sum.plus(row.realizedPnlDay), new Money(0));
     }
 
+    // ADR 0021 §5.2 (M11a soak fix). Operator-resume clear of the gate's hot-path halt SoT.
+    // Narrow UPDATE of is_halted=false, halt_reason=null for today's UTC-day row only — it MUST
+    // NOT touch realized_pnl_day, open_exposure, or trades_count: the operator is lifting the
+    // halt, not resetting the day's loss accounting, so the daily/weekly loss windows still bind
+    // after resume. No-op when today's row does not exist (a halt always wrote a row first).
+    async clearHaltForDate(date: string): Promise<void> {
+        // Loud guard: a malformed date would match zero rows and the UPDATE would
+        // silently no-op, leaving the gate halted while the operator sees 200 RUNNING.
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            throw new Error(`clearHaltForDate: invalid date format "${date}" — expected YYYY-MM-DD`);
+        }
+
+        await this.repository.update({ date }, { isHalted: false, haltReason: null });
+    }
+
     // Idempotent upsert on uq_risk_state_date (ADR 0004 §5/§7). The live writer updates
     // today's row in place.
     async upsertDay(day: {

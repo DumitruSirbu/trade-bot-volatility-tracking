@@ -1,4 +1,4 @@
-import { AuthScopeEnum, IAccountEquityView, IDecisionView, IPaginated, IPerformanceByVersionView, IRiskStateView } from '@bot/shared';
+import { AuthScopeEnum, IAccountEquityView, IDecisionView, IPaginated, IPerformanceByVersionView, IRiskStateView, SignalActionEnum } from '@bot/shared';
 import { Controller, Get, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 
 import { AuthGuard, RequiredScopes } from '../../auth/AuthGuard';
@@ -8,6 +8,7 @@ import { PositionRepository } from '../../position/repository/PositionRepository
 import { RiskStateRepository } from '../../risk/repository/RiskStateRepository';
 import { DecisionRepository } from '../../strategy/repository/DecisionRepository';
 import { StrategyVersionRepository } from '../../strategy/repository/StrategyVersionRepository';
+import { ListDecisionsQueryDto } from '../dto/ListDecisionsQueryDto';
 import { NoStoreCacheInterceptor } from '../interceptor/NoStoreCacheInterceptor';
 import { mapAccountEquity, mapDecision, mapPerformanceByVersion, mapRiskState } from '../mappers/readApiMappers';
 import { CursorCodec } from '../pagination/CursorCodec';
@@ -17,7 +18,7 @@ import { CursorCodec } from '../pagination/CursorCodec';
 // because each is a thin repo→mapper hop; the alternative is three near-empty
 // controller files that complicate routing tree review.
 
-const DECISIONS_PAGE_SIZE_DEFAULT = 50;
+const DECISIONS_PAGE_SIZE_DEFAULT = 100;
 const DECISIONS_PAGE_SIZE_MAX = 200;
 
 const PERFORMANCE_WINDOW_DAYS_DEFAULT = 30;
@@ -38,20 +39,16 @@ export class MetricsController {
     ) {}
 
     @Get('decisions')
-    async listDecisions(
-        @Query('cursor') rawCursor?: string,
-        @Query('pageSize') rawPageSize?: string,
-        @Query('symbol') symbol?: string,
-        @Query('flowType') flowType?: string,
-    ): Promise<IPaginated<IDecisionView>> {
-        const pageSize = clampPageSize(rawPageSize);
-        const decoded = this.cursors.decode(rawCursor);
+    async listDecisions(@Query() query: ListDecisionsQueryDto): Promise<IPaginated<IDecisionView>> {
+        const pageSize = clampPageSize(query.pageSize === undefined ? undefined : String(query.pageSize));
+        const decoded = this.cursors.decode(query.cursor);
         // Decision ids are SERIAL numbers; reject string-id cursors as "no cursor".
         const cursorTuple = decoded === null || typeof decoded.id !== 'number' ? null : { ts: decoded.ts, id: decoded.id };
 
         const rows = await this.decisions.findPage(cursorTuple, pageSize, {
-            symbol: normalizeFilter(symbol),
-            flowType: normalizeFilter(flowType),
+            symbol: normalizeFilter(query.symbol),
+            flowType: normalizeFilter(query.flowType),
+            action: normalizeActionFilter(query.action),
         });
 
         const items = rows.map(mapDecision);
@@ -84,7 +81,7 @@ export class MetricsController {
         // than drifting hour-by-hour with wall-clock. Two requests in the same
         // UTC day return the same `since` boundary, which keeps cached metric
         // panels and back-to-back operator refreshes coherent.
-        const todayUtcMidnight = new Date(Date.now());
+        const todayUtcMidnight = new Date();
         todayUtcMidnight.setUTCHours(0, 0, 0, 0);
         const since = new Date(todayUtcMidnight.getTime() - windowDays * MS_PER_DAY);
 
@@ -124,6 +121,18 @@ function normalizeFilter(raw: string | undefined): string | undefined {
     }
 
     return raw;
+}
+
+function normalizeActionFilter(raw: string | undefined): string | undefined {
+    const normalized = normalizeFilter(raw);
+
+    if (normalized === undefined) {
+        return undefined;
+    }
+
+    const validActions = Object.values(SignalActionEnum) as string[];
+
+    return validActions.includes(normalized) ? normalized : undefined;
 }
 
 function clampPageSize(raw: string | undefined): number {

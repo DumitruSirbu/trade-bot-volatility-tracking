@@ -32,6 +32,15 @@ describe('queryKeys — stable references (referential equivalence)', () => {
         expect(queryKeys.decisionsRecent(null)).not.toEqual(queryKeys.decisionsRecent('cursor-1'));
     });
 
+    it('decisionsRecent() defaults the filters segment to an empty object so the WS-merge key matches the unfiltered page', () => {
+        expect(queryKeys.decisionsRecent(null)).toEqual(queryKeys.decisionsRecent(null, {}));
+    });
+
+    it('decisionsRecent distinguishes pages by their active filter set', () => {
+        expect(queryKeys.decisionsRecent(null, { action: 'skip' })).not.toEqual(queryKeys.decisionsRecent(null, { action: 'open' }));
+        expect(queryKeys.decisionsRecent(null, { symbol: 'BTCUSDT' })).not.toEqual(queryKeys.decisionsRecent(null, {}));
+    });
+
     it('accountEquity() key is distinct from riskState() key', () => {
         expect(queryKeys.accountEquity()).not.toEqual(queryKeys.riskState());
     });

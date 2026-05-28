@@ -296,7 +296,7 @@ describe('ReadApi DTO key snapshots (ADR 0022 §2.3 — anti-leakage)', () => {
         const harness = buildHarness();
         harness.decisions.rows.push(buildDecision());
 
-        const result = await harness.metricsController.listDecisions();
+        const result = await harness.metricsController.listDecisions({});
         const [view] = result.items;
 
         expect(Object.keys(view).sort()).toEqual([...DECISION_VIEW_KEYS].sort());
@@ -542,7 +542,7 @@ describe('Decisions filters', () => {
             buildDecision({ id: 3, symbol: 'BTCUSDT', signalType: FlowTypeEnum.MARKET_BETA }),
         );
 
-        const result = await harness.metricsController.listDecisions(undefined, undefined, 'BTCUSDT', FlowTypeEnum.TREND_INITIATION);
+        const result = await harness.metricsController.listDecisions({ symbol: 'BTCUSDT', flowType: FlowTypeEnum.TREND_INITIATION });
 
         expect(result.items).toHaveLength(1);
         expect(result.items[0].id).toBe('1');
@@ -552,7 +552,7 @@ describe('Decisions filters', () => {
         const harness = buildHarness();
         harness.decisions.rows.push(buildDecision({ id: 1 }), buildDecision({ id: 2, symbol: 'ETHUSDT' }));
 
-        const result = await harness.metricsController.listDecisions(undefined, undefined, '', '');
+        const result = await harness.metricsController.listDecisions({ symbol: '', flowType: '' });
 
         expect(result.items).toHaveLength(2);
     });

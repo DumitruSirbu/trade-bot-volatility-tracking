@@ -14,8 +14,9 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ALERT_SINK, IAlertSink } from '../alert/sink/AlertSinkModule';
 import { HaltFlagService } from '../common/service/HaltFlagService';
 import { ControlAuditRepository } from './repository/ControlAuditRepository';
+import { HaltDomainError } from './exception/HaltDomainError';
 import { HALT_CHANGED_EVENT, IHaltChangedEvent } from './const/controlEvents';
-import { FLATTEN_COORDINATOR, IFlattenCoordinator } from './interface/IFlattenCoordinator';
+import { FLATTEN_COORDINATOR, IFlattenCoordinator, IRiskHaltStatePort, RISK_HALT_STATE_PORT } from './interface';
 
 // M9 W3 (ADR 0021). HaltService orchestrates every halt-state transition:
 //
@@ -98,6 +99,7 @@ export class HaltService {
         private readonly haltFlag: HaltFlagService,
         @Inject(ALERT_SINK) private readonly alerts: IAlertSink,
         @Inject(FLATTEN_COORDINATOR) private readonly flattenCoordinator: IFlattenCoordinator,
+        @Inject(RISK_HALT_STATE_PORT) private readonly riskHaltState: IRiskHaltStatePort,
         private readonly events: EventEmitter2,
     ) {}
 
@@ -115,20 +117,11 @@ export class HaltService {
         // Flag flip — wrapped, not recreated. On already-halted this is a
         // no-op; on first transition the M5 executor's exposure-increasing
         // path starts refusing.
-        try {
+        await this.guardStep('halt flag-flip failed AFTER audit row written', audit.id, params.now, async () => {
             if (!wasAlreadyHalted) {
                 this.haltFlag.halt(`${params.source}:${params.reason}`);
             }
-        } catch (cause) {
-            await this.publishCritical(
-                AlertTypeEnum.UNHANDLED_EXCEPTION,
-                'halt flag-flip failed AFTER audit row written',
-                `auditId=${audit.id} cause=${describe(cause)}`,
-                params.now,
-            );
-
-            throw cause;
-        }
+        });
 
         await this.publishHaltAlert(params, audit);
 
@@ -182,20 +175,25 @@ export class HaltService {
             newState: 'RUNNING',
         });
 
-        try {
+        // ADR 0021 §5.2 — clear the gate's hot-path halt SoT BEFORE the in-memory
+        // flag. The gate reads `risk_state.is_halted` on every evaluate; clearing
+        // only the in-memory flag would leave a prior programmatic halt
+        // (market-stress, consecutive-loss) rejecting GLOBAL_HALT on every trigger.
+        // The UTC-day string is derived from the injected clock (`params.now`),
+        // matching RiskGateService — never `Date.now()` directly. A failure here
+        // (after the audit row is durable) is a half-cleared resume: CRITICAL
+        // alert + re-raise, same loud-not-silent discipline as the flag-flip guard.
+        const todayUtc = utcDateString(params.now);
+
+        await this.guardStep('resume risk_state clear failed AFTER audit row written', audit.id, params.now, async () => {
+            await this.riskHaltState.clearHaltForDate(todayUtc);
+        });
+
+        await this.guardStep('resume flag-flip failed AFTER audit row written', audit.id, params.now, async () => {
             if (previousState === 'HALTED') {
                 this.haltFlag.resume();
             }
-        } catch (cause) {
-            await this.publishCritical(
-                AlertTypeEnum.UNHANDLED_EXCEPTION,
-                'resume flag-flip failed AFTER audit row written',
-                `auditId=${audit.id} cause=${describe(cause)}`,
-                params.now,
-            );
-
-            throw cause;
-        }
+        });
 
         await this.publishResumeAlert(params, audit);
 
@@ -341,11 +339,11 @@ export class HaltService {
         // does not touch `control_audit`. Fail fast if a non-OPERATOR source
         // ever lands here (would indicate a regression in the SoT split).
         if (params.source !== HaltSourceEnum.OPERATOR) {
-            throw new Error(`writeAudit invoked with non-OPERATOR source=${params.source}; programmatic halts do not write control_audit`);
+            throw new HaltDomainError(`writeAudit invoked with non-OPERATOR source=${params.source}; programmatic halts do not write control_audit`);
         }
 
         if (params.actorSub === undefined || params.actorJti === undefined) {
-            throw new Error('OPERATOR halt requires actorSub + actorJti from IAuthSubject');
+            throw new HaltDomainError('OPERATOR halt requires actorSub + actorJti from IAuthSubject');
         }
 
         return this.auditRepo.appendOperator({
@@ -397,6 +395,21 @@ export class HaltService {
         await this.publishSafe(payload);
     }
 
+    // Wraps a post-audit mutation step (flag flip / risk_state clear) so any
+    // failure AFTER the durable audit row is loud, not silent: a CRITICAL alert
+    // names the failed step + audit id + cause, then the original error is
+    // re-raised so the caller sees a half-applied transition. The audit row
+    // stays as evidence.
+    private async guardStep(title: string, auditId: string, now: Date, fn: () => Promise<void>): Promise<void> {
+        try {
+            await fn();
+        } catch (cause) {
+            await this.publishCritical(AlertTypeEnum.UNHANDLED_EXCEPTION, title, `auditId=${auditId} cause=${describe(cause)}`, now);
+
+            throw cause;
+        }
+    }
+
     private async publishCritical(type: AlertTypeEnum, title: string, body: string, now: Date): Promise<void> {
         const payload: IAlertPayload = {
             type,
@@ -438,4 +451,10 @@ function describe(cause: unknown): string {
     }
 
     return String(cause);
+}
+
+// UTC-day key, identical derivation to RiskGateService (ISO date prefix) so the
+// resume clears the exact `risk_state` row the gate consults on evaluate.
+function utcDateString(now: Date): string {
+    return now.toISOString().slice(0, 10);
 }
