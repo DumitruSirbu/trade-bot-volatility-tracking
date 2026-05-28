@@ -35,6 +35,7 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 4. **Use `context7-mcp` before calling any third-party API** (per `~/.claude/CLAUDE.md`).
 5. **Shared types live in `packages/shared/`** — route changes through `bot-shared-maintainer`.
 6. Quality over speed. Smaller iterations even if there are more of them. Cycle review/fix until zero blockers, zero highs, majority of mediums resolved.
+7. **Branch naming (MUST):** every branch is `<type>/<branch-name>` — `feat/` (feature), `fix/` (bug fix), `hotfix/` (urgent prod fix), `chore/` (core/tooling/docs/deps). Lowercase kebab-case name. `main` is the only unprefixed branch. See `docs/runbooks/ci-gates.md` §0.
 
 ## Trading-safety invariants (non-negotiable)
 

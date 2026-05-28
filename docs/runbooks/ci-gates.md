@@ -9,6 +9,28 @@ provenance). Workflow: `.github/workflows/ci.yml`.
 
 ---
 
+## 0. Branch naming convention (MUST)
+
+Every branch **must** be prefixed by its change type, in the form
+`<type>/<branch-name>`. This is a hard rule — branches that do not follow it
+should not be opened as PRs.
+
+| Change type | Prefix | Example |
+|-------------|--------|---------|
+| New feature | `feat/` | `feat/vwap-flow-classifier` |
+| Bug fix | `fix/` | `fix/funding-sign-convention` |
+| Urgent production fix | `hotfix/` | `hotfix/kill-switch-latch` |
+| Chore / core / tooling / docs / deps | `chore/` | `chore/bump-ccxt` |
+
+- `<branch-name>` is short, lowercase, kebab-case, and describes the change.
+- `main` is the only unprefixed long-lived branch (it is protected — see §2).
+- The prefix is informational for humans and PR triage; the merge-blocking
+  controls remain the §1 status checks. (A future enhancement may add a
+  branch-name-validation CI step or a PR-title lint; until then this is enforced
+  by convention + review.)
+
+---
+
 ## 1. Required status checks (the job-name contract)
 
 Branch protection on `main` matches required checks **by job name**. The job
