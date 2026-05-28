@@ -25,7 +25,7 @@
  *      runSubmitStateMachine short-circuits to ABORTED without retry.
  */
 
-import { OrderIntentActionEnum, OrderPolicyEnum, PositionSideEnum, PositionSlotEnum, StrategyDirectionEnum } from '@bot/shared';
+import { OrderIntentActionEnum, OrderPolicyEnum, PositionSlotEnum, StrategyDirectionEnum } from '@bot/shared';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { QueryFailedError } from 'typeorm';
 
@@ -33,7 +33,7 @@ import { ORDER_AUDIT_PERSIST_FAILED_EVENT, ORDER_INTENT_EXPIRED_EVENT, ORDER_INT
 import { HaltFlagService } from '../../../src/common/service/HaltFlagService';
 import { Money, MoneyValue } from '../../../src/common/utils/money';
 import { AppConfigService } from '../../../src/config/service';
-import { BINANCE_REJECT_CLASSIFICATION, MAX_REDUCE_REMAINDER_ATTEMPTS } from '../../../src/execution/const';
+import { BINANCE_REJECT_CLASSIFICATION } from '../../../src/execution/const';
 import { SubmitStateEnum } from '../../../src/execution/enum';
 import { ClientOrderIdFactory } from '../../../src/execution/service/ClientOrderIdFactory';
 import { ExecutionService } from '../../../src/execution/service/ExecutionService';
@@ -43,10 +43,10 @@ import { LocalProtectiveMonitor } from '../../../src/execution/service/LocalProt
 import { OrderPolicyRouter } from '../../../src/execution/service/OrderPolicyRouter';
 import { ProtectiveOrderAttacher } from '../../../src/execution/service/ProtectiveOrderAttacher';
 import { TransactionRepository } from '../../../src/position/repository/TransactionRepository';
-import { RiskGateService } from '../../../src/risk/service/RiskGateService';
+
 import { StrategyVersionRepository } from '../../../src/strategy/repository/StrategyVersionRepository';
 import { buildOrderIntent, buildSizing } from '../../risk/support/fixtures';
-import { buildApprovedEvent, buildExchangeClientMock, buildExchangeSideAttachResult, buildOrderSnapshot, buildPositionEntityMock } from '../support/fixtures';
+import { buildApprovedEvent, buildExchangeSideAttachResult, buildOrderSnapshot, buildPositionEntityMock } from '../support/fixtures';
 
 jest.useFakeTimers();
 
@@ -603,8 +603,8 @@ describe('TransactionRepository — isUniqueViolation SQLSTATE-only check', () =
 
 describe('ExecutionService — applyAddToExistingPosition uses slot-scoped lookup', () => {
     it('ADD: when two slots hold the same symbol, findOpenBySymbolAndSlot returns the approved-slot row', async () => {
-        // BUILD: two position rows for BTCUSDT — one on slot A, one on slot B
-        const slotARow = {
+        // BUILD: two position rows for BTCUSDT — one on slot A (unused in this path), one on slot B
+        const _slotARow = {
             id: 10,
             symbol: 'BTCUSDT',
             positionSlot: PositionSlotEnum.A,

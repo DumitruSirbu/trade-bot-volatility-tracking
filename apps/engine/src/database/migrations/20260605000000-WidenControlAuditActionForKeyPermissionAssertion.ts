@@ -9,11 +9,10 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 // exemption) so a forensic reader can answer "did the bot ever boot without
 // this check."
 //
-// Pure constraint swap — no shape change. Reversible: DOWN restores the
-// LOGIN-widened constraint set. If any KEY_PERMISSION_* rows exist at the
-// time of a rollback the DOWN-migration will fail (the CHECK cannot
-// retroactively allow them); same forward-only convention as the M10 W0.5
-// LOGIN widening.
+// Pure constraint swap — no shape change. Reversible: DOWN deletes any
+// KEY_PERMISSION_* rows before restoring the narrowed constraint — rolling back
+// this migration means the schema no longer recognises those action types, so
+// their audit rows are invalid and must be purged.
 
 export class WidenControlAuditActionForKeyPermissionAssertion20260605000000 implements MigrationInterface {
     name = 'WidenControlAuditActionForKeyPermissionAssertion20260605000000';
@@ -27,6 +26,7 @@ export class WidenControlAuditActionForKeyPermissionAssertion20260605000000 impl
     }
 
     async down(queryRunner: QueryRunner): Promise<void> {
+        await queryRunner.query(`DELETE FROM "control_audit" WHERE "action" IN ('KEY_PERMISSION_ASSERTION_FAILED', 'KEY_PERMISSION_ASSERTION_SKIPPED')`);
         await queryRunner.query('ALTER TABLE "control_audit" DROP CONSTRAINT "ck_control_audit_action"');
         await queryRunner.query(
             'ALTER TABLE "control_audit" ADD CONSTRAINT "ck_control_audit_action" ' +

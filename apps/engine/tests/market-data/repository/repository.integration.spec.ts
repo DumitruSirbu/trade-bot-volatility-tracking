@@ -35,6 +35,14 @@ import { CoinTierEnum, StrategyStatusEnum } from '@bot/shared';
 const TEST_SYMBOL = 'TESTSTABLEUSDT';
 const OPEN_TIME = new Date('2026-05-22T10:00:00.000Z');
 
+// tick_aggregates is daily-RANGE-partitioned: the schema migration provisions a
+// forward-only window [today, today+lookahead], and the runtime partition service
+// extends it thereafter. A hardcoded past date lands outside any partition and
+// fails with "no partition of relation". Anchor tick timestamps to the start of
+// today (UTC) so the fixture always writes into a valid partition and never rots.
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const TODAY_START_MS = Math.floor(Date.now() / MS_PER_DAY) * MS_PER_DAY;
+
 describe('Repository integration tests (require Postgres with migrations run)', () => {
     let dataSource: DataSource;
 
@@ -189,7 +197,7 @@ describe('Repository integration tests (require Postgres with migrations run)', 
     // TickAggregateRepository — idempotency + precision + spike reconstruction
     // -------------------------------------------------------------------------
     describe('TickAggregateRepository.recordSample', () => {
-        const baseTs = new Date('2026-05-22T12:00:00.000Z');
+        const baseTs = new Date(TODAY_START_MS + 12 * 60 * 60 * 1000);
 
         it('inserts a tick sample', async () => {
             await tickAggRepo.recordSample({
@@ -225,7 +233,7 @@ describe('Repository integration tests (require Postgres with migrations run)', 
 
         it('NUMERIC close price survives DB round-trip with no float drift', async () => {
             const precisePrice = '29300.123456789012345678';
-            const precisionTs = new Date('2026-05-22T12:00:01.000Z');
+            const precisionTs = new Date(TODAY_START_MS + 12 * 60 * 60 * 1000 + 1000);
 
             await tickAggRepo.recordSample({
                 symbol: TEST_SYMBOL,
@@ -258,7 +266,7 @@ describe('Repository integration tests (require Postgres with migrations run)', 
             { offset: 4, price: '29320.0', volume: '6.0' },
         ];
 
-        const spikeBase = new Date('2026-05-22T13:00:00.000Z');
+        const spikeBase = new Date(TODAY_START_MS + 13 * 60 * 60 * 1000);
         const EXPECTED_HIGH = '29800.0';
         const EXPECTED_LOW = '28900.0';
 

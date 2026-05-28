@@ -99,7 +99,7 @@ describe('CompareCommand.aggregateOosCells — decimal summation (R1-H4)', () =>
         // this test we accept that the only public surface is the buildSummary indirection
         // and exercise the decimal path by constructing the report shape buildSummary
         // would feed in.
-        const buildSummary = (moduleUnderTest as unknown as { buildSummary?: Function }).buildSummary;
+        const buildSummary = (moduleUnderTest as unknown as { buildSummary?: (...args: unknown[]) => unknown }).buildSummary;
 
         // If buildSummary remains internal (current state), skip the precision check at
         // the integration boundary and instead document the contract with an inline

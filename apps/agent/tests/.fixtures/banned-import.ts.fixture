@@ -1,0 +1,10 @@
+// M13 W0 — ESLint boundary fixture (ADR 0035 §2.3 layer B).
+// This file intentionally imports from every banned package/path for
+// apps/agent/**. It is named .ts.fixture (not .ts) so it is NOT picked
+// up automatically by Jest or tsc.
+// The eslint.boundary.spec.ts test shells out to ESLint against this file
+// and asserts exit code 1 (rule violations found).
+import engine from '@bot/engine';
+import analysis from '@bot/analysis';
+import mcp from '@bot/mcp';
+export { engine, analysis, mcp };

@@ -11,7 +11,6 @@ import { IWalkForwardSplitPolicy } from '../../backtest/interface/IWalkForwardSp
 import { IPairwiseBootstrapResult } from '../../backtest/interface/IPairwiseBootstrapResult';
 import { MS_PER_DAY } from '../../common/const/timeConsts';
 import { Money, MoneyValue } from '../../common/utils/money';
-import { ComparisonReportEntity } from '../entity/ComparisonReportEntity';
 import { StrategyVersionEntity } from '../entity/StrategyVersionEntity';
 import { ArtefactPathOutsideRootException } from '../../promotion/exception';
 import { CompareCommandException } from '../exception/CompareCommandException';

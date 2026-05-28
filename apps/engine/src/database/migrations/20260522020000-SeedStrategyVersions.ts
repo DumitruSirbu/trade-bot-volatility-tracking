@@ -97,7 +97,41 @@ export class SeedStrategyVersions20260522020000 implements MigrationInterface {
     }
 
     async down(queryRunner: QueryRunner): Promise<void> {
-        // Delete by stable key (name, version) so the seed is fully reversible.
+        const seedVersions = SEED_VERSIONS.map((s) => s.version);
+
+        // decisions, positions, and agent_run_history all FK to strategy_versions
+        // with ON DELETE RESTRICT and must be removed before the seed rows can be
+        // deleted. Transactions cascade from positions. agent_run_history.draft_version_id
+        // is ON DELETE SET NULL so only parent_version_id rows need explicit removal.
+        await queryRunner.query(
+            `DELETE FROM "decisions" WHERE "strategy_version_id" IN (
+                SELECT "strategy_versions_id" FROM "strategy_versions"
+                WHERE "name" = $1 AND "version" = ANY($2)
+             )`,
+            [STRATEGY_NAME, seedVersions],
+        );
+        await queryRunner.query(
+            `DELETE FROM "positions" WHERE "strategy_version_id" IN (
+                SELECT "strategy_versions_id" FROM "strategy_versions"
+                WHERE "name" = $1 AND "version" = ANY($2)
+             )`,
+            [STRATEGY_NAME, seedVersions],
+        );
+        // agent_run_history is created by a later migration and will already be
+        // gone in a full sequential revert, so check existence before deleting.
+        const agentHistoryRows = (await queryRunner.query(
+            `SELECT EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = 'agent_run_history') AS exists`,
+        )) as { exists: boolean }[];
+        if (agentHistoryRows[0]!.exists) {
+            await queryRunner.query(
+                `DELETE FROM "agent_run_history" WHERE "parent_version_id" IN (
+                    SELECT "strategy_versions_id" FROM "strategy_versions"
+                    WHERE "name" = $1 AND "version" = ANY($2)
+                 )`,
+                [STRATEGY_NAME, seedVersions],
+            );
+        }
+
         for (const seed of SEED_VERSIONS) {
             await queryRunner.query('DELETE FROM "strategy_versions" WHERE "name" = $1 AND "version" = $2', [STRATEGY_NAME, seed.version]);
         }

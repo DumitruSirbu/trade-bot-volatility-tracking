@@ -34,7 +34,6 @@ import {
 } from '@bot/shared';
 
 import { Money } from '../../../common/utils/money';
-import { IIndicatorSnapshot } from '../../../market-data/interface';
 import { IApprovedRiskDecision, IRiskDecision } from '../../../risk/interface';
 import { ReservationLedger } from '../../../risk/service';
 import { IStrategy } from '../../../strategy/interface';
@@ -404,7 +403,6 @@ describe('BacktestOrchestrator.processEvent — ADD out of scope', () => {
     });
 
     it('does NOT skip when a different symbol has an open position', async () => {
-        const { orchestrator } = buildOrchestrator();
         const approved = buildApprovedDecision();
         const { orchestrator: orchApproved } = buildOrchestrator(approved);
 

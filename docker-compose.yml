@@ -118,6 +118,174 @@ services:
             retries: 3
             start_period: 10s
 
+    # M13 W1.B / live-smoke — MCP server (HTTP transport). ADR 0033 / 0034 /
+    # 0038. Long-running read-only JSON-RPC surface that the agent reaches
+    # over the compose network via service-DNS (`http://bot-mcp:5434/jsonrpc`).
+    #
+    # Port is INTERNAL ONLY (no `ports:` mapping). The compose private network
+    # is the protection boundary — host loopback is not. The HTTP transport
+    # therefore binds 0.0.0.0 inside the container (`MCP_HTTP_BIND_HOST`
+    # combined with `MCP_HTTP_ALLOW_NETWORK_BIND=1` opts-in past the default
+    # ADR 0038 §2.1 loopback assertion; the assertion still holds for every
+    # non-compose call site).
+    #
+    # Opt-in via the `agent` profile so a plain `docker compose up` of the
+    # engine never launches it.
+    bot-mcp:
+        profiles: [agent]
+        build:
+            context: .
+            dockerfile: apps/mcp/Dockerfile
+        image: trade-bot-mcp:local
+        container_name: trade-bot-mcp
+        restart: unless-stopped
+        init: true
+        # ADR 0033 / 0036 least-privilege: enumerate every env var explicitly so
+        # adding a new engine secret to .env never silently widens MCP's surface.
+        # MCP reads under the dedicated `mcp_reader` role (ADR 0034) — NEVER
+        # the engine writer role.
+        environment:
+            MCP_TRANSPORT: http
+            MCP_HTTP_PORT: '5434'
+            # Compose-network bind: the listener must accept connections from
+            # peer containers (bot-agent) which arrive over a non-loopback
+            # interface inside this container's net namespace. The opt-in flag
+            # is mandatory — without it the transport refuses to start.
+            MCP_HTTP_BIND_HOST: 0.0.0.0
+            MCP_HTTP_ALLOW_NETWORK_BIND: '1'
+            # Inside the network postgres resolves by service name on its
+            # in-container port 5432.
+            MCP_DB_HOST: postgres
+            MCP_DB_PORT: '5432'
+            MCP_DB_USER: ${MCP_DB_USER:-mcp_reader}
+            MCP_DB_PASSWORD: ${MCP_DB_PASSWORD}
+            MCP_DB_NAME: ${MCP_DB_NAME:-${DB_NAME}}
+            MCP_DB_SSL: ${MCP_DB_SSL:-}
+            MCP_ENGINE_CMD: ${MCP_ENGINE_CMD:-}
+            MCP_BOUNDARY_GUARD: ${MCP_BOUNDARY_GUARD:-}
+            # Bearer-token verification master secret. MCP derives the HS256
+            # verification key via HKDF-Expand(master, 'auth v1', 32B) —
+            # matching the engine's DerivedKeyService — so engine-minted
+            # bearers verify cleanly here.
+            AUTH_HMAC_SECRET: ${AUTH_HMAC_SECRET}
+            NODE_ENV: ${NODE_ENV:-production}
+            LOG_LEVEL: ${LOG_LEVEL:-info}
+            GIT_SHA: ${GIT_SHA:-}
+        depends_on:
+            postgres:
+                condition: service_healthy
+        # NOTE: no `ports:` block. The MCP transport is INTERNAL to the compose
+        # network. Operators that need host access must use `docker compose
+        # exec bot-mcp wget -qO- http://127.0.0.1:5434/healthz`.
+        healthcheck:
+            test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:5434/healthz >/dev/null 2>&1 || exit 1']
+            interval: 10s
+            timeout: 5s
+            retries: 6
+            start_period: 15s
+
+    # M13 W0.5 / W5.B — agent batch job. ADR 0035 (structural boundary): the
+    # agent is a separate workspace app that reaches MCP as a network client
+    # only and writes drafts via the agent_writer SDF. Opt-in via the `agent`
+    # profile so `docker compose up` of the engine never launches it.
+    #
+    # W5.B note: bot-agent itself is a one-shot batch job (`node dist/main.js`),
+    # but ofelia (the cron sidecar below) triggers it via `docker exec`, which
+    # requires the container to be running. We therefore PID1 `sleep infinity`
+    # here and let ofelia exec the agent process weekly. The lockfile inside
+    # main.ts (proper-lockfile @ /tmp/bot-agent.lock) makes overlapping execs
+    # safe — a contention exits 0 with `LOCK_HELD`.
+    #
+    # To run on-demand:
+    #   docker compose --profile agent up -d
+    #   docker compose --profile agent exec bot-agent node dist/main.js \
+    #       --week-iso 2026-W22 --parent-version-id <N> --dry-run
+    bot-agent:
+        profiles: [agent]
+        build:
+            context: .
+            dockerfile: apps/agent/Dockerfile
+        image: trade-bot-agent:local
+        container_name: trade-bot-agent
+        # Long-lived idle container so ofelia can `docker exec` into it.
+        # The actual batch job is launched by ofelia (see bot-agent-cron).
+        restart: unless-stopped
+        init: true
+        command: ['sleep', 'infinity']
+        # M13 W6 fix wave 4 (#2): ADR 0035 least-privilege. NEVER inject `.env`
+        # wholesale — the agent's process env must NOT contain BINANCE_*,
+        # AUTH_*, TELEGRAM_*, or any other engine-only secret. Each var is
+        # explicitly listed so adding a new engine secret to .env does not
+        # silently widen the agent's surface.
+        environment:
+            # Inside the network postgres resolves by service name. The agent
+            # connects under the dedicated `agent_writer` role (ADR 0036), not
+            # the engine's writer role — credentials sourced from AGENT_DB_*.
+            AGENT_DB_HOST: postgres
+            AGENT_DB_PORT: '5432'
+            AGENT_DB_USER: ${AGENT_DB_USER}
+            AGENT_DB_PASSWORD: ${AGENT_DB_PASSWORD}
+            AGENT_DB_NAME: ${AGENT_DB_NAME:-${DB_NAME}}
+            AGENT_MCP_URL: ${AGENT_MCP_URL}
+            AGENT_MCP_BEARER: ${AGENT_MCP_BEARER}
+            AI_GATEWAY_URL: ${AI_GATEWAY_URL}
+            AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY}
+            AI_GATEWAY_MAX_USD_PER_RUN: ${AI_GATEWAY_MAX_USD_PER_RUN:-2.00}
+            AGENT_WEEK_ISO: ${AGENT_WEEK_ISO:-}
+            AGENT_REPORT_DIR: ${AGENT_REPORT_DIR:-/app/reports}
+            AGENT_BOUNDARY_GUARD: ${AGENT_BOUNDARY_GUARD:-}
+            GIT_SHA: ${GIT_SHA:-}
+            NODE_ENV: ${NODE_ENV:-production}
+            LOG_LEVEL: ${LOG_LEVEL:-info}
+        depends_on:
+            postgres:
+                condition: service_healthy
+            # Wait for bot-mcp /healthz before letting ofelia exec the loop —
+            # the agent's MCP client otherwise races the server's first-bind.
+            bot-mcp:
+                condition: service_healthy
+        volumes:
+            # Weekly reports land here; host path is gitignored.
+            - ./reports/agent:/app/reports:rw
+        healthcheck:
+            # Confirm the keep-alive PID1 is still running.
+            test: ['CMD', 'pgrep', '-f', 'sleep']
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 5s
+        labels:
+            # Ofelia (bot-agent-cron) reads these labels to schedule the
+            # weekly outer-loop. 6-field cron — first field is seconds.
+            # Sun 00:00:00 UTC. no-overlap relies on the in-process lockfile
+            # too (defense in depth) so two firings can never both run.
+            ofelia.enabled: 'true'
+            ofelia.job-exec.weekly-agent.schedule: '0 0 0 * * 0'
+            ofelia.job-exec.weekly-agent.command: 'node dist/main.js'
+            ofelia.job-exec.weekly-agent.tty: 'false'
+            ofelia.job-exec.weekly-agent.no-overlap: 'true'
+
+    # M13 W5.B — cron sidecar. Reads labels off bot-agent and triggers the
+    # weekly outer-loop via `docker exec`. Sidecar pattern keeps system cron
+    # out of the host while remaining trivial to inspect (`docker logs
+    # trade-bot-agent-cron`). Docker socket is mounted read-only — ofelia
+    # only needs to inspect labels + create exec sessions, never to manage
+    # containers.
+    bot-agent-cron:
+        profiles: [agent]
+        image: mcuadros/ofelia:latest
+        container_name: trade-bot-agent-cron
+        restart: unless-stopped
+        command: daemon --docker
+        depends_on:
+            bot-agent:
+                # bot-agent's healthcheck is `pgrep sleep`, but ofelia only
+                # needs the container to exist when it tries to exec; service_started
+                # is sufficient and avoids ordering deadlocks on first boot.
+                condition: service_started
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+
     adminer:
         # R2 security M3 — adminer is a DB admin UI. Do not publish it on the
         # default stack. Opt-in via: `docker compose --profile dev up -d`.

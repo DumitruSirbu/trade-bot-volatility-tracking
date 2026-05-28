@@ -23,25 +23,21 @@ import { IKeyPermissionSnapshot } from '../interface/IKeyPermissionSnapshot.js';
 //   `ipRestrict` boolean confirms an IP whitelist is configured; the actual
 //   IP set must be verified out-of-band per operator runbook.)
 // - tradingAuthorityExpirationTime: non-null and future
-export function isKeyPermissionSnapshotAcceptable(
-	snapshot: IKeyPermissionSnapshot,
-	nowMs: number,
-	{ mode: _mode }: { mode: 'paper' | 'live' },
-): boolean {
-	return (
-		snapshot.enableReading === true &&
-		snapshot.enableFutures === true &&
-		snapshot.enableSpot === false &&
-		snapshot.enableWithdrawals === false &&
-		snapshot.enableInternalTransfer === false &&
-		snapshot.permitsUniversalTransfer === false &&
-		snapshot.enableMargin === false &&
-		snapshot.enableVanillaOptions === false &&
-		snapshot.enableSubAccountManagement === false &&
-		snapshot.ipRestrict === true &&
-		// Binance omits tradingAuthorityExpirationTime for sub-account keys
-		// (PAPER Fallback Profile). Accept null; reject only if a value is
-		// present AND in the past. Operator runbook covers expiry discipline.
-		(snapshot.tradingAuthorityExpirationTime === null || snapshot.tradingAuthorityExpirationTime > nowMs)
-	);
+export function isKeyPermissionSnapshotAcceptable(snapshot: IKeyPermissionSnapshot, nowMs: number, { mode: _mode }: { mode: 'paper' | 'live' }): boolean {
+    return (
+        snapshot.enableReading === true &&
+        snapshot.enableFutures === true &&
+        snapshot.enableSpot === false &&
+        snapshot.enableWithdrawals === false &&
+        snapshot.enableInternalTransfer === false &&
+        snapshot.permitsUniversalTransfer === false &&
+        snapshot.enableMargin === false &&
+        snapshot.enableVanillaOptions === false &&
+        snapshot.enableSubAccountManagement === false &&
+        snapshot.ipRestrict === true &&
+        // Binance omits tradingAuthorityExpirationTime for sub-account keys
+        // (PAPER Fallback Profile). Accept null; reject only if a value is
+        // present AND in the past. Operator runbook covers expiry discipline.
+        (snapshot.tradingAuthorityExpirationTime === null || snapshot.tradingAuthorityExpirationTime > nowMs)
+    );
 }

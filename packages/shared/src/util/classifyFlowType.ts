@@ -4,13 +4,13 @@ import { IVolatilityDetectedEvent } from '../interface/IVolatilityDetectedEvent.
 import { IStrategyParams } from '../schema/strategyParamsSchema.js';
 
 // Classification thresholds — deterministic, no magic numbers
-const OI_FALLING_THRESHOLD_PCT = -0.5;  // OI falling 0.5% or more
-const VOLUME_SPIKE_THRESHOLD = 2.0;  // volume_ratio >= 2.0 = clear spike
-const SPREAD_TIGHT_THRESHOLD_PCT = 0.03;  // spread <= 3bps = tight/passive
-const SYMBOL_UNIVERSE_AGE_NEW_THRESHOLD_HOURS = 48.0;  // symbol < 48h in top-300 = nascent
-const FUNDING_ELEVATED_THRESHOLD_ANNUALIZED = 0.05;  // 5% annualized funding = elevated
-const DEPTH_MIN_RATIO_TO_OI = 0.01;  // shallow depth: < 1% of open interest
-const NO_VOLUME_CONFIRMATION_RATIO = 1.2;  // weak volume spike threshold
+const OI_FALLING_THRESHOLD_PCT = -0.5; // OI falling 0.5% or more
+const VOLUME_SPIKE_THRESHOLD = 2.0; // volume_ratio >= 2.0 = clear spike
+const SPREAD_TIGHT_THRESHOLD_PCT = 0.03; // spread <= 3bps = tight/passive
+const SYMBOL_UNIVERSE_AGE_NEW_THRESHOLD_HOURS = 48.0; // symbol < 48h in top-300 = nascent
+const FUNDING_ELEVATED_THRESHOLD_ANNUALIZED = 0.05; // 5% annualized funding = elevated
+const DEPTH_MIN_RATIO_TO_OI = 0.01; // shallow depth: < 1% of open interest
+const NO_VOLUME_CONFIRMATION_RATIO = 1.2; // weak volume spike threshold
 
 /**
  * Classify flow type from market snapshot + params.
@@ -22,11 +22,7 @@ const NO_VOLUME_CONFIRMATION_RATIO = 1.2;  // weak volume spike threshold
  */
 export function classifyFlowType(event: IVolatilityDetectedEvent, params: IStrategyParams): FlowTypeEnum {
     // Trap guard: idiosyncratic + rising OI + rising volume = catalyst/informed flow, never fade
-    if (
-        event.idiosyncrasyScore >= params.idiosyncrasy_min_score &&
-        event.openInterestChange5mPct > 0 &&
-        event.volumeRatio >= params.volume_ratio_min
-    ) {
+    if (event.idiosyncrasyScore >= params.idiosyncrasy_min_score && event.openInterestChange5mPct > 0 && event.volumeRatio >= params.volume_ratio_min) {
         return FlowTypeEnum.CATALYST_RISK;
     }
 
@@ -51,10 +47,7 @@ export function classifyFlowType(event: IVolatilityDetectedEvent, params: IStrat
 
     // 3. Market stress: extreme breadth + same-bar pile-on (params-driven thresholds)
 
-    if (
-        event.marketBreadth5mUpPct > params.stress_breadth_pct &&
-        event.sameBarTriggerCount >= params.stress_same_bar_trigger_count
-    ) {
+    if (event.marketBreadth5mUpPct > params.stress_breadth_pct && event.sameBarTriggerCount >= params.stress_same_bar_trigger_count) {
         return FlowTypeEnum.MARKET_BETA;
     }
 
@@ -63,11 +56,7 @@ export function classifyFlowType(event: IVolatilityDetectedEvent, params: IStrat
     const openInterest = new Decimal(event.openInterest);
     const depthThreshold = openInterest.times(DEPTH_MIN_RATIO_TO_OI);
 
-    if (
-        event.bidAskSpreadPct <= SPREAD_TIGHT_THRESHOLD_PCT &&
-        bookDepth.lessThan(depthThreshold) &&
-        event.volumeRatio < NO_VOLUME_CONFIRMATION_RATIO
-    ) {
+    if (event.bidAskSpreadPct <= SPREAD_TIGHT_THRESHOLD_PCT && bookDepth.lessThan(depthThreshold) && event.volumeRatio < NO_VOLUME_CONFIRMATION_RATIO) {
         return FlowTypeEnum.LOW_QUALITY_NOISE;
     }
 

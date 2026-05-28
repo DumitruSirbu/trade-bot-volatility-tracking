@@ -9,6 +9,6 @@
  * (no HMAC derivation inside the core).
  */
 export interface IFillSeed {
-	readonly seedBytes: Buffer; // deterministic seed derived from event + order + version
-	readonly version: string; // seed version label (e.g. 'v1') for audit/debug
+    readonly seedBytes: Buffer; // deterministic seed derived from event + order + version
+    readonly version: string; // seed version label (e.g. 'v1') for audit/debug
 }

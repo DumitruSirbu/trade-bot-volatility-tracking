@@ -46,7 +46,6 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { Money } from '../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
-import { IExchangeClient } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { POSITION_STATE_TRANSITIONED_EVENT } from '../../src/position/const';
 import { PositionEntity, TransactionEntity } from '../../src/position/entity';

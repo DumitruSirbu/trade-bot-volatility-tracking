@@ -60,7 +60,7 @@ function buildPromoteOutcome(versionId: number, reportId: number): IPromotionGat
 }
 
 // Build a manager mock whose getOne returns the given entity for pessimistic_write queries.
-function buildManagerMock(candidate: StrategyVersionEntity, incumbent: StrategyVersionEntity | null, reportExists: boolean): any {
+function _buildManagerMock(candidate: StrategyVersionEntity, incumbent: StrategyVersionEntity | null, reportExists: boolean): any {
     return {
         createQueryBuilder: jest.fn().mockImplementation(() => ({
             setLock: jest.fn().mockReturnThis(),
@@ -153,7 +153,6 @@ describe('PromotionService — adversarial unit', () => {
             const activeVersion = buildVersion(400, StrategyStatusEnum.ACTIVE);
 
             const gate = { evaluate: jest.fn() } as unknown as PromotionGateService;
-            const dataSource = buildDataSource(activeVersion, null);
 
             // Override the transaction to return the active row directly.
             let callCount = 0;

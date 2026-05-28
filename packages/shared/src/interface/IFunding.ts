@@ -9,18 +9,18 @@
  * @cite IFundingPaymentSnapshot — the exchange boundary type
  */
 export interface IFunding {
-	/** Exchange transaction ID (if provided; used for deduplication). */
-	id: string | null;
+    /** Exchange transaction ID (if provided; used for deduplication). */
+    id: string | null;
 
-	/** Trading pair (e.g., 'BTCUSDT'). */
-	symbol: string;
+    /** Trading pair (e.g., 'BTCUSDT'). */
+    symbol: string;
 
-	/** 8-hour funding settlement boundary (epoch milliseconds). */
-	fundingTimeMs: number;
+    /** 8-hour funding settlement boundary (epoch milliseconds). */
+    fundingTimeMs: number;
 
-	/** Signed funding payment: positive = received, negative = paid. */
-	amount: string;
+    /** Signed funding payment: positive = received, negative = paid. */
+    amount: string;
 
-	/** Settlement asset code (e.g., 'USDT'). Informational. */
-	asset: string;
+    /** Settlement asset code (e.g., 'USDT'). Informational. */
+    asset: string;
 }

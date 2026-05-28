@@ -7,15 +7,15 @@
  * @cite M11a R2a.1b — shared DTO for IAccountStateSource port
  */
 export interface IBalance {
-	/** Asset code (e.g., 'USDT', 'BTC'). */
-	asset: string;
+    /** Asset code (e.g., 'USDT', 'BTC'). */
+    asset: string;
 
-	/** Free balance available for trading. */
-	free: string;
+    /** Free balance available for trading. */
+    free: string;
 
-	/** Balance locked in open orders or positions. */
-	used: string;
+    /** Balance locked in open orders or positions. */
+    used: string;
 
-	/** Total balance (free + used). */
-	total: string;
+    /** Total balance (free + used). */
+    total: string;
 }

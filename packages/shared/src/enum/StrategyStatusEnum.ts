@@ -1,5 +1,5 @@
 export enum StrategyStatusEnum {
-	DRAFT = 'draft',
-	ACTIVE = 'active',
-	ARCHIVED = 'archived',
+    DRAFT = 'draft',
+    ACTIVE = 'active',
+    ARCHIVED = 'archived',
 }

@@ -15,6 +15,7 @@ const SOURCE_LABEL: Record<HaltSourceEnum, string> = {
     [HaltSourceEnum.DAILY_LOSS]: 'Risk: daily loss cap',
     [HaltSourceEnum.WEEKLY_LOSS]: 'Risk: weekly loss cap',
     [HaltSourceEnum.RECOVERY]: 'Recovery',
+    [HaltSourceEnum.RATE_LIMIT]: 'Risk: rate limit',
     [HaltSourceEnum.OTHER]: 'Other',
 };
 

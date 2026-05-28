@@ -4,13 +4,17 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 
 import { AppModule } from '../../app.module';
-import { AuthTokenService, RevokedJtiRepository } from '../AuthModule';
+import { AUTH_TOKEN_DEFAULT_AUDIENCE, AuthTokenService, RevokedJtiRepository } from '../AuthModule';
 import { AUTH_TOKEN_DEFAULT_TTL_SEC, AUTH_TOKEN_MAX_TTL_SEC } from '../const/authConsts';
 
-// M9 W2 (ADR 0020 §2.1, §2.2).
+// M9 W2 (ADR 0020 §2.1, §2.2). M13 fix wave 7 added `--aud`.
 //
-// `pnpm engine auth issue --sub <id> --scope read,halt[,admin] --ttl 15m`
+// `pnpm engine auth issue --sub <id> --scope read,halt[,admin] --ttl 15m [--aud mcp]`
 // `pnpm engine auth revoke --jti <id> [--reason "<text>"]`
+//
+// `--aud` defaults to `'engine'` for backward compatibility with M9-minted
+// tokens. Mint MCP-targeted tokens with `--aud mcp` so the MCP bearer verifier
+// accepts them.
 //
 // Standalone Nest application context, mirroring `StrategyCli.ts` so the same
 // DI graph the live engine uses provides AuthTokenService + RevokedJtiRepository.
@@ -34,6 +38,7 @@ export interface IIssueArgs {
     sub: string;
     scopes: AuthScopeEnum[];
     ttlSec: number;
+    aud: string;
 }
 
 export interface IRevokeArgs {
@@ -77,7 +82,16 @@ export function parseIssueArgs(argv: ReadonlyArray<string>): IIssueArgs {
         throw new Error(`--ttl must be in (0, ${AUTH_TOKEN_MAX_TTL_SEC}] seconds`);
     }
 
-    return { sub, scopes: parsedScopes, ttlSec };
+    // M13 fix wave 7 — optional audience flag; defaults to AUTH_TOKEN_DEFAULT_AUDIENCE.
+    const audRaw = flags.aud;
+
+    if (audRaw !== undefined && audRaw.length === 0) {
+        throw new Error('--aud requires a non-empty value');
+    }
+
+    const aud = audRaw ?? AUTH_TOKEN_DEFAULT_AUDIENCE;
+
+    return { sub, scopes: parsedScopes, ttlSec, aud };
 }
 
 export function parseRevokeArgs(argv: ReadonlyArray<string>): IRevokeArgs {
@@ -184,11 +198,18 @@ async function main(argv: ReadonlyArray<string>): Promise<number> {
     try {
         if (subcommand === SUBCOMMAND_ISSUE) {
             const tokens = app.get(AuthTokenService);
-            const issued = tokens.issue({ ...(parsed as IIssueArgs), now: new Date() });
+            const issueArgs = parsed as IIssueArgs;
+            const issued = tokens.issue({
+                sub: issueArgs.sub,
+                scopes: issueArgs.scopes,
+                ttlSec: issueArgs.ttlSec,
+                aud: issueArgs.aud,
+                now: new Date(),
+            });
 
             // Stdout is the token — operator-facing. Logger goes to pino.
             console.log(issued.token);
-            logger.log(`issued token jti=${issued.jti} sub=${(parsed as IIssueArgs).sub} exp=${issued.exp}`);
+            logger.log(`issued token jti=${issued.jti} sub=${issueArgs.sub} aud=${issueArgs.aud} exp=${issued.exp}`);
 
             return AUTH_CLI_EXIT_OK;
         }

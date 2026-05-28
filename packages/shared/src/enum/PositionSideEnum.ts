@@ -1,4 +1,4 @@
 export enum PositionSideEnum {
-	SHORT = 'short',
-	LONG = 'long',
+    SHORT = 'short',
+    LONG = 'long',
 }

@@ -19,10 +19,10 @@
 
 import { StrategyDirectionEnum, StrategyStatusEnum } from '@bot/shared';
 import { promises as fs } from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
 
+import { BACKTEST_ARTEFACT_ROOT } from '../../src/backtest/const/backtestConsts';
 import { ComparisonReportEntity, StrategyVersionEntity } from '../../src/strategy/entity';
 import { ConcurrentPromotionConflictException } from '../../src/promotion/exception/ConcurrentPromotionConflictException';
 import { PromotionGateService } from '../../src/promotion/service/PromotionGateService';
@@ -87,8 +87,13 @@ describe('PromotionService (integration — requires Postgres)', () => {
     // the W6 R1-B1 paranoid double-check (PromotionService.requireReportPromotesVersion)
     // sees a real artefact and the correct decision per candidate.
     async function createReport(versionIds: number[], decision: 'promote' | 'reject' | 'inconclusive', labelSuffix: string): Promise<number> {
+        // PromotionService validates that the artefact resolves inside
+        // BACKTEST_ARTEFACT_ROOT (path-traversal defense). That root is frozen
+        // at module-load from env, so the artefact must be written under it
+        // rather than os.tmpdir().
         const filename = `promotion-service-int-${labelSuffix}-${Date.now()}.json`;
-        const artefactPath = path.join(os.tmpdir(), filename);
+        await fs.mkdir(BACKTEST_ARTEFACT_ROOT, { recursive: true });
+        const artefactPath = path.join(BACKTEST_ARTEFACT_ROOT, filename);
         artefactPaths.push(artefactPath);
 
         const promotionDecisions: Array<[number, { decision: 'promote' | 'reject' | 'inconclusive' }]> = versionIds.map((id) => [id, { decision }]);

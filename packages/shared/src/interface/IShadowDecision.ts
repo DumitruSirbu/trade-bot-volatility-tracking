@@ -5,11 +5,11 @@ import { ISimulatedFill } from './ISimulatedFill.js';
 import { IVirtualLedgerSnapshot } from './IVirtualLedgerSnapshot.js';
 
 export interface IShadowDecision {
-	readonly id: string; // uuid
-	readonly createdAt: string; // ISO timestamp
-	readonly eventId: string; // references the event that triggered this decision
-	readonly shadowVersion: string; // discriminator: 'v0', 'v2', 'v3'
-	readonly virtualSlotStateSnapshot: IVirtualLedgerSnapshot; // ledger state at gate-evaluation time
-	readonly simulatedFill: ISimulatedFill | null; // null if gate rejected or strategy skipped
-	// Additional fields may be present (decision details, gate outcome) — these are the minimum for W0.5.
+    readonly id: string; // uuid
+    readonly createdAt: string; // ISO timestamp
+    readonly eventId: string; // references the event that triggered this decision
+    readonly shadowVersion: string; // discriminator: 'v0', 'v2', 'v3'
+    readonly virtualSlotStateSnapshot: IVirtualLedgerSnapshot; // ledger state at gate-evaluation time
+    readonly simulatedFill: ISimulatedFill | null; // null if gate rejected or strategy skipped
+    // Additional fields may be present (decision details, gate outcome) — these are the minimum for W0.5.
 }

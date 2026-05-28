@@ -3,11 +3,11 @@
 // for abort-threshold logic and by M4 reconciliation abort triggers.
 // Has the same envelope as other drift-detected events.
 export interface IExchangeNotInDbDriftEvent {
-	readonly positionId: null; // EXCHANGE_NOT_IN_DB positions have no local DB entry
-	readonly symbol: string;
-	readonly side: string; // PositionSideEnum value; kept as string to avoid circular import
-	readonly driftCase: 'exchange_not_in_db';
-	readonly dbQty: null; // No DB qty for new exchange position
-	readonly exchangeQty: string; // decimal quantity on exchange
-	readonly detectedAtMs: number;
+    readonly positionId: null; // EXCHANGE_NOT_IN_DB positions have no local DB entry
+    readonly symbol: string;
+    readonly side: string; // PositionSideEnum value; kept as string to avoid circular import
+    readonly driftCase: 'exchange_not_in_db';
+    readonly dbQty: null; // No DB qty for new exchange position
+    readonly exchangeQty: string; // decimal quantity on exchange
+    readonly detectedAtMs: number;
 }

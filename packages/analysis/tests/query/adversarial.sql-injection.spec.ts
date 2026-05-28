@@ -61,9 +61,7 @@ describe('getDecisions SQL-injection defence', () => {
         it(`rejects ${label} before querying DB`, async () => {
             const ds = rejectingDataSource(`getDecisions:${label}`);
 
-            await expect(
-                getDecisions(ds as never, { symbol: value, from: VALID_FROM, to: VALID_TO }),
-            ).rejects.toBeInstanceOf(AnalysisValidationError);
+            await expect(getDecisions(ds as never, { symbol: value, from: VALID_FROM, to: VALID_TO })).rejects.toBeInstanceOf(AnalysisValidationError);
 
             expect(ds.query).not.toHaveBeenCalled();
         });
@@ -79,9 +77,7 @@ describe('listPositions SQL-injection defence (symbol param)', () => {
         it(`rejects ${label} before querying DB`, async () => {
             const ds = rejectingDataSource(`listPositions:${label}`);
 
-            await expect(
-                listPositions(ds as never, { symbol: value, from: VALID_FROM, to: VALID_TO }),
-            ).rejects.toBeInstanceOf(AnalysisValidationError);
+            await expect(listPositions(ds as never, { symbol: value, from: VALID_FROM, to: VALID_TO })).rejects.toBeInstanceOf(AnalysisValidationError);
 
             expect(ds.query).not.toHaveBeenCalled();
         });
@@ -101,22 +97,20 @@ describe('getPerformance SQL-injection defence (versionId param)', () => {
         { label: 'Infinity', value: Infinity },
         { label: 'float 1.5', value: 1.5 },
         // NOTE: 1.1e308 is excluded here — it is recognized as integer by
-    // Number.isInteger() in JS (all large enough floats become integers due
-    // to floating-point precision). This is a known quirk; the versionId
-    // guard relies on Number.isInteger() and Number.isFinite() which pass
-    // for 1.1e308. ESCALATION: the production code should add an explicit
-    // upper bound (e.g. versionId <= Number.MAX_SAFE_INTEGER) to reject
-    // astronomically large values that could overflow a 32-bit DB column.
-    // Tracked as a bug finding in M12 W5 QA report.
+        // Number.isInteger() in JS (all large enough floats become integers due
+        // to floating-point precision). This is a known quirk; the versionId
+        // guard relies on Number.isInteger() and Number.isFinite() which pass
+        // for 1.1e308. ESCALATION: the production code should add an explicit
+        // upper bound (e.g. versionId <= Number.MAX_SAFE_INTEGER) to reject
+        // astronomically large values that could overflow a 32-bit DB column.
+        // Tracked as a bug finding in M12 W5 QA report.
     ];
 
     for (const { label, value } of BAD_VERSION_IDS) {
         it(`rejects ${label} before querying DB`, async () => {
             const ds = rejectingDataSource(`getPerformance:${label}`);
 
-            await expect(
-                getPerformance(ds as never, { versionId: value, from: VALID_FROM, to: VALID_TO }),
-            ).rejects.toBeInstanceOf(AnalysisValidationError);
+            await expect(getPerformance(ds as never, { versionId: value, from: VALID_FROM, to: VALID_TO })).rejects.toBeInstanceOf(AnalysisValidationError);
 
             expect(ds.query).not.toHaveBeenCalled();
         });
@@ -132,9 +126,9 @@ describe('compareVersions SQL-injection defence (versionId params)', () => {
     it('rejects equal versionIds before querying DB', async () => {
         const ds = rejectingDataSource('compareVersions:equal-ids');
 
-        await expect(
-            compareVersions(ds as never, { aVersionId: 5, bVersionId: 5, from: VALID_FROM, to: VALID_TO }),
-        ).rejects.toBeInstanceOf(AnalysisValidationError);
+        await expect(compareVersions(ds as never, { aVersionId: 5, bVersionId: 5, from: VALID_FROM, to: VALID_TO })).rejects.toBeInstanceOf(
+            AnalysisValidationError,
+        );
 
         expect(ds.query).not.toHaveBeenCalled();
     });
@@ -142,9 +136,9 @@ describe('compareVersions SQL-injection defence (versionId params)', () => {
     it('rejects zero aVersionId before querying DB', async () => {
         const ds = rejectingDataSource('compareVersions:zero-a');
 
-        await expect(
-            compareVersions(ds as never, { aVersionId: 0, bVersionId: 1, from: VALID_FROM, to: VALID_TO }),
-        ).rejects.toBeInstanceOf(AnalysisValidationError);
+        await expect(compareVersions(ds as never, { aVersionId: 0, bVersionId: 1, from: VALID_FROM, to: VALID_TO })).rejects.toBeInstanceOf(
+            AnalysisValidationError,
+        );
 
         expect(ds.query).not.toHaveBeenCalled();
     });
@@ -152,9 +146,9 @@ describe('compareVersions SQL-injection defence (versionId params)', () => {
     it('rejects negative bVersionId before querying DB', async () => {
         const ds = rejectingDataSource('compareVersions:neg-b');
 
-        await expect(
-            compareVersions(ds as never, { aVersionId: 1, bVersionId: -3, from: VALID_FROM, to: VALID_TO }),
-        ).rejects.toBeInstanceOf(AnalysisValidationError);
+        await expect(compareVersions(ds as never, { aVersionId: 1, bVersionId: -3, from: VALID_FROM, to: VALID_TO })).rejects.toBeInstanceOf(
+            AnalysisValidationError,
+        );
 
         expect(ds.query).not.toHaveBeenCalled();
     });

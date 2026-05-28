@@ -71,7 +71,7 @@ import { PaperAccountStateEntity } from '../entity/PaperAccountStateEntity';
 import { PaperAccountStateHistoryEntity } from '../entity/PaperAccountStateHistoryEntity';
 import { PaperAccountStateMetaEntity } from '../entity/PaperAccountStateMetaEntity';
 import { PaperStateAuditEntity } from '../entity/PaperStateAuditEntity';
-import { MutationKindEnum, PaperCloseReasonEnum, SubjectKindEnum } from '../enum';
+import { SubjectKindEnum } from '../enum';
 import { PAPER_MARK_TO_MARKET_EVENT, IPaperMarkToMarketEvent } from '../service/PaperAccountStateService';
 import { PaperAccountSnapshotRepository } from '../repository/PaperAccountSnapshotRepository';
 import { PaperAccountStateHistoryRepository } from '../repository/PaperAccountStateHistoryRepository';

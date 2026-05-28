@@ -3,24 +3,15 @@ import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
 import { AuthGuard, RequiredScopes } from '../../src/auth/AuthGuard';
-import { AuthTokenService, EnvAuthSecretProvider, IAuthSecretProvider, IRevokedJtiRepositoryPort } from '../../src/auth/AuthModule';
+import { AuthTokenService, EnvAuthSecretProvider, IRevokedJtiRepositoryPort } from '../../src/auth/AuthModule';
 import { AuthCorsInterceptor } from '../../src/auth/AuthCorsInterceptor';
 import { AUTH_CORS_ALLOWLIST_ENV } from '../../src/auth/const/authConsts';
 import { AppConfigService } from '../../src/config/service';
-import { NodeEnvEnum } from '../../src/config/enum';
 
 // M9 W2 — adversarial coverage for the auth guard, token service, dev-secret
 // boot-fail, and the CORS preflight middleware. Paired test-per-fix-item per
 // dev-qa-cycle §4.2. No Postgres: the revoked-jti port and the secret
 // provider are stubbed so each scenario stays a pure unit test.
-
-class StubSecretProvider implements IAuthSecretProvider {
-    constructor(private readonly secret: Buffer = Buffer.alloc(32, 0x42)) {}
-
-    getSigningSecret(): Buffer {
-        return this.secret;
-    }
-}
 
 // M11a W1.7 — AuthTokenService now consumes IDerivedKeyService.getAuthKey().
 // Stub directly returns the test secret as the auth sub-key so tests do not

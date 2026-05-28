@@ -28,7 +28,7 @@ import { join, resolve } from 'node:path';
 // __dirname = apps/mcp/tests/boundary
 // 4 levels up: apps/mcp/tests/boundary → apps/mcp/tests → apps/mcp → apps → repo root
 const REPO_ROOT = resolve(__dirname, '../../../..');
-const MCP_SRC = resolve(__dirname, '../../src');   // apps/mcp/src (all non-test source)
+const MCP_SRC = resolve(__dirname, '../../src'); // apps/mcp/src (all non-test source)
 const ANALYSIS_SRC = resolve(REPO_ROOT, 'packages/analysis/src');
 
 // ---------------------------------------------------------------------------
@@ -58,12 +58,7 @@ function collectSourceFiles(dir: string): string[] {
 
             if (entry.isDirectory()) {
                 walk(fullPath);
-            } else if (
-                entry.isFile() &&
-                name.endsWith('.ts') &&
-                !name.endsWith('.spec.ts') &&
-                !name.endsWith('.test.ts')
-            ) {
+            } else if (entry.isFile() && name.endsWith('.ts') && !name.endsWith('.spec.ts') && !name.endsWith('.test.ts')) {
                 results.push(fullPath);
             }
         }

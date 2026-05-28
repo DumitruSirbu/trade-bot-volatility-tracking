@@ -21,6 +21,7 @@ export { ILoginRequest, ILoginResponse } from './IAuthLogin.js';
 export { IRateLimitFailure } from './IRateLimitFailure.js';
 export { IApiError } from './IApiError.js';
 export { IKillSwitchState } from './IKillSwitchState.js';
+export { IHaltStateView } from './IHaltStateView.js';
 export { IHaltAuditEntry } from './IHaltAuditEntry.js';
 export { IHaltChangedEvent } from './IHaltChangedEvent.js';
 export { IRiskHaltEvent } from './IRiskHaltEvent.js';
@@ -42,12 +43,12 @@ export { ILiveModeProfile } from './ILiveModeProfile.js';
 export { ISimulatedFill } from './ISimulatedFill.js';
 export { IVirtualLedgerSnapshot, IVirtualOpenPosition, IVirtualClosedTradeLogEntry } from './IVirtualLedgerSnapshot.js';
 export {
-	IVirtualPositionLedger,
-	IVirtualGateInput,
-	IVirtualGateOutcome,
-	IVirtualOpenInput,
-	IVirtualCloseInput,
-	IVirtualMutationResult,
+    IVirtualPositionLedger,
+    IVirtualGateInput,
+    IVirtualGateOutcome,
+    IVirtualOpenInput,
+    IVirtualCloseInput,
+    IVirtualMutationResult,
 } from './IVirtualPositionLedger.js';
 export { IShadowDecision } from './IShadowDecision.js';
 export { IOrder } from './IOrder.js';

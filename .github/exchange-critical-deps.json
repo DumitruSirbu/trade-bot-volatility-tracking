@@ -1,0 +1,5 @@
+[
+    { "name": "ccxt", "version": "4.5.54" },
+    { "name": "decimal.js", "version": "10.6.0" },
+    { "name": "pg", "version": "8.21.0" }
+]

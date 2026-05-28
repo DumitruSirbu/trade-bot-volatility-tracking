@@ -207,13 +207,26 @@ describe('KeyPermissionAssertionService — adversarial', () => {
     // ── W1.2: tradingAuthorityExpirationTime=-1 sentinel ────────────────────
 
     describe('tradingAuthorityExpirationTime edge cases', () => {
-        it('null expiration time (ADR 0028 §2.2 -1 mapped to null) fails the predicate', async () => {
-            // BUILD — the mapper converts -1 to null before handing to the service
-            const badSnapshot = buildAcceptableSnapshot({ tradingAuthorityExpirationTime: null });
-            const { service } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
+        it('null expiration time PASSES the predicate (M11a live-smoke locked: Binance omits it for sub-account keys)', async () => {
+            // BUILD — the M11a post-R4 live-smoke fix loosened the predicate:
+            // Binance's /sapi/v1/account/apiRestrictions omits
+            // tradingAuthorityExpirationTime for sub-account keys (no UI to set,
+            // no API to expose), so null is the only physically-possible value
+            // for the PAPER Fallback Profile sub-account key. The predicate now
+            // only rejects a NON-null expiry that is in the past (see
+            // isKeyPermissionSnapshotAcceptable + computeFailingClauses). A null
+            // expiry must therefore PASS.
+            const snapshot = buildAcceptableSnapshot({ tradingAuthorityExpirationTime: null });
+            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.PAPER, snapshot);
 
-            // OPERATE + CHECK
-            await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
+            // OPERATE
+            await service.runAssertion(Date.now());
+
+            // CHECK — no FAILED audit row written
+            const failedCalls = (auditRepo.appendKeyPermissionAudit as jest.Mock).mock.calls.filter(
+                ([params]: [{ action: HaltAuditActionEnum }]) => params.action === HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_FAILED,
+            );
+            expect(failedCalls).toHaveLength(0);
         });
 
         it('past expiration time fails the predicate', async () => {
@@ -237,16 +250,28 @@ describe('KeyPermissionAssertionService — adversarial', () => {
         });
     });
 
-    // ── W1.2: ipAllowList empty ──────────────────────────────────────────────
+    // ── M11a live-smoke locked: ipRestrict (not ipAllowList content) gates ───
 
-    describe('ipAllowList empty — fails predicate', () => {
-        it('calls process.exit(1) when ipAllowList is empty', async () => {
-            // BUILD
-            const badSnapshot = buildAcceptableSnapshot({ ipAllowList: [] });
-            const { service } = buildMocks(ExchangeEnvironmentEnum.PAPER, badSnapshot);
+    describe('ipAllowList content is not the gate — ipRestrict is', () => {
+        it('empty ipAllowList with ipRestrict=true PASSES (Binance discontinued the self-read endpoint; runbook verifies the set)', async () => {
+            // BUILD — Binance discontinued /sapi/v1/account/apiRestrictions/
+            // ipRestriction in 2021, so the engine cannot self-read the
+            // allow-list contents. The predicate gates on the ipRestrict boolean
+            // (an IP whitelist IS configured); the operator runbook verifies the
+            // actual entries via the Binance UI. An empty ipAllowList array is
+            // therefore expected and must NOT fail the predicate as long as
+            // ipRestrict is true.
+            const snapshot = buildAcceptableSnapshot({ ipAllowList: [], ipRestrict: true });
+            const { service, auditRepo } = buildMocks(ExchangeEnvironmentEnum.PAPER, snapshot);
 
-            // OPERATE + CHECK
-            await expect(service.runAssertion(Date.now())).rejects.toThrow('process.exit');
+            // OPERATE
+            await service.runAssertion(Date.now());
+
+            // CHECK — no FAILED audit row written
+            const failedCalls = (auditRepo.appendKeyPermissionAudit as jest.Mock).mock.calls.filter(
+                ([params]: [{ action: HaltAuditActionEnum }]) => params.action === HaltAuditActionEnum.KEY_PERMISSION_ASSERTION_FAILED,
+            );
+            expect(failedCalls).toHaveLength(0);
         });
     });
 

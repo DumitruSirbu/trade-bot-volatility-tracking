@@ -52,7 +52,7 @@ class StubOrmRepository {
     }
 }
 
-class StubCursorCodec {
+class _StubCursorCodec {
     encode(_: unknown): string {
         return 'encoded-cursor';
     }
