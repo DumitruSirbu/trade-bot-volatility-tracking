@@ -52,3 +52,54 @@ export const ACTIVE_POSITIONS_COUNT_DRY_RUN = 0;
 // (skips use the SkipReasonEnum value instead). Queryable in M8 alongside skip reasons.
 export const REASON_MEAN_REVERSION_FADE = 'mean_reversion_exhaustion_fade';
 export const REASON_MOMENTUM_FOLLOW = 'momentum_follow';
+
+// --- M11a W0.6.1 — VirtualPositionLedgerService (ADR 0029 §2.1) ---
+
+// Consecutive-loss threshold the virtual ledger uses to arm its own
+// `haltedUntilRiskDayUtcDate` flag at the moment the streak is observed.
+// Mirrors the M11a §W4.1 restricted profile (`halt_after_consecutive_losses: 2`).
+// `VirtualPositionLedgerService.evaluateGates` independently honours the
+// per-call `haltAfterConsecutiveLosses` from `IVirtualGateInput` so a future
+// profile change is a caller-side update; this constant is the ledger's own
+// internal arming threshold for the durable halt flag.
+export const VIRTUAL_LEDGER_CONSECUTIVE_LOSS_HALT_THRESHOLD = 2;
+
+// --- M11a W2 — ShadowStrategyOrchestratorService (ADR 0029 §2.2) ---
+
+// Discriminator prefix for the `shadow_decisions.shadow_version` text column.
+// Combined with `StrategyVersionEntity.version` to produce values like 'v0',
+// 'v2', 'v3'. The discriminator is purely shadow-row metadata — the registry
+// keys on `(name, version)`, not this string.
+export const SHADOW_VERSION_DISCRIMINATOR_PREFIX = 'v';
+
+// Restricted-profile gates the shadow orchestrator presents to every shadow
+// version's `evaluateGates` (mirrors live restricted profile, ADR 0029 §2.1).
+// Held here rather than in the ledger so a future profile change is a single-
+// site config update; the ledger itself is profile-agnostic.
+export const SHADOW_GATE_MAX_OPEN_POSITIONS = 1;
+export const SHADOW_GATE_MAX_TRADES_PER_DAY = 3;
+export const SHADOW_GATE_HALT_AFTER_CONSECUTIVE_LOSSES = 2;
+export const SHADOW_GATE_REQUIRE_EXHAUSTION_CONFIRMATION = true;
+export const SHADOW_GATE_SKIP_MARKET_STRESS = true;
+export const SHADOW_GATE_MARGIN_MODE: 'isolated' | 'cross' = 'isolated';
+
+// Latency floor (ms) the shadow path passes to HistoricalFillAdapter. Mirrors
+// the M8 compare CLI value (`DEFAULT_LATENCY_MS = 100`) — shadow is the closest
+// kin to a same-tape replay, not the M7 historical 250ms latency.
+export const SHADOW_FILL_LATENCY_MS = 100;
+
+// Order policy used for the simulated entry. Shadow versions never reach the
+// live OrderPolicyRouter (no risk gate context, no flow-type-aware fee matrix
+// for v0/v2/v3 hybrids on this path), so we fix on the marketable-limit IOC
+// policy v1 uses for the bulk of its live opens — the conservative choice for
+// like-for-like cost accounting (ADR 0029 §2.3).
+export const SHADOW_FILL_DEFAULT_POLICY = 'marketable_limit_ioc';
+
+// Binance USDT-M Futures default taker fee (non-VIP retail): 4 bps = 0.04%.
+// Mirrors the canonical rate inside the shared fillSimulatorCore (ADR 0015 §6).
+// Used by the shadow-close PnL calculation to charge the same per-leg fee the
+// live path pays so v1-realised and shadow-simulated PnL series remain
+// dimensionally comparable for the ADR 0018 paired bootstrap.
+// Held as a decimal-as-string per the project's money-is-Decimal invariant —
+// callers wrap in `new Decimal(SHADOW_TAKER_FEE_PCT)` for arithmetic.
+export const SHADOW_TAKER_FEE_PCT = '0.0004';

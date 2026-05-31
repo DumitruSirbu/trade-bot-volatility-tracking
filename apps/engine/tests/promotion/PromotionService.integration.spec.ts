@@ -2,7 +2,7 @@
  * PromotionService — integration test (M8 W6, ADR 0016 §2.2).
  *
  * Requires live Postgres. Start with:
- *   DB_PORT=5433 docker compose up -d postgres
+ *   docker compose --profile test up -d --wait postgres-test
  *
  * Coverage:
  *   - promote() in a serializable TX archives the prior active row and flips

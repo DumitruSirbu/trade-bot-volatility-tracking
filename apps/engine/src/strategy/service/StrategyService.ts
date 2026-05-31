@@ -38,6 +38,7 @@ import { IOpenPositionState, IProposedExit, ISignal, IStrategy } from '../interf
 import { DecisionRepository } from '../repository/DecisionRepository';
 import { StrategyVersionRepository } from '../repository/StrategyVersionRepository';
 import { StrategyRegistry } from '../registry';
+import { ShadowStrategyOrchestratorService } from './ShadowStrategyOrchestratorService';
 
 // A buffered correlated OPEN candidate awaiting same-bar single-candidate selection (ADR
 // 0004 §4). Correlated opens are NOT gated immediately; they queue per bar window and the
@@ -86,6 +87,7 @@ export class StrategyService implements OnModuleInit {
         private readonly openPositionsPort: OpenPositionsPortAdapter,
         private readonly instrumentPort: InstrumentPortAdapter,
         private readonly universe: UniverseMembershipRepository,
+        private readonly shadowOrchestrator: ShadowStrategyOrchestratorService,
     ) {}
 
     async onModuleInit(): Promise<void> {
@@ -119,6 +121,17 @@ export class StrategyService implements OnModuleInit {
         const signal = this.activeStrategy.evaluate({ event: stampedEvent, snapshot, openPosition, params: this.activeParams, nowMs });
 
         await this.route(stampedEvent, snapshot, signal, openPosition, nowMs);
+
+        // M11a W2 (ADR 0029 §2.2). Shadow orchestration runs AFTER the active
+        // path has finished and is strictly additive — TRUE fire-and-forget.
+        // Awaiting would add N×DB round-trips of latency to the live event
+        // handler; `runShadows` already contains per-shadow failures via its
+        // internal try/catch, so a shadow error cannot cascade into the live
+        // path. W5c FIX 2: attach a `.catch()` rather than `void` so any
+        // OUTER-level rejection (synchronous throw before the per-shadow loop,
+        // or a future addition above the loop) is logged rather than silently
+        // becoming an `unhandledRejection`.
+        this.shadowOrchestrator.runShadows(stampedEvent, nowMs).catch((cause) => this.logger.error({ cause }, 'Shadow batch failed unexpectedly'));
     }
 
     // Routes the strategy outcome (ADR 0004 §1/§4). A non-open signal is recorded as-is. An

@@ -5,11 +5,8 @@
  * Requires a live Postgres instance with all migrations applied, including
  * `20260620000001-CreateAgentRunHistory.ts`.
  *
- * Start Postgres with:
- *   DB_PORT=5433 docker compose up -d postgres
- *
- * Run all migrations:
- *   pnpm --filter @bot/engine migration:run
+ * Start the dedicated test Postgres (globalSetup applies migrations automatically):
+ *   docker compose --profile test up -d --wait postgres-test
  *
  * The agent_writer password must match the sentinel (only valid for test):
  *   psql -c "ALTER ROLE agent_writer PASSWORD 'CHANGE_ME_BEFORE_PROD';"
@@ -26,26 +23,17 @@
 
 import { Client } from 'pg';
 
+import { buildRoleDbUrl, getTestDbUrl } from '../support/testDataSource';
+
 // ---------------------------------------------------------------------------
 // Connection config
 // ---------------------------------------------------------------------------
 
-const ENGINE_DB_URL = process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
+const ENGINE_DB_URL = getTestDbUrl();
 
 const AGENT_WRITER_PASSWORD = process.env['AGENT_WRITER_PASSWORD'] ?? 'CHANGE_ME_BEFORE_PROD';
 
-function buildAgentWriterUrl(engineUrl: string, password: string): string {
-    try {
-        const url = new URL(engineUrl);
-        url.username = 'agent_writer';
-        url.password = encodeURIComponent(password);
-        return url.toString();
-    } catch {
-        return `postgresql://agent_writer:${encodeURIComponent(password)}@localhost:5433/trade_bot`;
-    }
-}
-
-const AGENT_WRITER_URL = buildAgentWriterUrl(ENGINE_DB_URL, AGENT_WRITER_PASSWORD);
+const AGENT_WRITER_URL = buildRoleDbUrl('agent_writer', AGENT_WRITER_PASSWORD);
 
 // ---------------------------------------------------------------------------
 // PG error codes
@@ -153,7 +141,7 @@ describe('agent_run_history table — structure + privilege (ADR 0036)', () => {
             suiteSkipped = true;
             console.warn(
                 '[SKIPPED] agent-run-history.integration: no live Postgres reachable.\n' +
-                    'Start Postgres with `DB_PORT=5433 docker compose up -d postgres` and run migrations.',
+                    'Start the test DB with `docker compose --profile test up -d --wait postgres-test` and run migrations.',
             );
             return;
         }

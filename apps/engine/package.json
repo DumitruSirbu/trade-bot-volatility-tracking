@@ -11,6 +11,7 @@
         "start:prod": "node dist/main.js",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",
+        "pretest": "[ \"$CI\" = \"true\" ] || docker compose --profile test up -d --wait postgres-test",
         "test": "jest",
         "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
         "strategy": "ts-node -r tsconfig-paths/register src/strategy/cli/StrategyCli.ts",

@@ -33,7 +33,7 @@ import { StrategyVersionRepository } from '../../src/strategy/repository/Strateg
 import { PositionRepository } from '../../src/position/repository/PositionRepository';
 import { UniverseMembershipRepository } from '../../src/market-data/repository/UniverseMembershipRepository';
 import { StrategyRegistry } from '../../src/strategy/registry';
-import { StrategyService } from '../../src/strategy/service';
+import { ShadowStrategyOrchestratorService, StrategyService } from '../../src/strategy/service';
 import { InstrumentPortAdapter, OpenPositionsPortAdapter, PositionSizer, RiskGateService, RiskStatePortAdapter } from '../../src/risk/service';
 import { V0BaselineStrategy, V1MeanReversionStrategy, V2MomentumStrategy, V3HybridRouterStrategy } from '../../src/strategy/strategies';
 import { buildEvent, buildParams } from './support/fixtures';
@@ -167,6 +167,13 @@ async function buildModule(deps: IModuleDeps): Promise<{ module: TestingModule; 
             {
                 provide: UniverseMembershipRepository,
                 useValue: { findOpenMembership: jest.fn().mockResolvedValue({ symbol: 'BTCUSDT' }) },
+            },
+            // M11a W2: shadow orchestration is stubbed in this integration suite —
+            // the active-path assertions are unaffected, and the dedicated
+            // ShadowStrategyOrchestratorService.spec covers its own behaviour.
+            {
+                provide: ShadowStrategyOrchestratorService,
+                useValue: { runShadows: jest.fn().mockResolvedValue(undefined) },
             },
         ],
     }).compile();

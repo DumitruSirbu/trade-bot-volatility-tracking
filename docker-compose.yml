@@ -2,6 +2,11 @@
 # All services share the default compose network so the dashboard's nginx can
 # resolve `engine`, and the engine can resolve `postgres`.
 # Credentials come from the root `.env` (see `.env.example`) — never inline here.
+#
+# The `test` profile brings up the ephemeral, tmpfs-backed `postgres-test`
+# container on host port 6900 (NEVER the soak DB on 5433). The engine test
+# suite targets it via TEST_DATABASE_URL — see `.env.test.example`.
+#   docker compose --profile test up -d --wait postgres-test
 
 services:
     postgres:
@@ -24,6 +29,34 @@ services:
             timeout: 5s
             retries: 5
             start_period: 10s
+
+    # M16 W1 — Ephemeral test DB on host port 6900. tmpfs-backed (no named
+    # volume, no on-disk persistence) so it can never accumulate or expose the
+    # soak DB's calibration data. Opt-in via the `test` profile so a plain
+    # `docker compose up` never launches it. The engine test suite targets this
+    # container via TEST_DATABASE_URL; a globalSetup guard hard-fails any spec
+    # that tries to reach the soak DB on 5433. Credentials are test-only and
+    # MUST NOT reuse soak/prod creds. Shares the default compose network (the
+    # other services do too) — no `networks:` block needed.
+    postgres-test:
+        image: postgres:18.4-alpine
+        container_name: trade-bot-postgres-test
+        profiles: [test]
+        ports:
+            - '${TEST_DB_PORT:-6900}:5432'
+        tmpfs:
+            - /var/lib/postgresql/data
+        environment:
+            POSTGRES_USER: ${TEST_DB_USER:-trade_bot_test}
+            POSTGRES_PASSWORD: ${TEST_DB_PASSWORD:-test_only_change_me}
+            POSTGRES_DB: ${TEST_DB_NAME:-trade_bot_test}
+        volumes:
+            - ./docker/postgres-test-init.d:/docker-entrypoint-initdb.d:ro
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U ${TEST_DB_USER:-trade_bot_test} -d ${TEST_DB_NAME:-trade_bot_test}']
+            interval: 5s
+            timeout: 5s
+            retries: 10
 
     # R3 A — One-shot migration runner. Reuses the engine image, runs the
     # typeorm CLI against the compiled JS DataSource (dist/database/dataSource.js),
@@ -228,8 +261,9 @@ services:
             AGENT_DB_NAME: ${AGENT_DB_NAME:-${DB_NAME}}
             AGENT_MCP_URL: ${AGENT_MCP_URL}
             AGENT_MCP_BEARER: ${AGENT_MCP_BEARER}
-            AI_GATEWAY_URL: ${AI_GATEWAY_URL}
-            AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY}
+            ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+            AI_GATEWAY_URL: ${AI_GATEWAY_URL:-}
+            AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
             AI_GATEWAY_MAX_USD_PER_RUN: ${AI_GATEWAY_MAX_USD_PER_RUN:-2.00}
             AGENT_WEEK_ISO: ${AGENT_WEEK_ISO:-}
             AGENT_REPORT_DIR: ${AGENT_REPORT_DIR:-/app/reports}

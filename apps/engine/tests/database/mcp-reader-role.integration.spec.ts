@@ -4,11 +4,8 @@
  * Requires a live Postgres instance with the `mcp_reader` role created by
  * migration `20260619000000-CreateMcpReaderRole.ts`.
  *
- * Start Postgres with:
- *   DB_PORT=5433 docker compose up -d postgres
- *
- * Then run migrations to create the mcp_reader role:
- *   pnpm --filter @bot/engine migration:run
+ * Start the dedicated test Postgres (globalSetup applies migrations automatically):
+ *   docker compose --profile test up -d --wait postgres-test
  *
  * The mcp_reader password must be set (default sentinel is
  * 'mcp_reader_change_me_at_deploy' — only usable for test, never for prod):
@@ -33,29 +30,17 @@
 
 import { Client } from 'pg';
 
-// ---------------------------------------------------------------------------
-// Connection config — adapts to CI env vars or the documented local defaults.
-// ---------------------------------------------------------------------------
+import { buildRoleDbUrl } from '../support/testDataSource';
 
-const ENGINE_DB_URL = process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
+// ---------------------------------------------------------------------------
+// Connection config — the dedicated port-6900 test container (TEST_DATABASE_URL).
+// ---------------------------------------------------------------------------
 
 // The mcp_reader role is provisioned by the migration with a sentinel password.
 // In the test environment the password must match.
 const MCP_DB_PASSWORD = process.env['MCP_DB_PASSWORD'] ?? 'mcp_reader_change_me_at_deploy';
 
-function buildMcpReaderUrl(engineUrl: string, password: string): string {
-    try {
-        const url = new URL(engineUrl);
-        url.username = 'mcp_reader';
-        url.password = encodeURIComponent(password);
-        return url.toString();
-    } catch {
-        // Fallback for non-URL strings like "host=... dbname=..." style.
-        return `postgresql://mcp_reader:${encodeURIComponent(password)}@localhost:5433/trade_bot`;
-    }
-}
-
-const MCP_DB_URL = buildMcpReaderUrl(ENGINE_DB_URL, MCP_DB_PASSWORD);
+const MCP_DB_URL = buildRoleDbUrl('mcp_reader', MCP_DB_PASSWORD);
 
 // ---------------------------------------------------------------------------
 // PG error code constants (from Postgres documentation).
@@ -98,7 +83,7 @@ describe('mcp_reader role — permission enforcement (ADR 0034 §5)', () => {
             suiteSkipped = true;
             console.warn(
                 '[SKIPPED] mcp-reader-role.integration: no live Postgres reachable at the expected URL.\n' +
-                    'To run this suite: start Postgres with `DB_PORT=5433 docker compose up -d postgres`,\n' +
+                    'To run this suite: start the test DB with `docker compose --profile test up -d --wait postgres-test`,\n' +
                     'run migrations, and ensure the mcp_reader role exists with the sentinel password.\n' +
                     'The spec file remains in place for reviewer inspection.',
             );

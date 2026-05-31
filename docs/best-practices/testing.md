@@ -28,3 +28,48 @@
 ## Coverage targets
 
 Pragmatic, not numeric — every business rule and risk invariant has at least one test that breaks if the rule changes. No naked happy paths.
+
+## Test DB (port 6900)
+
+The engine test suite runs against a **dedicated, ephemeral Postgres container** on host port `6900` — never the soak DB on `5433`.
+
+### Setup
+
+```sh
+# Copy the test-DB env template (gitignored after copy)
+cp .env.test.example .env.test
+
+# Start the test container (auto-started by `pretest` when running locally)
+docker compose --profile test up -d --wait postgres-test
+```
+
+`pnpm --filter @bot/engine test` triggers a `pretest` hook that starts the container. In CI the container is provided as a service.
+
+### Three DSNs
+
+| Variable | Database | Used by |
+|---|---|---|
+| `DATABASE_URL` | `trade_bot` | Module-load / validateEnv specs |
+| `TEST_DATABASE_URL` | `trade_bot_test` | Integration + role specs |
+| `MIGRATION_TEST_DB_URL` | `trade_bot_migration_test` | Destructive round-trip specs |
+
+All three databases live in the same `postgres-test` container on port 6900.
+
+### Guard
+
+`globalSetup` calls `assertTestDb()` before any spec runs. It aborts if:
+- `TEST_DATABASE_URL` is unset
+- The resolved port is not `6900`
+- `TEST_DATABASE_URL === DATABASE_URL`
+
+A misconfigured DSN aborts the run before a single `DELETE` or migration executes.
+
+### Auto-migration
+
+`globalSetup` calls `getTestDataSource()` which runs all migrations against `trade_bot_test` once. Role specs connect via raw `pg.Client` and find the schema ready regardless of execution order.
+
+**`pnpm --filter @bot/engine test` now requires Docker** (the `pretest` hook starts the test container). Pure unit suites still require Docker to be available (the hook runs before Jest selects which tests to execute).
+
+### Static tripwire
+
+`tests/ci/noSoakDbLiteral.spec.ts` fails if any `:5433` URL literal or `DB_PORT=5433` instruction reappears in test files (with an allowlist for `validateEnv.spec.ts`, `assertTestDb.spec.ts`, and itself).

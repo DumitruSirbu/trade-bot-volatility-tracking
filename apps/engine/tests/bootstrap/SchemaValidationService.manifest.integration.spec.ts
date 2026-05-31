@@ -12,8 +12,8 @@
  * `transactions.symbol` (no such column), and `risk_state.updated_at`
  * (no such column). Each of those would have been caught here.
  *
- * DB: the project's compose Postgres — start with:
- *   DB_PORT=5433 docker compose up -d postgres
+ * DB: the dedicated test Postgres — start with:
+ *   docker compose --profile test up -d --wait postgres-test
  *
  * Isolation: introspects information_schema only; never writes. Uses its
  * own DataSource and assumes migrations have already been applied (the
@@ -25,8 +25,9 @@ import { DataSource } from 'typeorm';
 
 import { REQUIRED_SCHEMA_MANIFEST } from '../../src/bootstrap/SchemaValidationService';
 import { buildDataSourceOptions } from '../../src/database/dataSourceOptions';
+import { getTestDbUrl } from '../support/testDataSource';
 
-const TEST_DB_URL = process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
+const TEST_DB_URL = getTestDbUrl();
 
 interface IColumnRow {
     table_name: string;

@@ -185,19 +185,41 @@ pnpm --filter @bot/engine run auth revoke --jti <jti>
 
 ## Running Tests
 
-Unit + integration tests (uses in-memory SQLite or Docker Postgres):
+### One-time test DB setup
+
+Engine integration tests run against a dedicated ephemeral Postgres on port **6900** — never the soak DB on 5433. Before running tests for the first time:
+
+```bash
+# 1. Create your test env file (gitignored)
+cp .env.test.example .env.test
+
+# 2. Open .env.test and set a password — must match in all three places:
+#    TEST_DB_PASSWORD=your_password
+#    TEST_DATABASE_URL=postgresql://trade_bot_test:your_password@localhost:6900/trade_bot_test
+#    MIGRATION_TEST_DB_URL=postgresql://trade_bot_test:your_password@localhost:6900/trade_bot_migration_test
+```
+
+The test container starts automatically when you run engine tests (`pretest` hook). You can also start it manually:
+
+```bash
+docker compose --profile test up -d --wait postgres-test
+```
+
+### Running tests
+
+All workspaces:
 
 ```bash
 pnpm test
 ```
 
-Engine tests only:
+Engine only (auto-starts the test DB container):
 
 ```bash
 pnpm --filter @bot/engine test
 ```
 
-Shared package tests:
+Shared package:
 
 ```bash
 pnpm --filter @bot/shared test

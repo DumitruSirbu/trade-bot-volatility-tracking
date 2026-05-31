@@ -2,7 +2,7 @@
  * ComparisonReportRepository + partial unique index — integration test (M8 W2).
  *
  * Requires live Postgres. Start with:
- *   DB_PORT=5433 docker compose up -d postgres
+ *   docker compose --profile test up -d --wait postgres-test
  *
  * Coverage:
  *   - createReport persists run_label, from_ms, to_ms, split_policy, folds,
@@ -21,8 +21,9 @@ import { DataSource, Repository } from 'typeorm';
 import { ComparisonReportEntity, StrategyVersionEntity } from '../../src/strategy/entity';
 import { ComparisonReportRepository } from '../../src/strategy/repository/ComparisonReportRepository';
 import { buildDataSourceOptions } from '../../src/database/dataSourceOptions';
+import { getTestDbUrl } from '../support/testDataSource';
 
-const TEST_DB_URL = process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
+const TEST_DB_URL = getTestDbUrl();
 
 const UNIQUE_NAME_PREFIX = 'test_promotion_audit_';
 

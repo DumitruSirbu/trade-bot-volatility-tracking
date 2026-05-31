@@ -17,4 +17,6 @@ export interface ISimulatedFill {
     readonly lowFidelity: boolean; // mirrors M7 IBacktestReport
     readonly closedAt: string | null; // ISO timestamp of simulated close
     readonly closeReason: 'sl' | 'tp' | 'force_close' | 'intra_bar_stop' | null;
+    readonly feeUsdtEntry?: string | null; // Entry-leg taker fee in USDT (decimal string). Null until depth-aware fill simulator populates it.
+    readonly feeUsdtExit?: string | null; // Exit-leg taker fee in USDT (decimal string). Null until the close-side simulator is wired.
 }
