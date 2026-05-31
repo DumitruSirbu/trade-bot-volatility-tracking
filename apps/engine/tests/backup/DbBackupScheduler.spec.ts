@@ -959,11 +959,11 @@ describe('misconfig guard (review M2/N2)', () => {
     });
 
     it('does not guard when NODE_ENV is not "test" but DSN uses a non-test port', async () => {
-        // BUILD — production env with a soak port (5433 ≠ 6900) → no guard
+        // BUILD — production env with the soak port (5432 ≠ 6900) → no guard
         setupSuccessfulRun([EXPECTED_FILENAME]);
         const appConfig = buildAppConfig({
             nodeEnv: 'production',
-            databaseUrl: 'postgresql://bot:secret@localhost:5433/trade_bot',
+            databaseUrl: 'postgresql://bot:secret@localhost:5432/trade_bot',
         });
         const scheduler = buildScheduler(buildAlerts(), buildClock(), appConfig);
 
