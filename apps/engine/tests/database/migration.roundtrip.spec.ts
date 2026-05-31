@@ -160,18 +160,23 @@ describe('Migration round-trip (integration — requires Postgres)', () => {
         expect(rows.length).toBe(1);
     });
 
-    it('strategy_versions seed rows (v0–v3) exist after SeedStrategyVersions migration', async () => {
+    it('strategy_versions rows (v0–v3) have correct statuses after all migrations', async () => {
         const rows = (await dataSource.query(`SELECT version, direction, status FROM strategy_versions WHERE name = 'volatility-vwap' ORDER BY version`)) as {
             version: number;
             direction: string;
             status: string;
         }[];
 
+        // After all migrations the corrective migration chain produces:
+        //   v0 (id=1): 'shadow'  — demoted by CorrectActiveStrategyStatus
+        //   v1 (id=2): 'active'  — ensured by EnsureActiveStrategyVersion
+        //   v2 (id=3): 'shadow'  — promoted by PromoteShadowStrategyVersions
+        //   v3 (id=4): 'shadow'  — promoted by PromoteShadowStrategyVersions
         expect(rows).toHaveLength(4);
-        expect(rows[0]).toMatchObject({ version: 0, direction: 'mean_reversion', status: 'active' });
-        expect(rows[1]).toMatchObject({ version: 1, direction: 'mean_reversion', status: 'draft' });
-        expect(rows[2]).toMatchObject({ version: 2, direction: 'momentum', status: 'draft' });
-        expect(rows[3]).toMatchObject({ version: 3, direction: 'hybrid', status: 'draft' });
+        expect(rows[0]).toMatchObject({ version: 0, direction: 'mean_reversion', status: 'shadow' });
+        expect(rows[1]).toMatchObject({ version: 1, direction: 'mean_reversion', status: 'active' });
+        expect(rows[2]).toMatchObject({ version: 2, direction: 'momentum', status: 'shadow' });
+        expect(rows[3]).toMatchObject({ version: 3, direction: 'hybrid', status: 'shadow' });
     });
 
     it('v0 seed row has trade_enabled: false in params', async () => {

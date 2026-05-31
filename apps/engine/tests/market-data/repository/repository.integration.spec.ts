@@ -498,22 +498,27 @@ describe('Repository integration tests (require Postgres with migrations run)', 
             }
         });
 
-        it('v0 is the only active seeded version (v1–v3 are draft)', async () => {
+        it('v1 is the only active version after all migrations (v0=shadow, v2–v3=shadow)', async () => {
+            // After EnsureActiveStrategyVersion20260622000000 the configured live
+            // strategy (id=2, version=1) holds status='active'; v0 was demoted to
+            // 'shadow' by CorrectActiveStrategyStatus, and v2–v3 were promoted to
+            // 'shadow' by PromoteShadowStrategyVersions.
             const active = await strategyVersionRepo.findActive();
             const activeVersionNumbers = active.map((v) => v.version);
 
-            expect(activeVersionNumbers).toContain(0);
-            expect(activeVersionNumbers).not.toContain(1);
+            expect(activeVersionNumbers).toContain(1);
+            expect(activeVersionNumbers).not.toContain(0);
             expect(activeVersionNumbers).not.toContain(2);
             expect(activeVersionNumbers).not.toContain(3);
         });
 
-        it('findByNameAndVersion returns the v0 row with correct direction', async () => {
+        it('findByNameAndVersion returns the v0 row with correct direction and shadow status', async () => {
+            // v0 is demoted to shadow by CorrectActiveStrategyStatus migration.
             const v0 = await strategyVersionRepo.findByNameAndVersion('volatility-vwap', 0);
 
             expect(v0).not.toBeNull();
             expect(v0!.direction).toBe('mean_reversion');
-            expect(v0!.status).toBe(StrategyStatusEnum.ACTIVE);
+            expect(v0!.status).toBe(StrategyStatusEnum.SHADOW);
         });
 
         it('v0 params have trade_enabled set to false', async () => {

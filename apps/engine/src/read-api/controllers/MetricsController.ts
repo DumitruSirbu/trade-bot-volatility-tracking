@@ -81,7 +81,7 @@ export class MetricsController {
         // than drifting hour-by-hour with wall-clock. Two requests in the same
         // UTC day return the same `since` boundary, which keeps cached metric
         // panels and back-to-back operator refreshes coherent.
-        const todayUtcMidnight = new Date();
+        const todayUtcMidnight = new Date(Date.now()); // Date.now() so tests can mock wall-clock
         todayUtcMidnight.setUTCHours(0, 0, 0, 0);
         const since = new Date(todayUtcMidnight.getTime() - windowDays * MS_PER_DAY);
 

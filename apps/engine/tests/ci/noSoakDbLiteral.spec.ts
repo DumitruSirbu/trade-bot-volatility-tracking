@@ -30,7 +30,11 @@ describe('no-5433 soak-DB tripwire', () => {
     it('has no DB_PORT=5433 instructions in test files', () => {
         const result = execSync(`grep -rn 'DB_PORT=5433' "${testsDir}" --include="*.ts" || true`).toString();
 
-        const matches = result.split('\n').filter((line) => line.trim() !== '');
+        const matches = result
+            .split('\n')
+            .filter((line) => line.trim() !== '')
+            // This file contains the grep pattern string itself — exclude it.
+            .filter((line) => !line.includes('noSoakDbLiteral.spec.ts'));
 
         if (matches.length > 0) {
             throw new Error('Found stale DB_PORT=5433 instructions in test files:\n' + matches.join('\n'));

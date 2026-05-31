@@ -1,0 +1,7 @@
+{
+    "extends": "../tsconfig.typecheck.json",
+    "compilerOptions": {
+        "types": ["node", "jest"]
+    },
+    "include": ["./**/*.ts"]
+}

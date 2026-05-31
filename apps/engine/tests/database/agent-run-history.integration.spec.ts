@@ -107,7 +107,7 @@ async function callWriteSdf<T extends { [k: string]: unknown }>(client: Client, 
     }
 }
 
-/** Returns the strategy_versions_id for the v0 active seed row. */
+/** Returns the strategy_versions_id for the active strategy version (v1, id=2 after all migrations). */
 async function fetchActiveParentVersionId(adminClient: Client): Promise<number> {
     const rows = await adminClient.query<{ strategy_versions_id: number }>(
         `SELECT strategy_versions_id FROM strategy_versions

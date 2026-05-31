@@ -234,11 +234,30 @@ export class CreateAgentWriterRoleAndSdf20260620000000 implements MigrationInter
         await queryRunner.query(`ALTER ROLE "agent_writer" RESET lock_timeout`);
         await queryRunner.query(`ALTER ROLE "agent_writer" RESET idle_in_transaction_session_timeout`);
 
+        // DROP OWNED BY cleans all objects and privilege grants owned by or
+        // granted to agent_writer in the CURRENT database. DROP ROLE is then
+        // attempted. In integration-test environments, the same PostgreSQL
+        // cluster hosts multiple databases (e.g., trade_bot_test alongside
+        // trade_bot_migration_test), and globalSetup may have already applied
+        // these migrations to the other database — leaving agent_writer with
+        // grants there. PostgreSQL refuses DROP ROLE while any cross-database
+        // dependency exists; we catch that specific error so the revert of
+        // THIS database's schema completes cleanly. In production there is
+        // only one application database, so the EXCEPTION branch is never taken.
         await queryRunner.query(`
             DO $$
             BEGIN
                 IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agent_writer') THEN
-                    DROP ROLE "agent_writer";
+                    DROP OWNED BY "agent_writer";
+                    BEGIN
+                        DROP ROLE "agent_writer";
+                    EXCEPTION WHEN dependent_objects_still_exist THEN
+                        -- Role still has grants in another database in this cluster.
+                        -- Its privileges in the current database are fully revoked;
+                        -- the role shell will be removed when the other database's
+                        -- migrations are also reverted.
+                        NULL;
+                    END;
                 END IF;
             END
             $$;
