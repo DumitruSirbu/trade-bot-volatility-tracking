@@ -32,10 +32,7 @@ import { buildDataSourceOptions } from '../../src/database/dataSourceOptions';
 
 const TEST_DB_URL = process.env['MIGRATION_TEST_DB_URL'];
 if (!TEST_DB_URL) {
-    throw new Error(
-        'MIGRATION_TEST_DB_URL is not set — cannot run destructive round-trip. ' +
-            'Run: docker compose --profile test up -d --wait postgres-test',
-    );
+    throw new Error('MIGRATION_TEST_DB_URL is not set — cannot run destructive round-trip. ' + 'Run: docker compose --profile test up -d --wait postgres-test');
 }
 
 // Indexes created by CreateSchema that down() MUST drop.

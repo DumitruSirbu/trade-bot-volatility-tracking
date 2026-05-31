@@ -47,16 +47,11 @@ import { DecisionsFeed } from './DecisionsFeed';
 
 // Inline re-specification of toServerFilter — tested as a pure function spec
 // and then verified via component integration tests.
-const toServerFilter = (selected: string[]): string | undefined =>
-    selected.length === 1 ? selected[0] : undefined;
+const toServerFilter = (selected: string[]): string | undefined => (selected.length === 1 ? selected[0] : undefined);
 
 // Inline re-specification of applyClientFilter — same contract as the
 // implementation; integration tests for the component cover the wiring.
-const applyClientFilter = (
-    rows: IDecisionView[],
-    selectedActions: string[],
-    selectedSymbols: string[],
-): IDecisionView[] => {
+const applyClientFilter = (rows: IDecisionView[], selectedActions: string[], selectedSymbols: string[]): IDecisionView[] => {
     const actionSet = new Set(selectedActions);
     const symbolSet = new Set(selectedSymbols);
 
@@ -155,11 +150,7 @@ describe('applyClientFilter — pure function contract', () => {
     });
 
     it('applies both filters simultaneously when both sets have ≥ 2 entries', () => {
-        const result = applyClientFilter(
-            [btcSkip, ethOpen, solAdd],
-            ['skip', 'open'],
-            ['BTCUSDT', 'ETHUSDT'],
-        );
+        const result = applyClientFilter([btcSkip, ethOpen, solAdd], ['skip', 'open'], ['BTCUSDT', 'ETHUSDT']);
         // btcSkip: action=skip (in set), symbol=BTCUSDT (in set) → pass
         // ethOpen: action=open (in set), symbol=ETHUSDT (in set) → pass
         // solAdd:  action=add (NOT in set) → excluded
@@ -370,10 +361,7 @@ describe('DecisionsFeed — filter changes reset to page 1', () => {
     it('changing the Symbol filter resets cursor stack so page shows 1', async () => {
         // First render with a page of BTCUSDT data so Symbol options populate.
         mockQueryResult = {
-            data: paginatedPage(
-                [makeDecision({ symbol: 'BTCUSDT' }), makeDecision({ symbol: 'ETHUSDT' })],
-                'cursor-page2',
-            ),
+            data: paginatedPage([makeDecision({ symbol: 'BTCUSDT' }), makeDecision({ symbol: 'ETHUSDT' })], 'cursor-page2'),
             isLoading: false,
             isError: false,
             error: null,

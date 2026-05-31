@@ -13,20 +13,12 @@ export class CorrectActiveStrategyStatus20260531000000 implements MigrationInter
         // v0 (id=1) becomes shadow so it is included in shadow comparison;
         // constraint uq_strategy_versions_active_per_name requires clearing
         // the active slot before promoting v1.
-        await queryRunner.query(
-            `UPDATE "strategy_versions" SET "status" = 'shadow' WHERE "strategy_versions_id" = 1 AND "status" = 'active'`,
-        );
-        await queryRunner.query(
-            `UPDATE "strategy_versions" SET "status" = 'active' WHERE "strategy_versions_id" = 2 AND "status" = 'shadow'`,
-        );
+        await queryRunner.query(`UPDATE "strategy_versions" SET "status" = 'shadow' WHERE "strategy_versions_id" = 1 AND "status" = 'active'`);
+        await queryRunner.query(`UPDATE "strategy_versions" SET "status" = 'active' WHERE "strategy_versions_id" = 2 AND "status" = 'shadow'`);
     }
 
     async down(queryRunner: QueryRunner): Promise<void> {
-        await queryRunner.query(
-            `UPDATE "strategy_versions" SET "status" = 'shadow' WHERE "strategy_versions_id" = 2 AND "status" = 'active'`,
-        );
-        await queryRunner.query(
-            `UPDATE "strategy_versions" SET "status" = 'active' WHERE "strategy_versions_id" = 1 AND "status" = 'shadow'`,
-        );
+        await queryRunner.query(`UPDATE "strategy_versions" SET "status" = 'shadow' WHERE "strategy_versions_id" = 2 AND "status" = 'active'`);
+        await queryRunner.query(`UPDATE "strategy_versions" SET "status" = 'active' WHERE "strategy_versions_id" = 1 AND "status" = 'shadow'`);
     }
 }

@@ -5,7 +5,6 @@ jest.mock('pg');
 const MockedClient = Client as jest.MockedClass<typeof Client>;
 
 const VALID_TEST_URL = 'postgres://testuser:testpass@localhost:6900/trade_bot_test';
-const SOAK_URL = 'postgres://bot:secret@localhost:5432/trade_bot';
 
 describe('assertTestDb', () => {
     let originalTestUrl: string | undefined;
@@ -70,7 +69,7 @@ describe('assertTestDb', () => {
         });
 
         it('throws when TEST_DATABASE_URL equals DATABASE_URL', async () => {
-            // The port check fires before the equality check when SOAK_URL uses port 5432.
+            // The port check fires before the equality check when the soak URL uses port 5432.
             // Use a 6900 URL for both to isolate the equality guard.
             const sharedUrl = 'postgres://testuser:testpass@localhost:6900/trade_bot';
             process.env['TEST_DATABASE_URL'] = sharedUrl;

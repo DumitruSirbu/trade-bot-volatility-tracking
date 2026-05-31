@@ -18,7 +18,11 @@ import { Tooltip } from './tooltip';
 // ---------------------------------------------------------------------------
 
 function renderTooltip(content = 'Tip text', childLabel = 'Hover me'): ReturnType<typeof render> {
-    return render(<Tooltip content={content}><span>{childLabel}</span></Tooltip>);
+    return render(
+        <Tooltip content={content}>
+            <span>{childLabel}</span>
+        </Tooltip>,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -107,9 +111,7 @@ describe('Tooltip — content', () => {
 
         await userEvent.hover(screen.getByText('Hover me'));
 
-        expect(screen.getByRole('tooltip').textContent).toBe(
-            'When the volatility trigger fired for this symbol (UTC)',
-        );
+        expect(screen.getByRole('tooltip').textContent).toBe('When the volatility trigger fired for this symbol (UTC)');
     });
 
     it('renders React node children (not just strings) as tooltip content', async () => {

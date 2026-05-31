@@ -135,14 +135,7 @@ function buildHarness(riskHaltState?: OrderingRiskHaltStatePort): IHarness {
     const haltFlag = new HaltFlagService();
     const port = riskHaltState ?? new OrderingRiskHaltStatePort();
 
-    const service = new HaltService(
-        auditRepo as unknown as ControlAuditRepository,
-        haltFlag,
-        alerts,
-        flatten,
-        port,
-        new EventEmitter2(),
-    );
+    const service = new HaltService(auditRepo as unknown as ControlAuditRepository, haltFlag, alerts, flatten, port, new EventEmitter2());
 
     return { service, auditRepo, alerts, haltFlag, riskHaltState: port };
 }
@@ -166,7 +159,7 @@ async function engageHalt(harness: IHarness, now: Date): Promise<void> {
 // ---------------------------------------------------------------------------
 
 describe('HaltService.resume() — ADR 0021 §5 RISK_HALT_STATE_PORT integration', () => {
-    describe('happy path: clearHaltForDate receives today\'s UTC date from params.now', () => {
+    describe("happy path: clearHaltForDate receives today's UTC date from params.now", () => {
         it('passes the ISO date prefix (YYYY-MM-DD) of params.now to clearHaltForDate', async () => {
             const now = new Date('2026-05-28T14:30:00.000Z');
             const harness = buildHarness();
@@ -231,14 +224,7 @@ describe('HaltService.resume() — ADR 0021 §5 RISK_HALT_STATE_PORT integration
             const alerts = new StubAlertSink();
             const haltFlag = new HaltFlagService();
             const flatten = new StubFlattenCoordinator();
-            const service = new HaltService(
-                auditRepo as unknown as ControlAuditRepository,
-                haltFlag,
-                alerts,
-                flatten,
-                port,
-                new EventEmitter2(),
-            );
+            const service = new HaltService(auditRepo as unknown as ControlAuditRepository, haltFlag, alerts, flatten, port, new EventEmitter2());
 
             // Pre-halt via auditRepo directly to avoid polluting callLog.
             haltFlag.halt('OPERATOR:pre-halt');
@@ -363,9 +349,7 @@ describe('HaltService.resume() — ADR 0021 §5 RISK_HALT_STATE_PORT integration
 
             await expect(harness.service.resume(buildResumeParams(now))).rejects.toThrow(/risk_state clear boom/u);
 
-            const criticals = harness.alerts.published.filter(
-                (p) => p.severity === AlertSeverityEnum.CRITICAL && p.type === AlertTypeEnum.UNHANDLED_EXCEPTION,
-            );
+            const criticals = harness.alerts.published.filter((p) => p.severity === AlertSeverityEnum.CRITICAL && p.type === AlertTypeEnum.UNHANDLED_EXCEPTION);
 
             expect(criticals).toHaveLength(1);
             expect(criticals[0]!.title).toMatch(/resume risk_state clear failed/u);
@@ -405,9 +389,7 @@ describe('HaltService.resume() — ADR 0021 §5 RISK_HALT_STATE_PORT integration
 
             await expect(harness.service.resume(buildResumeParams(now))).rejects.toThrow();
 
-            const critical = harness.alerts.published.find(
-                (p) => p.severity === AlertSeverityEnum.CRITICAL,
-            );
+            const critical = harness.alerts.published.find((p) => p.severity === AlertSeverityEnum.CRITICAL);
 
             expect(critical).toBeDefined();
             // The alert body must reference the audit row written by this resume.

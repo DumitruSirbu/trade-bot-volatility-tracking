@@ -218,9 +218,7 @@ describe('MultiSelect — search (searchable=true)', () => {
         // contains the label. Checkboxes (also role="button") carry no readable
         // label text, so we discriminate by non-empty trimmed textContent.
         const trigger = getTrigger();
-        const optionRows = screen.getAllByRole('button').filter(
-            (btn) => btn !== trigger && btn.textContent?.trim() !== '',
-        );
+        const optionRows = screen.getAllByRole('button').filter((btn) => btn !== trigger && btn.textContent?.trim() !== '');
         // Each option row's text includes the Checkbox button text (empty) + span label.
         // We check via the visible span labels.
         const labels = optionRows.map((btn) => btn.querySelector('span.truncate')?.textContent ?? '');
@@ -239,7 +237,8 @@ describe('MultiSelect — search (searchable=true)', () => {
 
         // After clearing, all option rows should be back. Each option is a
         // <button> with a nested .truncate span containing the label.
-        const visibleLabels = screen.getAllByRole('button')
+        const visibleLabels = screen
+            .getAllByRole('button')
             .map((btn) => btn.querySelector('span.truncate')?.textContent ?? '')
             .filter((text) => text.length > 0);
         expect(visibleLabels).toHaveLength(THREE_OPTIONS.length);

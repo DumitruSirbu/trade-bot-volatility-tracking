@@ -22,16 +22,12 @@ export async function assertTestDb(): Promise<void> {
 
     if (parsed.port !== REQUIRED_PORT) {
         throw new Error(
-            `TEST_DATABASE_URL port must be ${REQUIRED_PORT}, got ${parsed.port}. ` +
-                'Refusing to run — this DSN may point at the protected soak DB.',
+            `TEST_DATABASE_URL port must be ${REQUIRED_PORT}, got ${parsed.port}. ` + 'Refusing to run — this DSN may point at the protected soak DB.',
         );
     }
 
     if (soakUrl && testUrl === soakUrl) {
-        throw new Error(
-            'TEST_DATABASE_URL must not equal DATABASE_URL. ' +
-                'The test suite must never run against the soak database.',
-        );
+        throw new Error('TEST_DATABASE_URL must not equal DATABASE_URL. ' + 'The test suite must never run against the soak database.');
     }
 
     await verifyReachable(testUrl);
