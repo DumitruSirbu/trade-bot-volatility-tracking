@@ -45,7 +45,12 @@ services:
         ports:
             - '${TEST_DB_PORT:-6900}:5432'
         tmpfs:
-            - /var/lib/postgresql/data
+            # Mount the parent (NOT /var/lib/postgresql/data) — the postgres:18
+            # image declares VOLUME /var/lib/postgresql with PGDATA at
+            # /var/lib/postgresql/18/docker, so tmpfs must back the parent for
+            # the test data to stay in RAM (and never hit the container layer).
+            # Mirrors the soak `postgres` service mount above (docker-library/postgres#1259).
+            - /var/lib/postgresql
         environment:
             POSTGRES_USER: ${TEST_DB_USER:-trade_bot_test}
             POSTGRES_PASSWORD: ${TEST_DB_PASSWORD:-test_only_change_me}
@@ -115,11 +120,34 @@ services:
             DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
             # Bind the engine to a known port regardless of host-side ENGINE_PORT.
             ENGINE_PORT: '3000'
+            # M17 W1 (review H2) — pin the in-container backup write path to the
+            # bind-mount target below, overriding the host-oriented DB_BACKUP_DIR
+            # from .env (`./backups`). The engine MUST write to the mount so dumps
+            # land on the host and survive `--force-recreate engine`; a relative
+            # ./backups inside the container would be lost on recreate.
+            DB_BACKUP_DIR: /var/backups/trade-bot
+            # Backup feature flag + schedule + retention pass through from .env
+            # (DbBackupScheduler reads these — Wave 2). Defaults here keep a plain
+            # `docker compose up` self-contained: enabled for the compose soak run,
+            # 03:00 UTC daily, keep 3.
+            DB_BACKUP_ENABLED: ${DB_BACKUP_ENABLED:-true}
+            DB_BACKUP_CRON: ${DB_BACKUP_CRON:-0 3 * * *}
+            DB_BACKUP_RETENTION: ${DB_BACKUP_RETENTION:-3}
         depends_on:
             postgres:
                 condition: service_healthy
             engine-migrator:
                 condition: service_completed_successfully
+        volumes:
+            # M17 W1 — daily DB backup output. Host side is operator-configurable
+            # via DB_BACKUP_DIR in .env (default ./backups); container side is the
+            # fixed path the DB_BACKUP_DIR override above points at. The runtime
+            # runs as uid 1000 (`node`), so the host dir MUST be writable by 1000:
+            #   mkdir -p ./backups && chown 1000:1000 ./backups
+            # (review H4 — see .env.example / the backup runbook). This is the ONLY
+            # compose change for M17; the postgres service + postgres-data volume
+            # are intentionally untouched (CLAUDE.md rules 8 & 9).
+            - ${DB_BACKUP_DIR:-./backups}:/var/backups/trade-bot
         ports:
             # Exposed on the host for direct curl/debug; the dashboard reaches
             # the engine over the compose network and never via this mapping.

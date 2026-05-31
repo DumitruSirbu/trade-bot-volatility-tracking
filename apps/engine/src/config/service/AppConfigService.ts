@@ -319,6 +319,26 @@ export class AppConfigService {
         return this.resolvedRevokedJtiMaxRows;
     }
 
+    // M17 — automated daily DB backup. Directory the engine writes dumps to,
+    // the enable flag (test/CI default off), the 5-field UTC cron schedule, and
+    // the retention depth. All validated in EnvironmentVariables so these
+    // getters return already-coerced, already-checked values.
+    get dbBackupDir(): string {
+        return this.configService.get('DB_BACKUP_DIR', { infer: true });
+    }
+
+    get dbBackupEnabled(): boolean {
+        return this.configService.get('DB_BACKUP_ENABLED', { infer: true });
+    }
+
+    get dbBackupCron(): string {
+        return this.configService.get('DB_BACKUP_CRON', { infer: true });
+    }
+
+    get dbBackupRetention(): number {
+        return this.configService.get('DB_BACKUP_RETENTION', { infer: true });
+    }
+
     private resolveAuthHmacSecret(): string {
         const raw = process.env[AUTH_HMAC_SECRET_ENV];
 

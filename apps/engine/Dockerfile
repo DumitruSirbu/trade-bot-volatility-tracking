@@ -9,7 +9,13 @@
 # handling, non-root user, healthcheck on /v1/health.
 # ---------------------------------------------------------------------------
 
-ARG NODE_IMAGE=node:22.20-alpine
+# M17 W1 — base pinned to node:22.21-alpine (Alpine 3.23). Alpine 3.23 is the
+# first release whose native repos carry `postgresql18-client` (18.4-r0), which
+# the runtime stage installs so the engine's bundled `pg_dump` matches the
+# `postgres:18.4-alpine` server major (18). The previous 22.20 pin is Alpine
+# 3.22, which only ships postgresql17-client — a client-older-than-server pair
+# pg_dump refuses. Both server and engine base now ride Alpine 3.23.
+ARG NODE_IMAGE=node:22.21-alpine
 ARG PNPM_VERSION=9.15.9
 
 
@@ -80,9 +86,21 @@ FROM ${NODE_IMAGE} AS runtime
 # both development (pino-pretty logging) and production (json logging) runtimes.
 
 # wget for the container HEALTHCHECK; tini is provided via compose `init: true`.
-# pino-pretty is intentionally installed here so pino can resolve the transport
-# when NODE_ENV != production (it is a dev-time logging convenience, not an app dep).
-RUN apk add --no-cache wget
+# postgresql18-client (M17 W1) ships `pg_dump` for the daily DB-backup scheduler;
+# it MUST match the postgres:18.4-alpine server major (18) — a client older than
+# the server makes pg_dump refuse. Both ride Alpine 3.23 (see NODE_IMAGE note).
+# The verified Alpine package name is `postgresql18-client` (18.4-r0). pino-pretty
+# is installed below so pino can resolve the transport when NODE_ENV != production
+# (a dev-time logging convenience, not an app dep).
+RUN apk add --no-cache wget postgresql18-client
+
+# Build-time smoke (M17 W1, review M7) — fail the build if the bundled pg_dump
+# does not report major 18. `pg_dump (PostgreSQL) 18.x` is grepped for the exact
+# major so a future base-image drift to a non-18 client is caught at build, not
+# at the first 03:00 UTC backup tick.
+RUN pg_dump --version \
+ && pg_dump --version | grep -Eq '\(PostgreSQL\) 18\.' \
+ || (echo "BUILD SMOKE FAILED: pg_dump is not major 18 — see apps/engine/Dockerfile M17 note" && exit 1)
 
 # Non-root user (alpine `node` image ships a `node` user uid 1000).
 WORKDIR /app
@@ -107,6 +125,21 @@ RUN if [ "$INCLUDE_DEV_LOGS" = "true" ]; then \
     fi
 
 USER node
+
+# Non-root mount smoke (M17 W1, review H4) — the runtime runs as `node` (uid
+# 1000). Prove that uid 1000 can create/rename/unlink under a backup dir, the
+# exact operations DbBackupScheduler performs (atomic <name>.tmp -> rename, then
+# retention unlink). This validates the IMAGE layer; the compose bind mount adds
+# a host-permission requirement the operator satisfies via `chown 1000:1000`
+# (documented in .env.example + the runbook). Run against an image-local dir so
+# the build never depends on a host mount being present.
+RUN set -e; \
+    d="$(mktemp -d)"; \
+    : > "$d/trade_bot_19700101_0000.sql.gz.tmp"; \
+    mv "$d/trade_bot_19700101_0000.sql.gz.tmp" "$d/trade_bot_19700101_0000.sql.gz"; \
+    rm "$d/trade_bot_19700101_0000.sql.gz"; \
+    rmdir "$d"; \
+    echo "M17 non-root mount smoke OK (uid $(id -u) can create/rename/unlink)"
 
 WORKDIR /app/apps/engine
 

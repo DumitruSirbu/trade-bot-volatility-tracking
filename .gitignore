@@ -61,3 +61,7 @@ coverage/
 
 # Backtest artefact output
 apps/engine/var/
+
+# M17 — automated DB-backup output (default DB_BACKUP_DIR=./backups). Never
+# commit gzipped dumps; they contain soak calibration data.
+backups/

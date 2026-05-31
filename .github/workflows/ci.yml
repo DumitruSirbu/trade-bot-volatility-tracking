@@ -199,9 +199,23 @@ jobs:
             TEST_DB_PORT: '6900'
             MCP_DB_PASSWORD: mcp_reader_change_me_at_deploy
             AGENT_WRITER_PASSWORD: CHANGE_ME_BEFORE_PROD
+            # M17 W1 (review M1) — the test engine must NEVER spawn pg_dump against
+            # the ephemeral 6900 DB. Disable the daily-backup scheduler explicitly.
+            DB_BACKUP_ENABLED: 'false'
         steps:
             - name: Checkout
               uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            # M17 W1 (review M1) — assert the test job disables the DB-backup
+            # scheduler before anything runs. Greps the workflow for the literal
+            # flag so a future env-block edit that drops it (and would let the
+            # test engine spawn pg_dump against the ephemeral 6900 DB) fails CI.
+            - name: Assert DB backups disabled in CI (M17)
+              run: |
+                  if ! grep -qE "^[[:space:]]*DB_BACKUP_ENABLED:[[:space:]]*'false'" .github/workflows/ci.yml; then
+                      echo "M17 GUARD FAILED: DB_BACKUP_ENABLED: 'false' missing from the test job env."
+                      exit 1
+                  fi
+                  echo "M17 guard OK — DB backups disabled in CI."
             - name: Setup pnpm
               uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
               with:

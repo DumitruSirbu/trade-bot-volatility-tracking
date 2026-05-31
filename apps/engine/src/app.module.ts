@@ -2,6 +2,7 @@ import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 
 import { AuthCorsInterceptor } from './auth/AuthCorsInterceptor';
 import { AuthModule } from './auth/AuthModule';
+import { BackupModule } from './backup/BackupModule';
 import { BacktestModule } from './backtest/BacktestModule';
 import { BootstrapModule } from './bootstrap/BootstrapModule';
 import { CommonModule } from './common/CommonModule';
@@ -39,6 +40,7 @@ import { WsModule } from './ws/WsModule';
         PromotionModule,
         ReadApiModule,
         WsModule,
+        BackupModule,
         BootstrapModule,
     ],
 })
