@@ -324,7 +324,7 @@ jobs:
             - name: Install (frozen lockfile)
               run: pnpm install --frozen-lockfile
             - name: Allowlist-filter unit tests (ADR 0040 §2.2)
-              run: pnpm --filter @bot/engine exec jest tests/ci/auditAllowlistFilter tests/ci/auditConfigSync
+              run: pnpm --filter @bot/engine exec jest --config jest.ci.config.js tests/ci/auditAllowlistFilter tests/ci/auditConfigSync
             # `pnpm audit` exits non-zero when it finds advisories, so the root
             # `audit:ci` script captures its output with `|| true` and the
             # deterministic filter (with expiry + 90-day + allowlist semantics that
@@ -382,7 +382,7 @@ jobs:
             - name: Install (frozen lockfile)
               run: pnpm install --frozen-lockfile
             - name: Pin/skew unit tests (ADR 0041 §2.2/§2.3)
-              run: pnpm --filter @bot/engine exec jest tests/ci/exchangeDepPinCheck
+              run: pnpm --filter @bot/engine exec jest --config jest.ci.config.js tests/ci/exchangeDepPinCheck
             # BLOCKING part of this job is the exact-pin + cross-workspace-skew check above.
             - name: Exact-pin + cross-workspace version-consistency check
               run: pnpm --filter @bot/engine exec ts-node tests/ci/runPinGate.ts
