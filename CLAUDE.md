@@ -78,7 +78,9 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 
 ## Status
 
-**Current status:** M16 done, M15 next — full milestone history, test counts, and go-live gates in `docs/milestone-log.md`.
+**Current status:** M17 done, M15 next — full milestone history, test counts, and go-live gates in `docs/milestone-log.md`.
+
+**M17 — Automated daily DB backup (DONE):** In-engine NestJS scheduler (dynamic cron registration, re-entrancy mutex, atomic writes via .tmp→rename, anchored filename + realpath guard against path traversal). Daily UTC pg_dump of soak DB to host-bind-mounted `DB_BACKUP_DIR`, keeps 3 newest `trade_bot_*.sql.gz` dumps, prunes rest. Image carries `postgresql18-client` (Alpine 3.23, v18.4, build-time smoke). Env config validated (5-field cron, @Min 1 retention). CI test job: `DB_BACKUP_ENABLED=false`. 73 specs green. 1 reviewer round: 1 HIGH (fixed), 3 mediums (fixed), 5 clean-code must-fix (fixed). Re-review confirmed all clear, 0 new findings. Bonus fix: postgres-test tmpfs mount corrected to `/var/lib/postgresql` (was wrong directory path for PGDATA). Zero blockers, zero highs at close.
 
 <!-- rtk-instructions v2 -->
 # RTK (Rust Token Killer) - Token-Optimized Commands

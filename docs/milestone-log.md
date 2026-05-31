@@ -39,6 +39,22 @@ For the current milestone plan, see `docs/plans/`. For deferred items, see `docs
 
 ---
 
+## M17 — Automated daily DB backup (local disk, 3-deep retention)
+
+In-engine NestJS `DbBackupScheduler` + dynamic cron registration via `SchedulerRegistry.addCronJob`. Daily UTC `pg_dump` of the soak DB (`DATABASE_URL`), gzipped, written to host-bind-mounted `DB_BACKUP_DIR` (compose: `/var/backups/trade-bot` with explicit engine env override; host dev: `./backups`). Keeps the 3 newest `trade_bot_<YYYYMMDD_HHMM>.sql.gz` dumps and prunes older. Atomic write via `.tmp` → rename (no truncated dump promoted). Re-entrancy mutex (skip tick if dump in progress). Credentials via minimal libpq child env (never argv, never logged). Anchored filename pattern + `realpath` guard prevents path-traversal prune. Failure alert reuses `AlertTypeEnum.UNHANDLED_EXCEPTION` / `DB_BACKUP_FAILED`. Image carries `postgresql18-client` (Alpine 3.23, pg_dump 18.4, build-time smoke test). Non-root mount permissions documented + verified (uid 1000). `DB_BACKUP_DIR`, `DB_BACKUP_ENABLED`, `DB_BACKUP_CRON` (5-field UTC), `DB_BACKUP_RETENTION` (@Min 1) configured + validated. CI test job sets `DB_BACKUP_ENABLED: 'false'`. `backups/` gitignored. Read-only — never mutates soak DB.
+
+**Tests:** 73 specs green (37 scheduler unit covering retention boundaries, failure modes, re-entrancy, pipeline-error paired tests; 28+ config validation).
+
+**Review cycle:** 1 round + 1 fix wave + continuity re-review. Round 1: 0 blockers, 1 HIGH (dump success gated on pg_dump exit, not gzip→file pipeline flush/error), 3 mediums (full `process.env` spread into child, orphan `.tmp` cleanup, misleading `survivors` var name), 5 clean-code must-fixes. Fix wave 1 resolved all HIGH + mediums + must-fixes; re-review confirmed HIGH + mediums cleared, 0 new findings.
+
+**Bug caught in passing:** `postgres-test` tmpfs mount was `/var/lib/postgresql/data` (wrong for postgres-18 PGDATA `/var/lib/postgresql/18/docker`, VOLUME parent dir); fixed to `/var/lib/postgresql`, matching soak service.
+
+**Files touched:** `apps/engine/Dockerfile` (client), `docker-compose.yml` (mount + override), `.env.example`, `.env.test.example`, `.gitignore`, `.github/workflows/ci.yml` (env), `apps/engine/src/config/` (validation), `apps/engine/src/backup/DbBackupScheduler.ts` (new), `apps/engine/src/backup/BackupModule.ts` (new), engine bootstrap, `apps/engine/tests/backup/DbBackupScheduler.spec.ts` (new), config-validation spec, `docs/runbooks/db-backup.md` (refined), runbook operator notes.
+
+**Zero blockers, zero highs at close.**
+
+---
+
 ## M0 — Foundation & scaffolding
 
 pnpm + Docker + NestJS 11 + TypeORM + event bus + halt-flag + money helpers.

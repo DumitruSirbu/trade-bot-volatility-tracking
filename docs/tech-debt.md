@@ -45,6 +45,8 @@ Items resolved or no longer applicable should be removed. New items added at the
 
 | Item | File / Location | Origin | Notes |
 |------|----------------|--------|-------|
+| `buildLibpqEnv` decodeURIComponent on malformed percent-encoded DATABASE_URL can throw unwrapped | `apps/engine/src/backup/DbBackupScheduler.ts` | M17 | Operator-trusted env var; not wrapped in DbBackupFailedException |
+| On pipeline rejection while pg_dump running, child process not explicitly killed | `apps/engine/src/backup/DbBackupScheduler.ts` | M17 | stdout teardown self-terminates; LOW risk |
 | `emitHaltChanged` has 5 params; needs `IEmitHaltChangedParams` DTO | `HaltService.ts:218` | M11a soak | CC-M3 |
 | `writeAudit` anonymous 11-field inline type; needs named `IWriteAuditParams` | `HaltService.ts:323` | M11a soak | CC-M4 |
 | `engageHalt` (58 lines) and `resume` (44 lines) exceed size guideline; extract private helpers | `HaltService.ts:106,165` | M11a soak | CC-M5 |

@@ -181,6 +181,7 @@ dashboard talks to an authenticated read API. Full topology in `M15-cloud-go-liv
 | M12 | Analysis MCP (phase 2, local) | `M12-analysis-mcp.md` |
 | M13 | Agentic weekly loop (phase 2, local) | `M13-agentic-weekly-loop.md` |
 | M14 | CI review gate (phase 2, local) | `M14-ci-review-gate.md` |
+| M17 | Automated daily DB backup (local disk, 3-deep retention) | `M17-daily-db-backup.md` |
 | M15 | Cloud go-live & scaling (gated by M11a soak exit criteria + M12/M13/M14) | `M15-cloud-go-live.md` |
 
 ## Cross-cutting risks
