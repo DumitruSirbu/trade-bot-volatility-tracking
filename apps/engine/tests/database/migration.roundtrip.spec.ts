@@ -1,21 +1,36 @@
 /**
  * Migration round-trip integration test (requires live Postgres).
  *
- * DB: the project's compose Postgres — start with:
- *   DB_PORT=5433 docker compose up -d postgres
+ * DB: this suite MUST run against a DEDICATED test database, never the soak/prod DB.
+ * Set MIGRATION_TEST_DB_URL to an isolated Postgres instance before running:
+ *   MIGRATION_TEST_DB_URL=postgresql://trade_bot:change_me@localhost:6900/trade_bot_migration \
+ *     pnpm jest migration.roundtrip
+ *
+ * WARNING: this suite reverts ALL migrations then re-runs them. Any pre-existing
+ * data in the target DB will be permanently deleted. It must NEVER connect to the
+ * soak DB (DATABASE_URL / port 5433). The suite aborts if MIGRATION_TEST_DB_URL
+ * is not set.
  *
  * Isolation: this suite uses its OWN private DataSource rather than the shared
  * one from testDataSource.ts.  It intentionally reverts all migrations to prove
  * the revert path is clean, then RE-RUNS them in afterAll so the shared schema
  * is restored for any suite that runs after this one.  This makes the suite
- * Repeatable and Independent (F.I.R.S.T.) — a second consecutive `pnpm test`
- * run passes without a manual migration step in between.
+ * Repeatable and Independent (F.I.R.S.T.) — a second consecutive run passes
+ * without a manual migration step in between.
  */
 
 import { DataSource } from 'typeorm';
 import { buildDataSourceOptions } from '../../src/database/dataSourceOptions';
 
-const TEST_DB_URL = process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
+const TEST_DB_URL = process.env['MIGRATION_TEST_DB_URL'];
+
+if (!TEST_DB_URL) {
+    throw new Error(
+        'MIGRATION_TEST_DB_URL is not set. This suite reverts ALL migrations and must NOT run against the soak DB. ' +
+            'Point it at a dedicated test database: ' +
+            'MIGRATION_TEST_DB_URL=postgresql://trade_bot:change_me@localhost:6900/trade_bot_migration pnpm jest migration.roundtrip',
+    );
+}
 
 // The 13 tables created by CreateSchema migration.
 const EXPECTED_TABLES = [
@@ -79,7 +94,7 @@ describe('Migration round-trip (integration — requires Postgres)', () => {
     let dataSource: DataSource;
 
     beforeAll(async () => {
-        const options = buildDataSourceOptions(TEST_DB_URL);
+        const options = buildDataSourceOptions(TEST_DB_URL!);
         dataSource = new DataSource(options);
         await dataSource.initialize();
 
@@ -145,18 +160,23 @@ describe('Migration round-trip (integration — requires Postgres)', () => {
         expect(rows.length).toBe(1);
     });
 
-    it('strategy_versions seed rows (v0–v3) exist after SeedStrategyVersions migration', async () => {
+    it('strategy_versions rows (v0–v3) have correct statuses after all migrations', async () => {
         const rows = (await dataSource.query(`SELECT version, direction, status FROM strategy_versions WHERE name = 'volatility-vwap' ORDER BY version`)) as {
             version: number;
             direction: string;
             status: string;
         }[];
 
+        // After all migrations the corrective migration chain produces:
+        //   v0 (id=1): 'shadow'  — demoted by CorrectActiveStrategyStatus
+        //   v1 (id=2): 'active'  — ensured by EnsureActiveStrategyVersion
+        //   v2 (id=3): 'shadow'  — promoted by PromoteShadowStrategyVersions
+        //   v3 (id=4): 'shadow'  — promoted by PromoteShadowStrategyVersions
         expect(rows).toHaveLength(4);
-        expect(rows[0]).toMatchObject({ version: 0, direction: 'mean_reversion', status: 'active' });
-        expect(rows[1]).toMatchObject({ version: 1, direction: 'mean_reversion', status: 'draft' });
-        expect(rows[2]).toMatchObject({ version: 2, direction: 'momentum', status: 'draft' });
-        expect(rows[3]).toMatchObject({ version: 3, direction: 'hybrid', status: 'draft' });
+        expect(rows[0]).toMatchObject({ version: 0, direction: 'mean_reversion', status: 'shadow' });
+        expect(rows[1]).toMatchObject({ version: 1, direction: 'mean_reversion', status: 'active' });
+        expect(rows[2]).toMatchObject({ version: 2, direction: 'momentum', status: 'shadow' });
+        expect(rows[3]).toMatchObject({ version: 3, direction: 'hybrid', status: 'shadow' });
     });
 
     it('v0 seed row has trade_enabled: false in params', async () => {

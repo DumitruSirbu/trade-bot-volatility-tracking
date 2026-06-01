@@ -4,12 +4,13 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { MarketDataModule } from '../market-data/MarketDataModule';
 import { PositionModule } from '../position/PositionModule';
 import { RiskModule } from '../risk/RiskModule';
-import { ComparisonReportEntity, DecisionEntity, StrategyVersionEntity } from './entity';
+import { ComparisonReportEntity, DecisionEntity, ShadowDecisionEntity, StrategyVersionEntity } from './entity';
 import { StrategyRegistry } from './registry';
 import { ComparisonReportRepository } from './repository/ComparisonReportRepository';
 import { DecisionRepository } from './repository/DecisionRepository';
+import { ShadowDecisionRepository } from './repository/ShadowDecisionRepository';
 import { StrategyVersionRepository } from './repository/StrategyVersionRepository';
-import { StrategyService } from './service';
+import { ShadowStrategyOrchestratorService, StrategyService, VirtualPositionLedgerService } from './service';
 import { V0BaselineStrategy, V1MeanReversionStrategy, V2MomentumStrategy, V3HybridRouterStrategy } from './strategies';
 
 // Owns strategy_versions + decisions (M2) plus the M3 strategy engine: the four
@@ -25,7 +26,7 @@ import { V0BaselineStrategy, V1MeanReversionStrategy, V2MomentumStrategy, V3Hybr
 // dedicated ComparisonModule will be carved out then.
 @Module({
     imports: [
-        TypeOrmModule.forFeature([StrategyVersionEntity, DecisionEntity, ComparisonReportEntity]),
+        TypeOrmModule.forFeature([StrategyVersionEntity, DecisionEntity, ComparisonReportEntity, ShadowDecisionEntity]),
         forwardRef(() => PositionModule),
         MarketDataModule,
         forwardRef(() => RiskModule),
@@ -34,13 +35,23 @@ import { V0BaselineStrategy, V1MeanReversionStrategy, V2MomentumStrategy, V3Hybr
         StrategyVersionRepository,
         DecisionRepository,
         ComparisonReportRepository,
+        ShadowDecisionRepository,
         StrategyRegistry,
         StrategyService,
+        VirtualPositionLedgerService,
+        ShadowStrategyOrchestratorService,
         V0BaselineStrategy,
         V1MeanReversionStrategy,
         V2MomentumStrategy,
         V3HybridRouterStrategy,
     ],
-    exports: [StrategyVersionRepository, DecisionRepository, ComparisonReportRepository, StrategyRegistry],
+    exports: [
+        StrategyVersionRepository,
+        DecisionRepository,
+        ComparisonReportRepository,
+        ShadowDecisionRepository,
+        StrategyRegistry,
+        VirtualPositionLedgerService,
+    ],
 })
 export class StrategyModule {}

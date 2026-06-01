@@ -10,6 +10,7 @@ import { HaltController } from '../../src/control/HaltController';
 import { HaltRateLimiter } from '../../src/control/HaltRateLimiter';
 import { HaltService } from '../../src/control/HaltService';
 import { IFlattenCoordinator, IFlattenRequest } from '../../src/control/interface/IFlattenCoordinator';
+import { IRiskHaltStatePort } from '../../src/control/interface/IRiskHaltStatePort';
 import { ControlAuditRepository, IAppendOperatorParams, IAppendProgrammaticParams } from '../../src/control/repository/ControlAuditRepository';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { AuthGuard } from '../../src/auth/AuthGuard';
@@ -131,6 +132,16 @@ class StubFlattenCoordinator implements IFlattenCoordinator {
     }
 }
 
+// ADR 0021 §5.3 — captures the operator-resume risk_state halt-clear so tests
+// can assert the gate's hot-path SoT was cleared for today's UTC day.
+class StubRiskHaltStatePort implements IRiskHaltStatePort {
+    readonly clearedDates: string[] = [];
+
+    async clearHaltForDate(utcDateString: string): Promise<void> {
+        this.clearedDates.push(utcDateString);
+    }
+}
+
 class FixedClock implements IClock {
     constructor(private current: Date) {}
 
@@ -156,6 +167,7 @@ interface IBuildOpts {
     alerts?: StubAlertSink;
     flatten?: StubFlattenCoordinator;
     haltFlag?: HaltFlagService;
+    riskHaltState?: StubRiskHaltStatePort;
 }
 
 function buildController(opts: IBuildOpts = {}): {
@@ -168,6 +180,7 @@ function buildController(opts: IBuildOpts = {}): {
     rateLimiter: HaltRateLimiter;
     clock: FixedClock;
     restore: HaltStateRestoreService;
+    riskHaltState: StubRiskHaltStatePort;
 } {
     const clock = opts.clock ?? new FixedClock(NOW);
     const auditRepo = opts.auditRepo ?? new FakeControlAuditRepository();
@@ -175,7 +188,9 @@ function buildController(opts: IBuildOpts = {}): {
     const flatten = opts.flatten ?? new StubFlattenCoordinator();
     const haltFlag = opts.haltFlag ?? new HaltFlagService();
 
-    const service = new HaltService(auditRepo as unknown as ControlAuditRepository, haltFlag, alerts, flatten, new EventEmitter2());
+    const riskHaltState = opts.riskHaltState ?? new StubRiskHaltStatePort();
+
+    const service = new HaltService(auditRepo as unknown as ControlAuditRepository, haltFlag, alerts, flatten, riskHaltState, new EventEmitter2());
     const rateLimiter = new HaltRateLimiter();
 
     const controller = new HaltController(service, rateLimiter, auditRepo as unknown as ControlAuditRepository, clock);
@@ -185,7 +200,7 @@ function buildController(opts: IBuildOpts = {}): {
     const riskStateStub = { findByDate: async () => null } as unknown as import('../../src/risk/repository/RiskStateRepository').RiskStateRepository;
     const restore = new HaltStateRestoreService(auditRepo as unknown as ControlAuditRepository, service, haltFlag, riskStateStub);
 
-    return { controller, service, auditRepo, alerts, flatten, haltFlag, rateLimiter, clock, restore };
+    return { controller, service, auditRepo, alerts, flatten, haltFlag, rateLimiter, clock, restore, riskHaltState };
 }
 
 function makeRequest(

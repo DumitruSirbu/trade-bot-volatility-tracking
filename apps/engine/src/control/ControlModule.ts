@@ -11,13 +11,16 @@ import { CursorCodec } from '../read-api/pagination/CursorCodec';
 import { LoginRateLimitStateEntity } from '../auth/entity/LoginRateLimitStateEntity';
 import { LoginRateLimitStateRepository } from '../auth/repository/LoginRateLimitStateRepository';
 import { RATE_LIMIT_HALT_PORT } from '../exchange/interface/IRateLimitHaltPort';
+import { RiskStateEntity } from '../risk/entity';
+import { RiskStateRepository } from '../risk/repository/RiskStateRepository';
+import { RiskHaltStatePortAdapter } from '../risk/service/RiskHaltStatePortAdapter';
 import { ControlAuditEntity } from './entity/ControlAuditEntity';
 import { ControlAuditRepository } from './repository/ControlAuditRepository';
 import { HaltController } from './HaltController';
-import { FLATTEN_COORDINATOR, LoggingFlattenCoordinator } from './interface/IFlattenCoordinator';
 import { HaltRateLimiter } from './HaltRateLimiter';
 import { HaltService } from './HaltService';
 import { RateLimitHaltAdapter } from './RateLimitHaltAdapter';
+import { FLATTEN_COORDINATOR, LoggingFlattenCoordinator, RISK_HALT_STATE_PORT } from './interface';
 
 // M9 W3. Wires the kill-switch control plane:
 //
@@ -46,7 +49,12 @@ import { RateLimitHaltAdapter } from './RateLimitHaltAdapter';
 // `BootstrapModule` (PHASE 3 ordering) so that the boot pipeline restores the
 // halt flag before any market-data subscription opens.
 @Module({
-    imports: [AlertSinkModule, AuthModule, CommonModule, TypeOrmModule.forFeature([ControlAuditEntity, LoginRateLimitStateEntity])],
+    // ADR 0021 §5.3 — RiskStateEntity is registered here (NOT via a RiskModule
+    // import) so HaltService can consume RISK_HALT_STATE_PORT through a locally
+    // provided adapter. Importing RiskModule would close the
+    // Control → Risk → Position → Exchange → Control DI cycle; a forFeature
+    // entry plus a file-level adapter import creates no module-import edge.
+    imports: [AlertSinkModule, AuthModule, CommonModule, TypeOrmModule.forFeature([ControlAuditEntity, LoginRateLimitStateEntity, RiskStateEntity])],
     // M10 W0.5 — AuthController (POST /v1/auth/login) registered here to
     // avoid an AuthModule → ControlModule cycle (ControlModule already imports
     // AuthModule for the guard). The controller depends on AppConfigService,
@@ -77,6 +85,13 @@ import { RateLimitHaltAdapter } from './RateLimitHaltAdapter';
         // so the exchange module never imports control directly.
         RateLimitHaltAdapter,
         { provide: RATE_LIMIT_HALT_PORT, useExisting: RateLimitHaltAdapter },
+        // ADR 0021 §5.3 (M11a soak fix) — operator-resume halt-clear port,
+        // provided locally (RiskStateRepository + adapter wired here) so
+        // HaltService can clear `risk_state.is_halted` without ControlModule
+        // importing RiskModule (which would close the DI cycle).
+        RiskStateRepository,
+        RiskHaltStatePortAdapter,
+        { provide: RISK_HALT_STATE_PORT, useExisting: RiskHaltStatePortAdapter },
     ],
     exports: [HaltService, ControlAuditRepository, CLOCK, RATE_LIMIT_HALT_PORT],
 })

@@ -1232,3 +1232,30 @@ data (PAPER mode), with:
   + one of three M11b entry paths named).
 
 Only on full pass of PAPER soak **and** TESTNET drill does M11b begin.
+
+---
+
+## Soak findings
+
+### Operator resume bug (fix wave complete)
+
+**Bug:** During the M11a PAPER soak, the dashboard "Resume trading" button (`POST /v1/control/resume`) did not clear `risk_state.is_halted` from the database. The endpoint correctly wrote a RESUME row to `control_audit` and cleared the in-memory `HaltFlagService` flag, but `RiskGateService.evaluate()` reads `risk_state.is_halted` directly from the DB on every trigger evaluation. Result: after any programmatic halt (market_stress, consecutive_loss), the operator resume had zero effect — every new trigger was still rejected by the GLOBAL_HALT gate.
+
+The bug also broke the boot tie-break logic in `HaltStateRestoreService` PHASE 3. On restart, the halt-wins semantics re-engaged the stale `is_halted=true` row even when the latest `control_audit` row showed RUNNING, producing an inconsistent state.
+
+**Root cause:** M9's DI cycle (ControlModule → RiskModule → PositionModule → ExchangeModule → ControlModule) forced the developer to omit direct `RiskStateRepository` injection into ControlModule to avoid creating a four-module import cycle. The workaround left the DB write missing.
+
+**Fix design (locked, ADR 0021 §5 addendum):**
+- New `RISK_HALT_STATE_PORT` / `IRiskHaltStatePort` (single method `clearHaltForDate(utcDateString)`).
+- New `RiskHaltStatePortAdapter` in `risk/service/`, registered locally in ControlModule. No new module-import edge; RiskModule provides the adapter, ControlModule consumes it (port-token pattern, same as existing `RATE_LIMIT_HALT_PORT`).
+- `RiskStateRepository.clearHaltForDate(date)` issues a targeted `UPDATE SET is_halted=false, halt_reason=null WHERE risk_day = date` (never touches PnL, exposure, or trade columns — loss-window gates remain active post-resume).
+- `HaltService.resume()` ordering: write audit row → call port to clear risk_state → clear in-memory flag. Failure guard: CRITICAL alert + re-raise.
+- Date-format validation guard added (security fix).
+- `guardStep` private helper extracted from HaltService to eliminate DRY violation (3 sites).
+- `control/interface/` barrel created (conventions).
+
+**Testing:** 18 new adversarial tests in `HaltService.resume.spec.ts` (call ordering, idempotency, failure path, UTC boundary edge cases). All 56 HaltService tests pass (18 new, 38 pre-existing).
+
+**Review cycle:** 1 round, 0 blockers, 0 highs. All mediums resolved in single fix wave. All 4 reviewers (security, logic, clean-code, quant) sign-off clean.
+
+**Outcome:** Resume path now correctly clears `risk_state.is_halted` and fixes boot tie-break semantics. Ready to land.

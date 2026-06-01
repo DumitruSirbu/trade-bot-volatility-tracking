@@ -22,21 +22,18 @@ Constraints that shape every decision (all non-negotiable, inherited from ADR 00
 `code-conventions.md` + `00-overview.md`):
 
 - **Same code live and in backtest.** The gate has unavoidable time/state dependencies
-  (now, `risk_state`, open positions, reservations) that the strategy does not. These are
-  **injected as data through ports**, never read via wall-clock or ambient I/O inside the
-  decision logic (§7).
+(now, `risk_state`, open positions, reservations) that the strategy does not. These are
+**injected as data through ports**, never read via wall-clock or ambient I/O inside the
+decision logic (§7).
 - **All risk lives outside the strategy.** The strategy proposes (`ISignal` +
-  `IProposedExit`); the gate *decides*. The gate never flips `tradeSide` (ADR 0003 §2). It
-  may shrink size, clamp the stop, or reject.
+`IProposedExit`); the gate *decides*. The gate never flips `tradeSide` (ADR 0003 §2). It
+may shrink size, clamp the stop, or reject.
 - **Money is `decimal`, never float.** Sizing/exposure/PnL are `MoneyValue` (decimal.js)
-  inside the engine; only `string`-money crosses the shared boundary (§8).
+inside the engine; only `string`-money crosses the shared boundary (§8).
 - **No order path bypasses the gate**, including protective exits and the kill-switch
-  flatten (§2).
-- **Existing schema is fixed** (M2): `risk_state(date UNIQUE, realized_pnl_day,
-  open_exposure, trades_count, is_halted, halt_reason)`, `decisions.action ∈
-  open|add|reduce|close|skip`, `decisions.reason varchar`, `positions.position_slot ∈
-  A|B|C`, `positions.time_stop_at`, `positions.status ∈ open|closed`. M4 adds **no new
-  tables** (§3 keeps the reservation ledger in-memory).
+flatten (§2).
+- **Existing schema is fixed** (M2): `risk_state(date UNIQUE, realized_pnl_day, open_exposure, trades_count, is_halted, halt_reason)`, `decisions.action ∈ open|add|reduce|close|skip`, `decisions.reason varchar`, `positions.position_slot ∈ A|B|C`, `positions.time_stop_at`, `positions.status ∈ open|closed`. M4 adds **no new
+tables** (§3 keeps the reservation ledger in-memory).
 
 ## Decision
 
@@ -49,16 +46,16 @@ risk subscribing to a `signal.produced` event.
 Rationale:
 
 - **The decision row must record the gate's verdict.** M3 already writes one decision per
-  trigger. The gate's outcome (approved slot, reject reason, sized notional) belongs *on
-  that same row* (`action`, `reason`, later `position_id`). A synchronous call lets the
-  orchestrator write one authoritative decision; an async event would either race the
-  decision write or force a second update.
+trigger. The gate's outcome (approved slot, reject reason, sized notional) belongs *on
+that same row* (`action`, `reason`, later `position_id`). A synchronous call lets the
+orchestrator write one authoritative decision; an async event would either race the
+decision write or force a second update.
 - **Determinism / replay.** M7 backtest replays triggers through the same
-  orchestrator→gate call path. An in-process synchronous function is trivially
-  deterministic and ordered; an event bus introduces non-deterministic delivery ordering
-  that would break "same code live and backtest."
+orchestrator→gate call path. An in-process synchronous function is trivially
+deterministic and ordered; an event bus introduces non-deterministic delivery ordering
+that would break "same code live and backtest."
 - **Ordering of concurrent same-bar signals** (§4) requires the gate to see signals in a
-  controlled batch. The orchestrator owns that batching; a fire-and-forget event does not.
+controlled batch. The orchestrator owns that batching; a fire-and-forget event does not.
 
 The seam to execution (M5) stays an event: on **approval** the gate returns a result, and
 the orchestrator (or a thin M5 publisher) emits `order.intent.approved` carrying the
@@ -109,7 +106,7 @@ interface IRiskDecision {
 }
 ```
 
-**`RejectReasonEnum` — every reason in the brief, enumerated once (SHARED).** It is
+`**RejectReasonEnum` — every reason in the brief, enumerated once (SHARED).** It is
 persisted to `decisions.reason` and surfaced by the M9 read API / M10 dashboard, so it
 lives in `packages/shared/src/enum/`, exactly as `SkipReasonEnum` did (ADR 0003 §2). It is
 distinct from `SkipReasonEnum`: a `skip` is the strategy declining; a `reject` is the gate
@@ -146,32 +143,32 @@ enum RejectReasonEnum {
 **Shared vs engine-internal split (locked):**
 
 - **Shared** (`packages/shared/src/enum/`): `RejectReasonEnum`, `RiskOutcomeEnum`,
-  `OrderIntentActionEnum`. These are *vocabulary* persisted to `decisions`/`positions` and
-  read by the dashboard; they carry no money. Same rule that put `SignalActionEnum` /
-  `SkipReasonEnum` in shared (ADR 0003 §2).
+`OrderIntentActionEnum`. These are *vocabulary* persisted to `decisions`/`positions` and
+read by the dashboard; they carry no money. Same rule that put `SignalActionEnum` /
+`SkipReasonEnum` in shared (ADR 0003 §2).
 - **Engine-internal** (`apps/engine/src/risk/interface/`): `IOrderIntent`, `IIntentSizing`,
-  `IRiskDecision`, plus the reservation ledger types (§3) and the determinism ports (§7).
-  These carry `MoneyValue`/`DecimalValue` and must not leak decimal.js across the wire.
+`IRiskDecision`, plus the reservation ledger types (§3) and the determinism ports (§7).
+These carry `MoneyValue`/`DecimalValue` and must not leak decimal.js across the wire.
 
 ### 2. The gate covers ALL order actions — reduce/close/flatten always pass, still routed through
 
 `OrderIntentActionEnum = { OPEN, ADD, REDUCE, CLOSE, FLATTEN }`. The gate is the *only*
 producer of an approved order intent for every one of them.
 
-- **`OPEN` / `ADD`** run the full check chain (slot, caps, stress, funding, spread, OI,
-  loss windows, cooldown, time-stop, SL-inside-liquidation, sizing). `ADD` additionally
-  checks per-coin exposure against the *existing* position plus the add.
-- **`REDUCE` / `CLOSE` / `FLATTEN`** are **always approved** (de-risking can never be
-  blocked), but they **still call `RiskGateService.evaluate`** so that: (a) the action is
-  recorded as a `decisions` row with `outcome=approved`, (b) the reservation ledger and
-  `risk_state.open_exposure` are *released* for the reduced/closed notional, and (c)
-  cooldown is armed on a closed loss (§ cooldown). A reduce/close that skipped the gate
-  would leak reservations and desync exposure accounting. **Reviewer rule:** any code path
-  that reduces/closes a position without going through `RiskGateService` is a must-fix
-  (mirrors ADR 0003's "strategy never reaches execution" rule, one layer down).
+- `**OPEN` / `ADD`** run the full check chain (slot, caps, stress, funding, spread, OI,
+loss windows, cooldown, time-stop, SL-inside-liquidation, sizing). `ADD` additionally
+checks per-coin exposure against the *existing* position plus the add.
+- `**REDUCE` / `CLOSE` / `FLATTEN*`* are **always approved** (de-risking can never be
+blocked), but they **still call `RiskGateService.evaluate`** so that: (a) the action is
+recorded as a `decisions` row with `outcome=approved`, (b) the reservation ledger and
+`risk_state.open_exposure` are *released* for the reduced/closed notional, and (c)
+cooldown is armed on a closed loss (§ cooldown). A reduce/close that skipped the gate
+would leak reservations and desync exposure accounting. **Reviewer rule:** any code path
+that reduces/closes a position without going through `RiskGateService` is a must-fix
+(mirrors ADR 0003's "strategy never reaches execution" rule, one layer down).
 - `FLATTEN` is the kill-switch path: emitted by M9, it passes the gate unconditionally and
-  releases all reservations and exposure for the symbol(s). The gate does not *originate*
-  the halt; it honours `is_halted` for new entries and lets flattens through.
+releases all reservations and exposure for the symbol(s). The gate does not *originate*
+the halt; it honours `is_halted` for new entries and lets flattens through.
 
 The check chain is a single ordered pipeline (`open`/`add` only); the first failing check
 short-circuits and returns its `RejectReasonEnum`. De-risking actions branch out of the
@@ -182,21 +179,20 @@ size/suppress → time-stop validity → SL-inside-liquidation → exposure caps
 
 ### 3. In-flight exposure reservation ledger — in-memory service state, not a table
 
-**The ledger lives in `RiskGateService` in-memory state** (a `Map<reservationId,
-IExposureReservation>`), **not** a new DB table.
+**The ledger lives in `RiskGateService` in-memory state** (a `Map<reservationId, IExposureReservation>`), **not** a new DB table.
 
 Rationale:
 
 - It is **transient by definition** — a reservation exists only between approval and
-  fill/fail, typically seconds. Persisting it adds write amplification and a second source
-  of truth for exposure (the durable source is `risk_state.open_exposure` + open
-  `positions`).
+fill/fail, typically seconds. Persisting it adds write amplification and a second source
+of truth for exposure (the durable source is `risk_state.open_exposure` + open
+`positions`).
 - The engine **runs as a single always-on process** holding in-memory state (overview:
-  "never scale-to-zero", "holds in-memory state"). A restart's correct behaviour is to
-  reconcile against the exchange (M6 owns this), *not* to replay stale reservations. So
-  durability buys nothing and risks resurrecting phantom reservations.
+"never scale-to-zero", "holds in-memory state"). A restart's correct behaviour is to
+reconcile against the exchange (M6 owns this), *not* to replay stale reservations. So
+durability buys nothing and risks resurrecting phantom reservations.
 - M6 is the durable backstop: on TTL expiry / unknown-outcome it reconciles the position
-  against the exchange and corrects `risk_state.open_exposure`.
+against the exchange and corrects `risk_state.open_exposure`.
 
 ```
 interface IExposureReservation {
@@ -243,12 +239,12 @@ the gate's verdict before the decision is persisted.
 **Slot model (locked):**
 
 - **Slot A, Slot B** — idiosyncratic only. Eligible iff
-  `idiosyncrasy_score ≥ params.idiosyncrasy_min_score` AND
-  `correlation_mode === idiosyncratic`. At most 2 concurrent A/B positions.
+`idiosyncrasy_score ≥ params.idiosyncrasy_min_score` AND
+`correlation_mode === idiosyncratic`. At most 2 concurrent A/B positions.
 - **Slot C** — at most 1 BTC-correlated position (`max_btc_correlated_positions: 1`). Slot
-  C is *available to an idiosyncratic trade* when no BTC-correlated position is open (the
-  brief). So a third concurrent idiosyncratic position may take C iff C is free of a
-  correlated position.
+C is *available to an idiosyncratic trade* when no BTC-correlated position is open (the
+brief). So a third concurrent idiosyncratic position may take C iff C is free of a
+correlated position.
 - **Concurrency cap: 3 total positions across A+B+C. The fourth concurrent intent — idiosyncratic or correlated — rejects `MAX_POSITIONS_REACHED`.**
 
 **Assignment algorithm (deterministic; reads live state via §7 ports):**
@@ -270,21 +266,20 @@ Signals arrive per-event (one `volatility.detected` per symbol per closed bar), 
 cannot decide "the single best correlated candidate" from one event in isolation. Lock:
 
 - **The orchestrator buffers correlated-mode `OPEN` intents by bar window** keyed on
-  `entryCandleOpenTime` (the closed-bar open time already on the event; all triggers for
-  one 5m bar share it). It does **not** call the gate for a correlated `OPEN` immediately;
-  it appends to a per-bar buffer.
-- **At the deterministic bar-close boundary** (`barCloseMs = entryCandleOpenTime +
-  CANDLE_INTERVAL_MS`, the same `nowMs` ADR 0003 derives) the orchestrator flushes the
-  buffer: it sorts buffered correlated candidates by `signalScore` descending (ties broken
-  by `symbol` ascending — deterministic), submits the **single highest** to the gate for
-  slot C, and writes **all others** as `decisions` with `action=open`,
-  `outcome=rejected`, `reason=btc_correlated_not_best_candidate`. Result: at most one new
-  correlated position per bar window.
+`entryCandleOpenTime` (the closed-bar open time already on the event; all triggers for
+one 5m bar share it). It does **not** call the gate for a correlated `OPEN` immediately;
+it appends to a per-bar buffer.
+- **At the deterministic bar-close boundary** (`barCloseMs = entryCandleOpenTime + CANDLE_INTERVAL_MS`, the same `nowMs` ADR 0003 derives) the orchestrator flushes the
+buffer: it sorts buffered correlated candidates by `signalScore` descending (ties broken
+by `symbol` ascending — deterministic), submits the **single highest** to the gate for
+slot C, and writes **all others** as `decisions` with `action=open`,
+`outcome=rejected`, `reason=btc_correlated_not_best_candidate`. Result: at most one new
+correlated position per bar window.
 - **Idiosyncratic and de-risking intents are not buffered** — they go through the gate
-  immediately (slots A/B are not contended by the single-candidate rule).
+immediately (slots A/B are not contended by the single-candidate rule).
 - **Live vs backtest:** the flush boundary is the injected clock's notion of bar close, not
-  wall time — backtest flushes when its simulated bar closes, live when the real bar
-  closes. Identical ordering because both sort the same buffered set by the same keys.
+wall time — backtest flushes when its simulated bar closes, live when the real bar
+closes. Identical ordering because both sort the same buffered set by the same keys.
 
 A bar-window batch buffer is **per-orchestrator in-memory state**, like the reservation
 ledger; it never persists (a restart loses at most one bar's pending correlated entries,
@@ -293,22 +288,22 @@ which is the safe outcome — no phantom positions).
 ### 5. Window definitions — daily UTC midnight, weekly rolling 7 days from `risk_state` rows
 
 - **Daily window** = the UTC calendar day `[00:00:00Z, 24:00:00Z)`. The `risk_state.date`
-  column (`type 'date'`) is the UTC date key. `realized_pnl_day`, `trades_count`,
-  `open_exposure`, `is_halted` are read/written for **today's** row, upserted on the
-  `uq_risk_state_date` UNIQUE constraint. The "today" date is derived from the **injected
-  clock** (§7: `nowMs → toUtcDateString(nowMs)`), never `new Date()`.
+column (`type 'date'`) is the UTC date key. `realized_pnl_day`, `trades_count`,
+`open_exposure`, `is_halted` are read/written for **today's** row, upserted on the
+`uq_risk_state_date` UNIQUE constraint. The "today" date is derived from the **injected
+clock** (§7: `nowMs → toUtcDateString(nowMs)`), never `new Date()`.
 - **Daily loss limit** breaches when `realized_pnl_day ≤ -daily_loss_limit` → block new
-  entries (`DAILY_LOSS_LIMIT`); reduce/close still pass.
+entries (`DAILY_LOSS_LIMIT`); reduce/close still pass.
 - **Consecutive-loss halt** is tracked per UTC day. The count of consecutive closed losses
-  is derived from today's closed `positions` (ordered by `closed_at`), not stored as a
-  column — keeps `risk_state` minimal and replayable. After
-  `params.consecutive_loss_halt` consecutive losses → block entries for the rest of the UTC
-  day (`CONSECUTIVE_LOSS_HALT`). A win resets the streak.
+is derived from today's closed `positions` (ordered by `closed_at`), not stored as a
+column — keeps `risk_state` minimal and replayable. After
+`params.consecutive_loss_halt` consecutive losses → block entries for the rest of the UTC
+day (`CONSECUTIVE_LOSS_HALT`). A win resets the streak.
 - **Weekly window** = a **rolling 7-day** sum of `realized_pnl_day` over the last 7
-  `risk_state` rows ending at today (inclusive), i.e. `[today-6d, today]` by UTC date. Not
-  ISO week; rolling. Breaches when the 7-day sum `≤ -weekly_loss_limit` →
-  `WEEKLY_LOSS_LIMIT`. Read via a `RiskStateRepository.sumRealizedPnlSince(dateString)`
-  query (new repository method; M4 adds it).
+`risk_state` rows ending at today (inclusive), i.e. `[today-6d, today]` by UTC date. Not
+ISO week; rolling. Breaches when the 7-day sum `≤ -weekly_loss_limit` →
+`WEEKLY_LOSS_LIMIT`. Read via a `RiskStateRepository.sumRealizedPnlSince(dateString)`
+query (new repository method; M4 adds it).
 
 Boundary handling: a position opened on day N and closed on day N+1 books realized PnL to
 **day N+1** (close date), matching how exchanges settle and keeping the daily row a clean
@@ -347,23 +342,22 @@ implementation without touching the decision code.
 
 **Injected as data (never read via ambient I/O inside the decision logic):**
 
-- **`nowMs`** — the deterministic clock, bar-close-derived (`entryCandleOpenTime +
-  CANDLE_INTERVAL_MS`), exactly as ADR 0003 §1. Used for cooldown windows, reservation TTL,
-  the UTC-date key, and the same-bar flush boundary. **No `Date.now()` / `new Date()` in
-  the gate** — reviewer must-fix, identical to the strategy rule.
+- `**nowMs`** — the deterministic clock, bar-close-derived (`entryCandleOpenTime + CANDLE_INTERVAL_MS`), exactly as ADR 0003 §1. Used for cooldown windows, reservation TTL,
+the UTC-date key, and the same-bar flush boundary. **No `Date.now()` / `new Date()` in
+the gate** — reviewer must-fix, identical to the strategy rule.
 - **State ports** (interfaces the gate depends on, concrete in live, fake/in-memory in
-  backtest):
+backtest):
   - `IRiskStatePort` — `getDay(dateString)`, `upsertDay(...)`, `sumRealizedPnlSince(...)`.
-    Live: `RiskStateRepository`. Backtest: in-memory map seeded from the replay.
+  Live: `RiskStateRepository`. Backtest: in-memory map seeded from the replay.
   - `IOpenPositionsPort` — current open positions + their slots/sides/notional. Live:
-    `PositionRepository.findOpen...`. Backtest: the simulated book.
+  `PositionRepository.findOpen...`. Backtest: the simulated book.
   - `IReservationLedgerPort` — the §3 in-memory ledger (same impl live and backtest; it is
-    already pure in-memory state).
+  already pure in-memory state).
   - `IInstrumentPort` — step/min-notional/tick for sizing (§8). Live: `instruments` table.
-    Backtest: replayed `instruments` snapshot.
+  Backtest: replayed `instruments` snapshot.
 - **Reservation ids** are minted from a deterministic seed in backtest
-  (`${eventId}:${slot}`) so a replay produces byte-identical ledgers; live may use the same
-  scheme (no UUID/RNG needed — `eventId` is already unique per trigger).
+(`${eventId}:${slot}`) so a replay produces byte-identical ledgers; live may use the same
+scheme (no UUID/RNG needed — `eventId` is already unique per trigger).
 
 **Read via I/O only at the orchestrator boundary, then passed in:** the orchestrator loads
 open positions and risk-state rows and hands them to the gate; the gate never reaches into
@@ -386,15 +380,15 @@ Then constrained, in order, against the `instruments` row (via `IInstrumentPort`
 
 1. **Step rounding** — `qty` rounded **down** to `step_size` (never round up exposure).
 2. **Min-notional** — if `qty * price < min_notional`, the trade is **skipped/rejected**,
-   not bumped up (bumping would exceed the risk budget). Reuses
+  not bumped up (bumping would exceed the risk budget). Reuses
    `SkipReasonEnum.MOVE_OUT_OF_BAND`-style handling at the orchestrator, or a dedicated
    reject if it reaches the gate — locked as a **pre-gate orchestrator check** producing a
    decision with the existing below-min reason rather than a new enum value.
 3. **Max leverage 3×** — required margin = `notional / leverage`; if implied leverage
-   `> 3`, clamp `notional` so `leverage ≤ 3`. Isolated margin by default for live
+  `> 3`, clamp `notional` so `leverage ≤ 3`. Isolated margin by default for live
    (overview locked decision); cross only with a documented reason.
 4. **Funding adjustment (§ funding filter):** if funding is unfavourable and
-   `abs(funding_rate) ≥ funding_rate_suppress_threshold`, **halve** `notional` (and `qty`)
+  `abs(funding_rate) ≥ funding_rate_suppress_threshold`, **halve** `notional` (and `qty`)
    before step-rounding; if `funding_rate_annualized > 30%`, **suppress** entirely
    (`FUNDING_SUPPRESSED`). The 30% and the 50%-cut are `riskConsts` named constants.
 
@@ -406,7 +400,7 @@ clamped size, the gate either tightens the stop within the allowed buffer
 
 The sizing output is the `IIntentSizing` the orchestrator puts on `IOrderIntent`; it is
 logged per trade and stamped onto `positions` entry-time columns (`signal_score_at_entry`,
-`slippage_model_pct`, etc.) by M5/M6. **`riskPerTradePct` and `allocatedCapital` are new
+`slippage_model_pct`, etc.) by M5/M6. `**riskPerTradePct` and `allocatedCapital` are new
 config/params** — see Conflicts.
 
 ## M4 contract handoff
@@ -416,14 +410,11 @@ config/params** — see Conflicts.
 New enums under `src/enum/` (barreled from `src/enum/index.ts`), carrying **no money** —
 these are persisted vocabulary read by M8/M9/M10:
 
-1. **`RejectReasonEnum`** — the full list in §1 (22 values). Drives `decisions.reason` for
-   gate rejections.
-2. **`RiskOutcomeEnum`** — `{ APPROVED='approved', REJECTED='rejected' }`.
-3. **`OrderIntentActionEnum`** — `{ OPEN='open', ADD='add', REDUCE='reduce',
-   CLOSE='close', FLATTEN='flatten' }`. Note it extends `SignalActionEnum`'s order verbs
-   with `FLATTEN` (kill-switch) and drops `SKIP` (a skip never becomes an intent). Keep it
-   a **separate enum**, not a reuse of `SignalActionEnum`, because the two vocabularies
-   diverge (`skip` vs `flatten`).
+1. `**RejectReasonEnum`** — the full list in §1 (22 values). Drives `decisions.reason` for
+  gate rejections.
+2. `**RiskOutcomeEnum**` — `{ APPROVED='approved', REJECTED='rejected' }`.
+3. `**OrderIntentActionEnum**` — `{ OPEN='open', ADD='add', REDUCE='reduce',
+  CLOSE='close', FLATTEN='flatten' }`. Note it extends` SignalActionEnum`'s order verbs  with` FLATTEN`(kill-switch) and drops`SKIP`(a skip never becomes an intent). Keep it  a **separate enum**, not a reuse of`SignalActionEnum`, because the two vocabularies  diverge (`skip`vs`flatten`).
 
 No new shared interfaces, schema, or utils. `IOrderIntent` / `IRiskDecision` /
 `IExposureReservation` / the ports are **engine-internal** (they carry `MoneyValue`).
@@ -434,30 +425,30 @@ are candidates — see Conflicts; flagged, not silently added).
 ### `bot-engine-nestjs` builds in `apps/engine/src/risk`
 
 1. `risk/interface/` (+ barrel): `IOrderIntent.ts`, `IIntentSizing.ts`, `IRiskDecision.ts`,
-   `IExposureReservation.ts`, and the ports `IRiskStatePort.ts`, `IOpenPositionsPort.ts`,
+  `IExposureReservation.ts`, and the ports `IRiskStatePort.ts`, `IOpenPositionsPort.ts`,
    `IReservationLedgerPort.ts`, `IInstrumentPort.ts`. Engine-internal; `MoneyValue`-typed.
 2. `risk/const/riskConsts.ts` (+ barrel): `RESERVATION_TTL_MS`, the stress OI/funding/
-   spread/depth thresholds, tier spread ceilings (0.15/0.30/0.50%), `MAX_LEVERAGE=3`,
+  spread/depth thresholds, tier spread ceilings (0.15/0.30/0.50%), `MAX_LEVERAGE=3`,
    `FUNDING_SIZE_CUT_FACTOR=0.5`, `FUNDING_ANNUALIZED_SUPPRESS_PCT=30`,
    `COOLDOWN_AFTER_LOSS_MS`. No inline magic numbers.
 3. `risk/service/RiskGateService.ts` — the synchronous gate (§1, §2): the ordered check
-   pipeline, slot assignment (§4), reservation ledger ops (§3), returns `IRiskDecision`.
+  pipeline, slot assignment (§4), reservation ledger ops (§3), returns `IRiskDecision`.
 4. `risk/service/PositionSizer.ts` — pure decimal sizing (§8).
 5. `risk/service/StressHaltEvaluator.ts` — §6 (snapshot fields → halt verdict, overrides
-   ADX), updates `risk_state.is_halted/halt_reason`.
+  ADX), updates `risk_state.is_halted/halt_reason`.
 6. `risk/service/SlotManager.ts` (or fold into the gate) — §4 assignment + same-bar buffer
-   flush. The **bar-window buffer + flush** wiring sits in the orchestrator
+  flush. The **bar-window buffer + flush** wiring sits in the orchestrator
    (`StrategyService`) since it owns the per-event entry point and the clock.
 7. `RiskStateRepository` gains `sumRealizedPnlSince(dateString)` and an `upsertDay(...)`
-   (idempotent on `uq_risk_state_date`).
+  (idempotent on `uq_risk_state_date`).
 8. `StrategyService` change: after `evaluate()`, build `IOrderIntent` (with `PositionSizer`
-   output), buffer correlated opens by bar (§4) or call the gate for idiosyncratic /
+  output), buffer correlated opens by bar (§4) or call the gate for idiosyncratic /
    de-risking intents, stamp the gate verdict onto the snapshot (`position_slot`,
    `active_positions_count` now real), persist the decision with `action` +
    `reason=rejectReason`, and on approval emit `order.intent.approved` (the M5 seam — no
    exchange call in M4).
 9. QA: unit-pin the 3-slot cap and the BTC-correlated-1 cap independently; the same-bar
-   single-candidate selection (N correlated candidates → 1 approved, N-1
+  single-candidate selection (N correlated candidates → 1 approved, N-1
    `btc_correlated_not_best_candidate`); each overtrading cap blocks the (N+1)th; daily &
    weekly windows on synthetic `risk_state`; SL-inside-liquidation; mandatory time-stop
    reject; stress overrides ADX; reduce/close pass through the gate and release
@@ -467,7 +458,7 @@ are candidates — see Conflicts; flagged, not silently added).
 ## Conflicts surfaced (for the main session)
 
 1. **Sizing inputs absent from params/config.** The brief's sizing formula needs
-   `riskPerTradePct` (default 1%) and an `allocatedCapital` figure; neither is in
+  `riskPerTradePct` (default 1%) and an `allocatedCapital` figure; neither is in
    `strategyParamsSchema` nor a known config key. The daily/weekly loss limits and the
    per-coin / same-direction exposure caps are likewise unspecified as concrete numbers.
    **Resolution proposed:** these are **operator-level risk config**, not strategy params
@@ -477,16 +468,16 @@ are candidates — see Conflicts; flagged, not silently added).
    per-version-comparable, they go in `strategyParamsSchema` (shared) — that is a schema
    change requiring `bot-shared-maintainer`. **Flagged for the main session to choose**
    before the engine builds sizing.
-2. **`risk_state` has no `weekly` or `consecutive_loss` column.** Resolved without a
-   migration: weekly is a rolling sum over daily rows (§5); consecutive-loss is derived
+2. `**risk_state` has no `weekly` or `consecutive_loss` column.** Resolved without a
+  migration: weekly is a rolling sum over daily rows (§5); consecutive-loss is derived
    from today's closed `positions`. No schema change needed. Flagged so reviewers do not
    expect new columns.
-3. **`decisions.reason` mixes two vocabularies** (`SkipReasonEnum` from M3,
-   `RejectReasonEnum` from M4) in one `varchar`. Resolved by `decisions.action`
+3. `**decisions.reason` mixes two vocabularies** (`SkipReasonEnum` from M3,
+  `RejectReasonEnum` from M4) in one `varchar`. Resolved by `decisions.action`
    disambiguating: `skip`→skip reason, `open/add/...`+`outcome rejected`→reject reason.
    No column split. Flagged so M8 queries group on `(action, reason)`.
 4. **Tier-3-not-validated gate needs a "validated" flag.** `TIER3_NOT_VALIDATED` requires
-   knowing whether the active version is validated for tier-3 live. No such field exists
+  knowing whether the active version is validated for tier-3 live. No such field exists
    on `strategy_versions` (`status ∈ draft|active|archived`). **Resolution proposed:** gate
    on a `riskConsts`/config allow-list of validated tier-3 version ids for live, defaulting
    to empty (reject all tier-3 live). Flagged — a `strategy_versions` column is an
@@ -495,38 +486,39 @@ are candidates — see Conflicts; flagged, not silently added).
 ## Alternatives considered
 
 - **Risk subscribes to a `signal.produced` event (async).** Rejected: the gate's verdict
-  must land on the same `decisions` row, same-bar candidate selection needs ordered
-  batching, and replay must be deterministic — an event bus adds non-deterministic delivery
-  ordering. Synchronous in-process call (§1).
+must land on the same `decisions` row, same-bar candidate selection needs ordered
+batching, and replay must be deterministic — an event bus adds non-deterministic delivery
+ordering. Synchronous in-process call (§1).
 - **Reservation ledger as a DB table.** Rejected: reservations are transient (seconds), the
-  durable exposure source is `risk_state` + open `positions`, the process is single-instance
-  always-on, and a restart must reconcile against the exchange (M6) not replay stale
-  reservations. In-memory with an M6 reconciliation backstop (§3).
+durable exposure source is `risk_state` + open `positions`, the process is single-instance
+always-on, and a restart must reconcile against the exchange (M6) not replay stale
+reservations. In-memory with an M6 reconciliation backstop (§3).
 - **Decide the single BTC-correlated candidate from one event in isolation.** Rejected:
-  signals arrive per-symbol-per-bar; you cannot know the best of the bar from one event.
-  Buffer correlated opens per bar window, flush at the deterministic bar-close boundary
-  sorted by `signalScore` (§4).
+signals arrive per-symbol-per-bar; you cannot know the best of the bar from one event.
+Buffer correlated opens per bar window, flush at the deterministic bar-close boundary
+sorted by `signalScore` (§4).
 - **ISO calendar week for the weekly limit.** Rejected: the brief locks *rolling 7 days*;
-  ISO weeks reset mid-streak. Rolling sum over the last 7 daily `risk_state` rows (§5).
+ISO weeks reset mid-streak. Rolling sum over the last 7 daily `risk_state` rows (§5).
 - **Trust ADX's "ranging" label for mean-reversion eligibility.** Rejected outright: ADX
-  lags and labels a market "ranging" exactly as a trend initiates. The M1 fast-stress
-  inputs lead it and override it (§6).
+lags and labels a market "ranging" exactly as a trend initiates. The M1 fast-stress
+inputs lead it and override it (§6).
 - **Read the clock / DB inside the gate's decision logic.** Rejected: destroys
-  determinism and breaks "same code live and backtest." `nowMs` and all state arrive via
-  injected ports (§7), exactly as the strategy gets `nowMs` (ADR 0003 §1).
+determinism and breaks "same code live and backtest." `nowMs` and all state arrive via
+injected ports (§7), exactly as the strategy gets `nowMs` (ADR 0003 §1).
 - **Bump sub-min-notional sizes up to the exchange minimum.** Rejected: that exceeds the
-  per-trade risk budget. Below-min trades are skipped, not inflated (§8).
+per-trade risk budget. Below-min trades are skipped, not inflated (§8).
 - **Put `IOrderIntent` / `IRiskDecision` in `packages/shared`.** Rejected: they carry
-  `MoneyValue`; the dashboard reads the persisted `decisions`/`positions` rows. Only the
-  money-free vocabulary enums go shared — same rule as ADR 0003 §2.
+`MoneyValue`; the dashboard reads the persisted `decisions`/`positions` rows. Only the
+money-free vocabulary enums go shared — same rule as ADR 0003 §2.
 
 ## See also
 
 - `docs/plans/M4-risk-management.md` (milestone brief), `docs/plans/00-overview.md`
-  (locked decisions, data model, RiskModule paragraph)
+(locked decisions, data model, RiskModule paragraph)
 - `docs/architecture/adr/0003-strategy-engine.md` (`ISignal`/`IProposedExit`/`nowMs` the
-  gate consumes), `0002-persistence-and-data-model.md` (`risk_state`/`positions`/`decisions`
-  schema + shared-enum placement rule), `0001-exchange-and-market-data.md`
-  (`IVolatilityDetectedEvent` fast-stress fields, closed-bar rule)
+gate consumes), `0002-persistence-and-data-model.md` (`risk_state`/`positions`/`decisions`
+schema + shared-enum placement rule), `0001-exchange-and-market-data.md`
+(`IVolatilityDetectedEvent` fast-stress fields, closed-bar rule)
 - `docs/best-practices/code-conventions.md` (constants placement, enums, control flow,
-  decimal money — authoritative)
+decimal money — authoritative)
+

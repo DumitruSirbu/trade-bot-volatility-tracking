@@ -19,9 +19,8 @@
  *   [F] DELETE FROM agent_run_history — no DELETE grant.
  *   [G] UPDATE agent_run_history — no UPDATE grant.
  *
- * Start Postgres:
- *   DB_PORT=5433 docker compose up -d postgres
- *   pnpm --filter @bot/engine migration:run
+ * Start the dedicated test Postgres (globalSetup applies migrations automatically):
+ *   docker compose --profile test up -d --wait postgres-test
  *
  * Set agent_writer password to sentinel:
  *   psql -c "ALTER ROLE agent_writer PASSWORD 'CHANGE_ME_BEFORE_PROD';"
@@ -29,26 +28,17 @@
 
 import { Client } from 'pg';
 
+import { buildRoleDbUrl, getTestDbUrl } from '../support/testDataSource';
+
 // ---------------------------------------------------------------------------
 // Connection config
 // ---------------------------------------------------------------------------
 
-const ENGINE_DB_URL = process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
+const ENGINE_DB_URL = getTestDbUrl();
 
 const AGENT_WRITER_PASSWORD = process.env['AGENT_WRITER_PASSWORD'] ?? 'CHANGE_ME_BEFORE_PROD';
 
-function buildAgentWriterUrl(engineUrl: string, password: string): string {
-    try {
-        const url = new URL(engineUrl);
-        url.username = 'agent_writer';
-        url.password = encodeURIComponent(password);
-        return url.toString();
-    } catch {
-        return `postgresql://agent_writer:${encodeURIComponent(password)}@localhost:5433/trade_bot`;
-    }
-}
-
-const AGENT_WRITER_URL = buildAgentWriterUrl(ENGINE_DB_URL, AGENT_WRITER_PASSWORD);
+const AGENT_WRITER_URL = buildRoleDbUrl('agent_writer', AGENT_WRITER_PASSWORD);
 
 // ---------------------------------------------------------------------------
 // SQLSTATE constants
@@ -117,7 +107,7 @@ describe('agent_writer role — bypass attempts (M13 W6a vector 4, ADR 0036 §5)
             suiteSkipped = true;
             console.warn(
                 '[SKIPPED] agent-writer-bypass.adversarial: no live Postgres reachable or agent_writer role missing.\n' +
-                    'Start Postgres with `DB_PORT=5433 docker compose up -d postgres`, run migrations, ' +
+                    'Start the test DB with `docker compose --profile test up -d --wait postgres-test`, run migrations, ' +
                     'and set: psql -c "ALTER ROLE agent_writer PASSWORD \'CHANGE_ME_BEFORE_PROD\';"',
             );
             return;

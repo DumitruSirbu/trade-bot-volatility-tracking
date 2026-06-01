@@ -20,12 +20,20 @@
  *
  * Requires live Postgres. Uses an ISOLATED DataSource (separate from shared
  * testDataSource) so the revert cannot leave other suites in a broken schema.
+ *
+ * DB: this suite reverts ALL migrations, so it MUST run against the dedicated
+ * MIGRATION_TEST_DB_URL (a separate DB in the port-6900 test container) and
+ * never the soak DB. The suite aborts if MIGRATION_TEST_DB_URL is not set.
+ *   docker compose --profile test up -d --wait postgres-test
  */
 
 import { DataSource } from 'typeorm';
 import { buildDataSourceOptions } from '../../src/database/dataSourceOptions';
 
-const TEST_DB_URL = process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
+const TEST_DB_URL = process.env['MIGRATION_TEST_DB_URL'];
+if (!TEST_DB_URL) {
+    throw new Error('MIGRATION_TEST_DB_URL is not set — cannot run destructive round-trip. ' + 'Run: docker compose --profile test up -d --wait postgres-test');
+}
 
 // Indexes created by CreateSchema that down() MUST drop.
 const INDEXES_CREATED_BY_UP = [
@@ -77,9 +85,16 @@ async function revertAllMigrations(dataSource: DataSource): Promise<void> {
     const maxIterations = 50;
 
     for (let i = 0; i < maxIterations; i += 1) {
-        const executed = (await dataSource.query(`SELECT COUNT(*)::int AS count FROM migrations`)) as { count: number }[];
+        let count = 0;
+        try {
+            const rows = (await dataSource.query(`SELECT COUNT(*)::int AS count FROM migrations`)) as { count: number }[];
+            count = rows[0]!.count;
+        } catch {
+            // migrations table does not exist — schema is already empty
+            return;
+        }
 
-        if (executed[0]!.count === 0) {
+        if (count === 0) {
             return;
         }
 

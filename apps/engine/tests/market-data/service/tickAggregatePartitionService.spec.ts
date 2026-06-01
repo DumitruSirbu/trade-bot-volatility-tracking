@@ -10,8 +10,8 @@
  *   2. Idempotent — re-running creates no duplicates and does not throw.
  *   3. Creates missing partitions when they do not yet exist.
  *
- * Requires a live Postgres (port 5433) with migrations applied — same
- * harness as the adversarial partition spec.
+ * Requires a live Postgres (the dedicated port-6900 test container) with
+ * migrations applied — same harness as the adversarial partition spec.
  */
 
 import { DataSource } from 'typeorm';

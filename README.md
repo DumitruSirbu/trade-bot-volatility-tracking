@@ -185,19 +185,41 @@ pnpm --filter @bot/engine run auth revoke --jti <jti>
 
 ## Running Tests
 
-Unit + integration tests (uses in-memory SQLite or Docker Postgres):
+### One-time test DB setup
+
+Engine integration tests run against a dedicated ephemeral Postgres on port **6900** — never the soak DB on 5433. Before running tests for the first time:
+
+```bash
+# 1. Create your test env file (gitignored)
+cp .env.test.example .env.test
+
+# 2. Open .env.test and set a password — must match in all three places:
+#    TEST_DB_PASSWORD=your_password
+#    TEST_DATABASE_URL=postgresql://trade_bot_test:your_password@localhost:6900/trade_bot_test
+#    MIGRATION_TEST_DB_URL=postgresql://trade_bot_test:your_password@localhost:6900/trade_bot_migration_test
+```
+
+The test container starts automatically when you run engine tests (`pretest` hook). You can also start it manually:
+
+```bash
+docker compose --profile test up -d --wait postgres-test
+```
+
+### Running tests
+
+All workspaces:
 
 ```bash
 pnpm test
 ```
 
-Engine tests only:
+Engine only (auto-starts the test DB container):
 
 ```bash
 pnpm --filter @bot/engine test
 ```
 
-Shared package tests:
+Shared package:
 
 ```bash
 pnpm --filter @bot/shared test
@@ -265,7 +287,7 @@ See `docs/runbooks/ci-gates.md` §6 for details.
 
 ## Project Status
 
-**Completed Milestones (M0–M10):**
+**Completed Milestones (M0–M14):**
 
 - **M0 — Foundation & scaffolding:** pnpm + Docker + NestJS 11 + TypeORM + event bus + halt-flag + money helpers.
 - **M1 — Exchange & market data:** ccxt/Binance testnet, MarketDataModule, VWAP-deviation trigger, 251 tests, zero blockers.
@@ -279,13 +301,12 @@ See `docs/runbooks/ci-gates.md` §6 for details.
 - **M8 — Strategy versioning & comparison:** Walk-forward OOS splits, paired circular-block bootstrap (n=10k, 95% CI), 12-criterion promotion gate, CLI suite, 264 focused tests, zero blockers.
 - **M9 — Observability & control:** Startup schema validation, auth guard HS256 + revoked_jti, HaltController + audit, ReadApi REST, socket.io gateway, TelegramAlertSink, 1,967 tests passing, zero blockers.
 - **M10 — Dashboard:** Vite + React 19 + TanStack Query, login endpoint (bootstrap-secret), read views + real-time WS, kill-switch UI, containerisation + nginx, 2,289 tests passing, zero blockers.
+- **M11a — Local soak hardening (PAPER mode):** Engine-local paper trading against live Binance market data, HMAC-chained audit, deterministic fill simulator, mode-aware key-permission assertion, boot-mode history chain, ~2,384 tests passing, zero blockers.
+- **M12 — Analysis MCP:** Read-only MCP server + analysis data layer, `mcp_reader` DB role, 5 tools (performance, compare, positions, decisions, backtest), structural boundary (compile + lint + runtime guards), 97 analysis + 100 MCP tests, zero blockers.
+- **M13 — Agentic weekly loop:** Unattended weekly agent (Vercel AI SDK over MCP), drafts strategy config rows, runs comparison backtests, writes human-review report; `agent_writer` SDF, LLM egress allowlist, 259 agent tests, zero blockers.
+- **M14 — CI review gate:** 10 deterministic gates (install, build, typecheck, lint, format, test with Postgres, boundary, SCA, lockfile integrity, exchange-dep pinning), supply-chain exception process, production bug caught (M13 agent DB-write path), 2,555 engine tests green, zero blockers.
 
-**Current (M11+):**
-
-- **M11 — Go-live hardening:** Binance demo trading migration, auth rotation, multi-instance scaling, external reverse-proxy, full topology validation.
-- M12 — Analysis MCP (read-only agentic analysis)
-- M13 — Agentic weekly loop (strategy proposal + backtest feedback)
-- M14 — CI review gate (automated checks)
+**Next: M15 — Cloud go-live** (gates: M11a PAPER soak exit criteria + TESTNET pre-M15 drill green; live deployment $500 tier-1 symbols isolated margin).
 
 See `docs/plans/` for detailed breakdowns per milestone.
 

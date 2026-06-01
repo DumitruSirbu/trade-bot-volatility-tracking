@@ -166,6 +166,13 @@ function buildMocks() {
         findOpenMembership: jest.fn().mockResolvedValue({ symbol: 'BTCUSDT' }), // in universe
     };
 
+    // M11a W2: ShadowStrategyOrchestratorService is injected into StrategyService
+    // as a strictly additive collaborator; the unit suite stubs it to a no-op so
+    // existing assertions on the active-path semantics remain unaffected.
+    const shadowOrchestrator = {
+        runShadows: jest.fn().mockResolvedValue(undefined),
+    };
+
     return {
         config,
         strategyVersions,
@@ -180,6 +187,7 @@ function buildMocks() {
         openPositionsPort,
         instrumentPort,
         universe,
+        shadowOrchestrator,
     };
 }
 
@@ -197,6 +205,7 @@ function buildService(mocks: ReturnType<typeof buildMocks>): StrategyService {
         mocks.openPositionsPort as any,
         mocks.instrumentPort as any,
         mocks.universe as any,
+        mocks.shadowOrchestrator as any,
     );
 }
 

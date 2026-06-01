@@ -1,23 +1,25 @@
 /**
  * Shared test DataSource bootstrap.
  *
- * Builds a DataSource from the test DB URL (port 5433), runs migrations
- * idempotently (TypeORM skips already-applied ones), and exposes helpers
- * used by every DB-backed integration suite so each suite does NOT manage
- * its own connection or migration lifecycle.
+ * Builds a DataSource from TEST_DATABASE_URL (the dedicated port-6900 test
+ * container), runs migrations idempotently, and exposes helpers used by every
+ * DB-backed integration suite so each suite does NOT manage its own connection
+ * or migration lifecycle.
  *
  * Isolation contract:
- *   - Schema (tables) is created once by running migrations in beforeAll.
+ *   - Schema (tables) is created once in globalSetup via runMigrations.
  *   - Row-level cleanup is the responsibility of each suite via DELETE WHERE
  *     symbol = TEST_SYMBOL (or equivalent) in afterAll/afterEach.
- *   - The migration round-trip suite uses its OWN isolated DataSource pointed
- *     at a separate DB schema so it never pollutes the shared schema.
+ *   - The migration round-trip suite uses MIGRATION_TEST_DB_URL (a separate
+ *     DB in the same container) so destructive reverts never touch the shared
+ *     integration schema.
  */
 
 import { DataSource } from 'typeorm';
 import { buildDataSourceOptions } from '../../src/database/dataSourceOptions';
+import { assertTestDb, buildRoleDbUrl, getTestDbUrl } from './assertTestDb';
 
-export const TEST_DB_URL = process.env['DATABASE_URL'] ?? 'postgresql://trade_bot:change_me_local_only@localhost:5433/trade_bot';
+export { getTestDbUrl, buildRoleDbUrl, assertTestDb };
 
 let sharedDataSource: DataSource | null = null;
 
@@ -30,12 +32,10 @@ export async function getTestDataSource(): Promise<DataSource> {
         return sharedDataSource;
     }
 
-    const options = buildDataSourceOptions(TEST_DB_URL);
+    const options = buildDataSourceOptions(getTestDbUrl());
     const dataSource = new DataSource(options);
 
     await dataSource.initialize();
-    // runMigrations is idempotent: TypeORM tracks applied migrations in the
-    // migrations table and skips any that have already run.
     await dataSource.runMigrations({ transaction: 'each' });
 
     sharedDataSource = dataSource;

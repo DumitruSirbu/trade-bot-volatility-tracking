@@ -1,11 +1,106 @@
 import * as React from 'react';
+import { HelpCircle } from 'lucide-react';
 import type { IDecisionView } from '@bot/shared';
 import { SignalActionEnum } from '@bot/shared';
 
 import { ApiError } from '@/api/apiClient';
-import { useDecisionsRecent } from '@/api/queries';
+import { useDecisionsRecent, type IDecisionFilters, DECISIONS_PAGE_SIZE } from '@/api/queries';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { MultiSelect, type IMultiSelectOption } from '@/components/ui/multi-select';
+import { Tooltip } from '@/components/ui/tooltip';
+
+const COLUMN_COUNT = 6;
+
+const ACTION_OPTIONS: IMultiSelectOption[] = [
+    { value: SignalActionEnum.OPEN, label: 'OPEN' },
+    { value: SignalActionEnum.ADD, label: 'ADD' },
+    { value: SignalActionEnum.REDUCE, label: 'REDUCE' },
+    { value: SignalActionEnum.CLOSE, label: 'CLOSE' },
+    { value: SignalActionEnum.SKIP, label: 'SKIP' },
+];
+
+const TooltipEntry = ({ term, def }: { term: string; def: string }): React.ReactElement => (
+    <div className="mt-1 leading-snug">
+        <span className="font-semibold text-popover-foreground">{term}</span>
+        <span className="text-muted-foreground"> — {def}</span>
+    </div>
+);
+
+const TooltipSection = ({ title }: { title: string }): React.ReactElement => (
+    <div className="mt-2 mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">{title}</div>
+);
+
+const COLUMN_HELP: Record<string, React.ReactNode> = {
+    time: (
+        <div>
+            <p>When the VWAP-deviation trigger fired for this symbol, in UTC.</p>
+            <p className="mt-1 text-muted-foreground">Format: YYYY-MM-DD HH:MM:SS</p>
+        </div>
+    ),
+    symbol: (
+        <div>
+            <p>The Binance USDT-M perpetual futures pair that triggered the strategy evaluation.</p>
+            <p className="mt-1 text-muted-foreground">Format: BASE/USDT:USDT (e.g. BTC/USDT:USDT)</p>
+        </div>
+    ),
+    action: (
+        <div>
+            <p>Strategy decision for this trigger:</p>
+            <TooltipEntry term="OPEN" def="New position opened" />
+            <TooltipEntry term="ADD" def="Scaled into an existing position" />
+            <TooltipEntry term="REDUCE" def="Partial exit — position size reduced" />
+            <TooltipEntry term="CLOSE" def="Full exit — position closed entirely" />
+            <TooltipEntry term="SKIP" def="No trade taken; see Reason for why" />
+        </div>
+    ),
+    flowType: (
+        <div>
+            <p>Market flow classification that drove the signal:</p>
+            <TooltipEntry term="vwap_deviation_long_bias" def="Price dumped below VWAP — long mean-reversion candidate" />
+            <TooltipEntry term="vwap_deviation_short_bias" def="Price pumped above VWAP — short mean-reversion candidate" />
+        </div>
+    ),
+    score: (
+        <div>
+            <p>Signal confidence score (0–100). Higher = stronger conviction.</p>
+            <p className="mt-1 text-muted-foreground">
+                Combines VWAP deviation sigma, open-interest trend, and funding pressure. Shown as&nbsp;
+                <span className="font-semibold text-popover-foreground">—</span> when any required input is missing.
+            </p>
+        </div>
+    ),
+    reason: (
+        <div>
+            <p>Why the action was taken or skipped:</p>
+            <TooltipSection title="Skip reasons" />
+            <TooltipEntry term="baseline_no_trade" def="Strategy v0 baseline always skips; expected outcome" />
+            <TooltipEntry term="regime_suppressed" def="Market regime not favorable for this flow type" />
+            <TooltipEntry term="market_stress" def="Elevated volatility or spread beyond threshold" />
+            <TooltipEntry term="no_exhaustion_confirmation" def="Momentum not confirmed as exhausted" />
+            <TooltipEntry term="out_of_scope" def="Symbol outside the configured trade universe" />
+            <TooltipEntry term="idiosyncratic_trap" def="Move is symbol-specific, not market-wide; fade risk high" />
+            <TooltipEntry term="flow_routed_skip" def="Flow-type router decided to skip this signal" />
+            <TooltipEntry term="low_signal_score" def="Score below the minimum threshold" />
+            <TooltipEntry term="funding_cost_too_high" def="Funding rate makes the position uneconomical" />
+            <TooltipEntry term="move_out_of_band" def="Price move too large to be a mean-reversion candidate" />
+            <TooltipEntry term="oi_unavailable" def="Open-interest data unavailable for this symbol" />
+            <TooltipSection title="Risk gate reject reasons" />
+            <TooltipEntry term="global_halt" def="Engine-wide halt active (operator, loss limit, or rate-limit)" />
+            <TooltipEntry term="max_positions_reached" def="3-slot position cap reached" />
+            <TooltipEntry term="spread_too_wide" def="Bid/ask spread exceeds the allowed threshold" />
+            <TooltipEntry term="funding_suppressed" def="Funding rate too high to open" />
+            <TooltipEntry term="cooldown_active" def="Symbol closed recently; cooldown period active" />
+            <TooltipEntry term="daily_loss_limit" def="Daily loss cap reached; no new opens until tomorrow" />
+            <TooltipEntry term="weekly_loss_limit" def="7-day rolling loss cap reached" />
+            <TooltipEntry term="consecutive_loss_halt" def="Multiple consecutive losses triggered safety halt" />
+            <TooltipEntry term="max_trades_per_symbol_per_day" def="Per-symbol daily trade cap reached" />
+            <TooltipEntry term="same_direction_exposure_cap" def="Too much total exposure in the same direction" />
+            <TooltipEntry term="sl_outside_liquidation" def="Stop-loss would be beyond liquidation price" />
+            <TooltipEntry term="reconciling_hold" def="Position reconciliation in progress; no new trades" />
+        </div>
+    ),
+};
 
 const actionVariant = (action: SignalActionEnum): 'success' | 'warning' | 'secondary' | 'destructive' => {
     switch (action) {
@@ -32,84 +127,189 @@ const formatTimestamp = (iso: string): string => {
     return new Date(parsed).toISOString().replace('T', ' ').slice(0, 19);
 };
 
-const DecisionRow = ({ decision }: { decision: IDecisionView }): React.ReactElement => (
-    <li className="flex items-start gap-3 border-b py-2 last:border-b-0">
-        <span className="w-44 shrink-0 font-mono text-xs text-muted-foreground">{formatTimestamp(decision.occurredAt)}</span>
-        <span className="w-24 shrink-0 font-medium">{decision.symbol}</span>
-        <Badge variant={actionVariant(decision.action)}>{decision.action.toUpperCase()}</Badge>
-        <span className="w-40 shrink-0 text-xs text-muted-foreground">{decision.flowType}</span>
-        <span className="w-20 shrink-0 text-right font-mono text-xs">{decision.signalScore ?? '—'}</span>
-        <span className="flex-1 truncate text-sm text-muted-foreground" title={decision.reason ?? undefined}>
-            {decision.reason ?? '—'}
-        </span>
-    </li>
-);
+// When exactly one filter value is selected the engine does the filtering;
+// when several are selected we fetch unfiltered and narrow client-side on the
+// loaded page (the engine accepts a single value per filter — MVP scope).
+const toServerFilter = (selected: string[]): string | undefined => (selected.length === 1 ? selected[0] : undefined);
 
-interface IPage {
-    cursor: string | null;
+const applyClientFilter = (rows: IDecisionView[], selectedActions: string[], selectedSymbols: string[]): IDecisionView[] => {
+    const actionSet = new Set(selectedActions);
+    const symbolSet = new Set(selectedSymbols);
+
+    return rows.filter((row) => {
+        const actionOk = actionSet.size < 2 || actionSet.has(row.action);
+        const symbolOk = symbolSet.size < 2 || symbolSet.has(row.symbol);
+
+        return actionOk && symbolOk;
+    });
+};
+
+interface IColumnHeaderProps {
+    label: string;
+    help: React.ReactNode;
+    tooltipClassName?: string;
+    align?: 'left' | 'right';
+    firstColumn?: boolean;
 }
 
-export const DecisionsFeed = (): React.ReactElement => {
-    const [pages, setPages] = React.useState<IPage[]>([{ cursor: null }]);
-
-    const handleReset = React.useCallback(() => setPages([{ cursor: null }]), []);
+const ColumnHeader = ({ label, help, tooltipClassName, align = 'left', firstColumn = false }: IColumnHeaderProps): React.ReactElement => {
+    const leftPadding = firstColumn ? 'pl-4' : '';
+    const textAlign = align === 'right' ? 'text-right' : 'text-left';
 
     return (
-        <div className="flex flex-col gap-2">
-            <div className="flex justify-end">
-                <Button size="sm" variant="ghost" onClick={handleReset} disabled={pages.length === 1}>
-                    Reset
-                </Button>
-            </div>
-            <ul className="flex flex-col">
-                {pages.map((page, idx) => (
-                    <DecisionsPage
-                        key={page.cursor ?? 'first'}
-                        cursor={page.cursor}
-                        isLast={idx === pages.length - 1}
-                        onLoadMore={(next) => setPages((p) => [...p, { cursor: next }])}
-                    />
-                ))}
-            </ul>
-        </div>
+        <th className={`py-3 pr-6 ${leftPadding} ${textAlign} text-xs font-semibold uppercase tracking-wide text-muted-foreground whitespace-nowrap`}>
+            <span className={`inline-flex items-center gap-1 ${align === 'right' ? 'justify-end' : ''}`}>
+                {label}
+                <Tooltip content={help} className={tooltipClassName}>
+                    <HelpCircle className="h-3.5 w-3.5 cursor-help text-muted-foreground/60" aria-label={`${label} column help`} />
+                </Tooltip>
+            </span>
+        </th>
     );
 };
 
-interface IPageProps {
-    cursor: string | null;
-    isLast: boolean;
-    onLoadMore: (nextCursor: string) => void;
-}
-
-const LoadMoreCell = ({ nextCursor, onLoadMore }: { nextCursor: string; onLoadMore: (next: string) => void }): React.ReactElement => (
-    <li className="flex justify-center py-3">
-        <Button size="sm" variant="outline" onClick={() => onLoadMore(nextCursor)}>
-            Load more
-        </Button>
-    </li>
+const DecisionRow = ({ decision }: { decision: IDecisionView }): React.ReactElement => (
+    <tr className="border-b last:border-b-0 hover:bg-muted/30 transition-colors">
+        <td className="py-3 pr-6 pl-4 font-mono text-xs text-muted-foreground whitespace-nowrap">{formatTimestamp(decision.occurredAt)}</td>
+        <td className="py-3 pr-6 font-medium text-sm whitespace-nowrap">{decision.symbol}</td>
+        <td className="py-3 pr-6">
+            <Badge variant={actionVariant(decision.action)}>{decision.action.toUpperCase()}</Badge>
+        </td>
+        <td className="py-3 pr-6 text-xs text-muted-foreground whitespace-nowrap">{decision.flowType}</td>
+        <td className="py-3 pr-6 text-right font-mono text-xs tabular-nums">{decision.signalScore ?? '—'}</td>
+        <td className="py-3 text-sm text-muted-foreground max-w-xs truncate" title={decision.reason ?? undefined}>
+            {decision.reason ?? '—'}
+        </td>
+    </tr>
 );
 
-const DecisionsPage = ({ cursor, isLast, onLoadMore }: IPageProps): React.ReactElement => {
-    const { data, isLoading, isError, error } = useDecisionsRecent(cursor);
+const MessageRow = ({ children, tone = 'muted' }: { children: React.ReactNode; tone?: 'muted' | 'destructive' }): React.ReactElement => (
+    <tr>
+        <td colSpan={COLUMN_COUNT} className={`py-6 text-center text-sm ${tone === 'destructive' ? 'text-destructive' : 'text-muted-foreground'}`}>
+            {children}
+        </td>
+    </tr>
+);
 
-    if (isLoading) {
-        return <li className="py-4 text-center text-sm text-muted-foreground">Loading decisions…</li>;
-    }
+export const DecisionsFeed = (): React.ReactElement => {
+    const [selectedActions, setSelectedActions] = React.useState<string[]>([]);
+    const [selectedSymbols, setSelectedSymbols] = React.useState<string[]>([]);
+    // Cursor stack: index 0 is page 1 (null cursor). The last entry is the
+    // cursor used to fetch the page currently on screen.
+    const [cursorStack, setCursorStack] = React.useState<(string | null)[]>([null]);
 
-    if (isError) {
-        return <li className="py-4 text-center text-sm text-destructive">{error instanceof ApiError ? error.message : 'Failed to load decisions.'}</li>;
-    }
+    const resetToFirstPage = React.useCallback(() => setCursorStack([null]), []);
 
-    if (data === undefined || data.items.length === 0) {
-        return <li className="py-4 text-center text-sm text-muted-foreground">No decisions recorded.</li>;
-    }
+    const handleActionChange = React.useCallback(
+        (next: string[]) => {
+            setSelectedActions(next);
+            resetToFirstPage();
+        },
+        [resetToFirstPage],
+    );
+
+    const handleSymbolChange = React.useCallback(
+        (next: string[]) => {
+            setSelectedSymbols(next);
+            resetToFirstPage();
+        },
+        [resetToFirstPage],
+    );
+
+    const currentCursor = cursorStack[cursorStack.length - 1];
+    const pageNumber = cursorStack.length;
+
+    const filters: IDecisionFilters = React.useMemo(
+        () => ({ action: toServerFilter(selectedActions), symbol: toServerFilter(selectedSymbols) }),
+        [selectedActions, selectedSymbols],
+    );
+
+    const { data, isLoading, isError, error } = useDecisionsRecent(currentCursor, filters);
+
+    const loadedItems = data?.items ?? [];
+    const visibleItems = applyClientFilter(loadedItems, selectedActions, selectedSymbols);
+    const isClientFilterActive = selectedActions.length > 1 || selectedSymbols.length > 1;
+
+    const symbolOptions = React.useMemo<IMultiSelectOption[]>(() => {
+        const fromPage = loadedItems.map((item) => item.symbol);
+        const unique = Array.from(new Set([...selectedSymbols, ...fromPage])).sort();
+
+        return unique.map((symbol) => ({ value: symbol, label: symbol }));
+    }, [loadedItems, selectedSymbols]);
+
+    const hasNextPage = data?.nextCursor != null;
+
+    const goNext = React.useCallback((): void => {
+        if (data?.nextCursor != null) {
+            setCursorStack((stack) => [...stack, data.nextCursor]);
+        }
+    }, [data?.nextCursor]);
+
+    const goPrevious = React.useCallback((): void => {
+        setCursorStack((stack) => (stack.length > 1 ? stack.slice(0, -1) : stack));
+    }, []);
 
     return (
-        <>
-            {data.items.map((decision) => (
-                <DecisionRow key={decision.id} decision={decision} />
-            ))}
-            {isLast && data.nextCursor !== null && <LoadMoreCell nextCursor={data.nextCursor} onLoadMore={onLoadMore} />}
-        </>
+        <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+                <MultiSelect label="Action" options={ACTION_OPTIONS} selected={selectedActions} onChange={handleActionChange} />
+                <MultiSelect
+                    label="Symbol"
+                    options={symbolOptions}
+                    selected={selectedSymbols}
+                    onChange={handleSymbolChange}
+                    searchable
+                    emptyText="No symbols on this page"
+                />
+                <span className="ml-auto text-xs text-muted-foreground">Page size: {data?.pageSize ?? DECISIONS_PAGE_SIZE}</span>
+            </div>
+            {isClientFilterActive && !isLoading && (
+                <div className="text-xs text-muted-foreground bg-muted/40 rounded px-3 py-1.5 border">
+                    Multiple values selected — filtering the current page only. Results on other pages are not included.
+                </div>
+            )}
+            <div className="overflow-x-auto rounded-md border">
+                <table className="w-full text-sm">
+                    <thead>
+                        <tr className="border-b bg-muted/50">
+                            <ColumnHeader label="Time" help={COLUMN_HELP.time} firstColumn />
+                            <ColumnHeader label="Symbol" help={COLUMN_HELP.symbol} />
+                            <ColumnHeader label="Action" help={COLUMN_HELP.action} />
+                            <ColumnHeader label="Flow Type" help={COLUMN_HELP.flowType} />
+                            <ColumnHeader label="Score" help={COLUMN_HELP.score} align="right" />
+                            <ColumnHeader label="Reason" help={COLUMN_HELP.reason} tooltipClassName="w-80" />
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {isLoading && <MessageRow>Loading decisions…</MessageRow>}
+                        {isError && !isLoading && (
+                            <MessageRow tone="destructive">{error instanceof ApiError ? error.message : 'Failed to load decisions.'}</MessageRow>
+                        )}
+                        {!isLoading && !isError && visibleItems.length === 0 && (
+                            <MessageRow>
+                                {isClientFilterActive
+                                    ? 'No matches on this page — results are filtered client-side from the current page only. Try advancing pages or reducing your filter selection.'
+                                    : 'No decisions match the current filters.'}
+                            </MessageRow>
+                        )}
+                        {!isLoading && !isError && visibleItems.map((decision) => <DecisionRow key={decision.id} decision={decision} />)}
+                    </tbody>
+                </table>
+            </div>
+            <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">
+                    Page {pageNumber}
+                    {hasNextPage ? ` of ~${pageNumber + 1}+` : ` of ${pageNumber}`}
+                </span>
+                <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={goPrevious} disabled={pageNumber === 1 || isLoading}>
+                        Previous
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={goNext} disabled={!hasNextPage || isLoading}>
+                        Next
+                    </Button>
+                </div>
+            </div>
+        </div>
     );
 };

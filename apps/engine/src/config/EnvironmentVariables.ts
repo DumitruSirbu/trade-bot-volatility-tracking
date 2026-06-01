@@ -3,6 +3,7 @@ import { Transform } from 'class-transformer';
 import { IsBoolean, IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
 
 import { ExecutionModeEnum, LogLevelEnum, NodeEnvEnum } from './enum';
+import { IsFiveFieldCron } from './IsFiveFieldCron';
 
 // Validated shape of the process environment. Every required var here aborts
 // startup if missing/invalid (see AppConfigModule's fail-fast validateEnv hook).
@@ -213,4 +214,36 @@ export class EnvironmentVariables {
     @IsInt()
     @Min(60_000)
     PAPER_NULLITY_PROBE_BACKOFF_MAX_MS: number = 3_600_000;
+
+    // M17 — automated daily DB backup (local disk, 3-deep retention). The
+    // directory the engine writes dumps to; its value differs by run context
+    // (compose container → /var/backups/trade-bot, host dev → ./backups). A
+    // sensible host-dev default keeps `cp .env.example .env` working, but the
+    // value must always be a non-empty string. NO committed secret.
+    @IsString()
+    @IsNotEmpty()
+    DB_BACKUP_DIR: string = './backups';
+
+    // M17 — feature flag. Only the exact string 'true' (case-insensitive)
+    // enables the scheduler; any typo / empty / missing value collapses to
+    // false (safety-first default), so test/CI never spawns pg_dump unless an
+    // operator explicitly opts in. Mirrors the EXCHANGE_TESTNET defensive parse.
+    @Transform(({ value }) => String(value).toLowerCase().trim() === 'true')
+    @IsBoolean()
+    DB_BACKUP_ENABLED: boolean = false;
+
+    // M17 — daily dump schedule. Standard 5-field cron, interpreted in UTC by
+    // the scheduler. Default 03:00 UTC is offset from the 00:00 PnL summary and
+    // the overnight partition crons (low contention for a read-only dump). A
+    // malformed cron aborts startup via the fail-fast validateEnv (review H1).
+    @IsString()
+    @IsFiveFieldCron()
+    DB_BACKUP_CRON: string = '0 3 * * *';
+
+    // M17 — number of dumps to keep on disk (current + previous). Must be at
+    // least 1; a non-positive value aborts startup.
+    @Transform(({ value }) => Number.parseInt(String(value), 10))
+    @IsInt()
+    @Min(1)
+    DB_BACKUP_RETENTION: number = 3;
 }

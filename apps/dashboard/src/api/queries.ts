@@ -33,11 +33,24 @@ const STALE_GUTTER_MS = 1_000;
 const STALE_TIME_CLOSED_MS = 60_000;
 const STALE_TIME_DECISIONS_PAGE_MS = 60_000;
 
+// Server-side page size for cursor-paginated decision reads. The engine
+// defaults to this when `pageSize` is omitted; the dashboard sends it
+// explicitly so the rendered "Page size: N" label cannot drift from reality.
+export const DECISIONS_PAGE_SIZE = 100;
+
+// Filters accepted by GET /v1/decisions. Each is a single value: when the
+// operator multi-selects, the caller decides whether to send one value
+// server-side and filter the rest client-side (see DecisionsFeed).
+export interface IDecisionFilters {
+    action?: string;
+    symbol?: string;
+}
+
 export const queryKeys = {
     positionsOpen: () => ['positions', 'open'] as const,
     positionsClosed: (cursor: string | null) => ['positions', 'closed', cursor] as const,
     positionsClosedPrefix: () => ['positions', 'closed'] as const,
-    decisionsRecent: (cursor: string | null) => ['decisions', 'recent', cursor] as const,
+    decisionsRecent: (cursor: string | null, filters: IDecisionFilters = {}) => ['decisions', 'recent', cursor, filters] as const,
     decisionsRecentPrefix: () => ['decisions', 'recent'] as const,
     accountEquity: () => ['account', 'equity'] as const,
     riskState: () => ['risk', 'state'] as const,
@@ -52,6 +65,26 @@ const withCursor = (path: string, cursor: string | null): string => {
     const separator = path.includes('?') ? '&' : '?';
 
     return `${path}${separator}cursor=${encodeURIComponent(cursor)}`;
+};
+
+const buildDecisionsPath = (cursor: string | null, filters: IDecisionFilters): string => {
+    const params = new URLSearchParams();
+
+    params.set('pageSize', String(DECISIONS_PAGE_SIZE));
+
+    if (cursor !== null) {
+        params.set('cursor', cursor);
+    }
+
+    if (filters.action !== undefined && filters.action.length > 0) {
+        params.set('action', filters.action);
+    }
+
+    if (filters.symbol !== undefined && filters.symbol.length > 0) {
+        params.set('symbol', filters.symbol);
+    }
+
+    return `${READ_API_PATHS.decisionsRecent}?${params.toString()}`;
 };
 
 // W3 seam: live WS handlers should call queryClient.setQueryData against
@@ -81,13 +114,13 @@ export const usePositionsClosed = (cursor: string | null = null): UseQueryResult
     });
 };
 
-export const useDecisionsRecent = (cursor: string | null = null): UseQueryResult<IPaginated<IDecisionView>> => {
+export const useDecisionsRecent = (cursor: string | null = null, filters: IDecisionFilters = {}): UseQueryResult<IPaginated<IDecisionView>> => {
     const { isAuthenticated } = useAuth();
     const isFirstPage = cursor === null;
 
     return useQuery({
-        queryKey: queryKeys.decisionsRecent(cursor),
-        queryFn: ({ signal }) => apiClient.get<IPaginated<IDecisionView>>(withCursor(READ_API_PATHS.decisionsRecent, cursor), { signal }),
+        queryKey: queryKeys.decisionsRecent(cursor, filters),
+        queryFn: ({ signal }) => apiClient.get<IPaginated<IDecisionView>>(buildDecisionsPath(cursor, filters), { signal }),
         refetchInterval: isFirstPage ? POLL_INTERVAL_DECISIONS_MS : false,
         staleTime: isFirstPage ? POLL_INTERVAL_DECISIONS_MS - STALE_GUTTER_MS : STALE_TIME_DECISIONS_PAGE_MS,
         enabled: isAuthenticated,

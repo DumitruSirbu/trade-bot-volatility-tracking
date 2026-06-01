@@ -1,8 +1,10 @@
 // M13 W2.A — Vercel AI Gateway client wrapper (execution plan §W2.4).
 //
 // Wraps the AI SDK's `generateObject` with:
-//   - Env-driven gateway configuration (AI_GATEWAY_URL, AI_GATEWAY_API_KEY,
-//     AI_GATEWAY_MAX_USD_PER_RUN — all REQUIRED).
+//   - Env-driven provider selection:
+//       ANTHROPIC_API_KEY set → use @ai-sdk/anthropic directly (no Vercel account needed)
+//       otherwise           → use Vercel AI Gateway (AI_GATEWAY_URL + AI_GATEWAY_API_KEY)
+//   - AI_GATEWAY_MAX_USD_PER_RUN — required in both modes (cost cap).
 //   - A primary/fallback model pair (opus -> sonnet) with a single retry.
 //   - A per-instance cumulative cost cap. The cap is enforced against
 //     `cumulative + estimated`; when an actual cost arrives via
@@ -11,10 +13,11 @@
 //     passed straight through to `generateObject`.
 //
 // Cost note: the AI Gateway returns a per-generation `cost` field on
-// `providerMetadata.gateway` for served generations. If absent (provider
-// quirk or stubbed response) we fall back to a fixed per-call estimate so the
-// cap continues to bind. Operators tune the estimate via env if needed.
+// `providerMetadata.gateway` for served generations. If absent (direct
+// Anthropic path or provider quirk) we fall back to a fixed per-call estimate
+// so the cap continues to bind.
 
+import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGateway, generateObject, type LanguageModel } from 'ai';
 import type { ZodType } from 'zod';
 
@@ -27,10 +30,20 @@ export type IEnvLike = Readonly<Record<string, string | undefined>>;
 
 declare const process: { readonly env: IEnvLike };
 
-const MODEL_IDS = {
+// Gateway model IDs use the `provider/model` prefix; direct Anthropic IDs do not.
+const GATEWAY_MODEL_IDS = {
     opus: 'anthropic/claude-opus-4-7',
     sonnet: 'anthropic/claude-sonnet-4-5',
 } as const;
+
+const DIRECT_MODEL_IDS = {
+    opus: 'claude-opus-4-7',
+    sonnet: 'claude-sonnet-4-6',
+} as const;
+
+// MODEL_IDS kept for backwards-compat: persisted in agent_run_history.model_id.
+// Always references the gateway form so existing rows remain consistent.
+const MODEL_IDS = GATEWAY_MODEL_IDS;
 
 /**
  * Default model id stamped onto `agent_run_history.model_id` when the caller
@@ -100,11 +113,9 @@ export interface IAiGatewayClientOptions {
     readonly estimatedUsdPerCall?: number;
 }
 
-interface IResolvedConfig {
-    readonly gatewayUrl: string;
-    readonly apiKey: string;
-    readonly maxUsdPerRun: number;
-}
+type IResolvedConfig =
+    | { readonly mode: 'gateway'; readonly gatewayUrl: string; readonly apiKey: string; readonly maxUsdPerRun: number }
+    | { readonly mode: 'direct'; readonly anthropicApiKey: string; readonly maxUsdPerRun: number };
 
 export class AiGatewayClient {
     private readonly config: IResolvedConfig;
@@ -121,7 +132,7 @@ export class AiGatewayClient {
 
     constructor(options: IAiGatewayClientOptions = {}) {
         this.config = resolveConfig(options.env ?? process.env);
-        this.modelFactory = options.modelFactory ?? buildDefaultModelFactory(this.config);
+        this.modelFactory = options.modelFactory ?? buildModelFactory(this.config);
         this.generate = options.generate ?? (generateObject as unknown as GenerateObjectFn);
         this.estimatedUsdPerCall = options.estimatedUsdPerCall ?? ESTIMATED_USD_PER_CALL_FALLBACK;
     }
@@ -146,7 +157,8 @@ export class AiGatewayClient {
     }
 
     private async callModel<T>(hint: ModelHintKey, opts: IGenerateStructuredOptions<T>): Promise<IGenerateStructuredResult<T>> {
-        const model = this.modelFactory(MODEL_IDS[hint]);
+        const ids = this.config.mode === 'direct' ? DIRECT_MODEL_IDS : GATEWAY_MODEL_IDS;
+        const model = this.modelFactory(ids[hint]);
         const result = await this.generate({
             model,
             schema: opts.schema as ZodType<unknown>,
@@ -185,14 +197,20 @@ export class AiGatewayClient {
 }
 
 function resolveConfig(env: IEnvLike): IResolvedConfig {
-    const gatewayUrl = readRequired(env, 'AI_GATEWAY_URL');
-    const apiKey = readRequired(env, 'AI_GATEWAY_API_KEY');
     const capRaw = readRequired(env, 'AI_GATEWAY_MAX_USD_PER_RUN');
     const maxUsdPerRun = Number.parseFloat(capRaw);
     if (!Number.isFinite(maxUsdPerRun) || maxUsdPerRun <= 0) {
         throw new MissingGatewayConfigError('AI_GATEWAY_MAX_USD_PER_RUN');
     }
-    return { gatewayUrl, apiKey, maxUsdPerRun };
+
+    const anthropicApiKey = env['ANTHROPIC_API_KEY'];
+    if (anthropicApiKey !== undefined && anthropicApiKey !== '') {
+        return { mode: 'direct', anthropicApiKey, maxUsdPerRun };
+    }
+
+    const gatewayUrl = readRequired(env, 'AI_GATEWAY_URL');
+    const apiKey = readRequired(env, 'AI_GATEWAY_API_KEY');
+    return { mode: 'gateway', gatewayUrl, apiKey, maxUsdPerRun };
 }
 
 function readRequired(env: IEnvLike, name: string): string {
@@ -203,7 +221,11 @@ function readRequired(env: IEnvLike, name: string): string {
     return value;
 }
 
-function buildDefaultModelFactory(config: IResolvedConfig): LanguageModelFactory {
+function buildModelFactory(config: IResolvedConfig): LanguageModelFactory {
+    if (config.mode === 'direct') {
+        const provider = createAnthropic({ apiKey: config.anthropicApiKey });
+        return (modelId: string) => provider(modelId);
+    }
     const provider = createGateway({ baseURL: config.gatewayUrl, apiKey: config.apiKey });
     return (modelId: string) => provider(modelId);
 }

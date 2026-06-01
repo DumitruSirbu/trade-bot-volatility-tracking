@@ -1,7 +1,7 @@
 import { CoinTierEnum } from '@bot/shared';
 
 // Universe sizing (M1 task: top 200–300 by 24h volume with a liquidity floor).
-export const UNIVERSE_MAX_SYMBOLS = 50;
+export const UNIVERSE_MAX_SYMBOLS = 100;
 
 // Stablecoins by base symbol — excluded from the universe regardless of volume rank.
 // These have negligible VWAP deviation and produce zero signal; tracking them wastes

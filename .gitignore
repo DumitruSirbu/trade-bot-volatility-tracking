@@ -26,6 +26,10 @@ lerna-debug.log*
 .env.local
 .env.*.local
 !.env.example
+# The .env.*.local glob does NOT match .env.test, so ignore it explicitly while
+# keeping the committed template (.env.test.example) tracked.
+.env.test
+!.env.test.example
 
 # OS
 .DS_Store
@@ -48,9 +52,19 @@ coverage/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 
+# RTK — local filter overrides
+.rtk/
+
 # Misc
 *.tgz
 .pnpm-debug.log
 
 # Backtest artefact output
 apps/engine/var/
+
+# M17 — automated DB-backup output (default DB_BACKUP_DIR=./backups). Never
+# commit gzipped dumps; they contain soak calibration data.
+backups/
+
+# Manual rule-9 pg_dump backups (root). Never commit — soak calibration data.
+backup_*.sql.gz

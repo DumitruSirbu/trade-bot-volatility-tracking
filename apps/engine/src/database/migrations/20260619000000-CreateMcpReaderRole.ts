@@ -40,7 +40,12 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 // GRANTs SELECT explicitly. The grant-policy block in
 // `docs/architecture/data-model.md` is the human-facing reminder.
 //
-// Reversible: down() revokes all grants and DROPs the role.
+// Reversible: down() revokes all grants and DROPs the role. NOTE: mcp_reader
+// is a CLUSTER-GLOBAL role. In a multi-DB cluster (CI/test runs trade_bot,
+// trade_bot_test and trade_bot_migration_test in one cluster) a single-DB
+// revert cannot DROP the role while a sibling DB still grants to it — in that
+// case the role is retained (revert tolerates dependent_objects_still_exist)
+// rather than aborting the revert chain.
 
 const MCP_READER_TABLES = [
     'candles',
@@ -145,7 +150,19 @@ export class CreateMcpReaderRole20260619000000 implements MigrationInterface {
             DO $$
             BEGIN
                 IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mcp_reader') THEN
-                    DROP ROLE "mcp_reader";
+                    -- Clears every privilege granted to mcp_reader in the CURRENT database
+                    -- (the manual per-table REVOKEs above are a subset of this).
+                    DROP OWNED BY "mcp_reader";
+
+                    -- mcp_reader is a CLUSTER-GLOBAL role. In the multi-DB CI/test cluster
+                    -- (trade_bot, trade_bot_test, trade_bot_migration_test) a single-DB
+                    -- revert cannot drop it while a sibling DB still grants to it. Tolerate
+                    -- that so the revert chain never aborts.
+                    BEGIN
+                        DROP ROLE "mcp_reader";
+                    EXCEPTION WHEN dependent_objects_still_exist THEN
+                        RAISE NOTICE 'mcp_reader retained: still referenced by another database in the cluster';
+                    END;
                 END IF;
             END
             $$;

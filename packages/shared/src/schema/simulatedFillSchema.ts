@@ -19,4 +19,6 @@ export const simulatedFillSchema = z.object({
     lowFidelity: z.boolean(),
     closedAt: z.string().trim().min(1).datetime().nullable(),
     closeReason: z.enum(['sl', 'tp', 'force_close', 'intra_bar_stop']).nullable(),
+    feeUsdtEntry: z.string().trim().min(1).nullable().optional(),
+    feeUsdtExit: z.string().trim().min(1).nullable().optional(),
 }) satisfies z.ZodType<ISimulatedFill>;

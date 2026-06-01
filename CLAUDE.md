@@ -36,6 +36,21 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 5. **Shared types live in `packages/shared/`** — route changes through `bot-shared-maintainer`.
 6. Quality over speed. Smaller iterations even if there are more of them. Cycle review/fix until zero blockers, zero highs, majority of mediums resolved.
 7. **Branch naming (MUST):** every branch is `<type>/<branch-name>` — `feat/` (feature), `fix/` (bug fix), `hotfix/` (urgent prod fix), `chore/` (core/tooling/docs/deps). Lowercase kebab-case name. `main` is the only unprefixed branch. See `docs/runbooks/ci-gates.md` §0.
+8. **NEVER destroy database data or postgres infrastructure (ABSOLUTE).** The following are permanently forbidden without explicit written confirmation from the user in the same conversation turn:
+   - `docker compose down -v` or any command with the `-v` / `--volumes` flag
+   - `docker volume rm` targeting any postgres volume
+   - `DROP TABLE`, `TRUNCATE`, `DELETE FROM` on any production/soak table without a WHERE clause scoped to test data
+   - Dropping or recreating the `postgres` compose service or its named volume
+   - Any migration rollback (`revert`) in a live/paper soak environment
+   - `docker system prune` or `docker image prune` — these can remove the postgres image and named volumes depending on flags
+   The soak DB accumulates irreplaceable calibration data. Loss cannot be undone. When in doubt, do nothing and ask.
+9. **Always take a dump before any DB or postgres container operation.** Before executing ANY of the following, stop and run a full `pg_dump` first — then show the user the dump path and ask for explicit confirmation to proceed:
+   - Any `docker compose` command that restarts or recreates the `postgres` service
+   - Any schema migration (up or revert)
+   - Any bulk `DELETE` or `UPDATE` touching more than one row
+   - Any change to `docker-compose.yml` that affects the `postgres` service or its volumes
+   Dump command: `docker compose exec postgres pg_dump -U trade_bot trade_bot | gzip > backup_$(date +%Y%m%d_%H%M).sql.gz`
+   Do not proceed with the operation until the user confirms the dump completed and they are ready.
 
 ## Trading-safety invariants (non-negotiable)
 
@@ -53,70 +68,155 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 
 - Overview + locked decisions → `docs/plans/00-overview.md`
 - Milestone plans → `docs/plans/`
-- Architecture → `docs/architecture/`
+- **Milestone outcomes (test counts, bugs caught, reviewer rounds, ADR context)** → `docs/milestone-log.md` *(read when debugging regressions or understanding why something was built a certain way)*
+- Architecture decisions → `docs/architecture/adr/`
 - Code conventions (AUTHORITATIVE) → `docs/best-practices/code-conventions.md`
 - Dev + QA cycle rules (AUTHORITATIVE) → `docs/best-practices/dev-qa-cycle.md`
 - Testing → `docs/best-practices/testing.md`
+- Tech debt + deferred items → `docs/tech-debt.md` *(HIGH = go-live blockers, MEDIUM = feature gaps, LOW = cosmetic/refactor)*
 - Work log → `docs/work-log.md`
 
 ## Status
 
-**M0 — Foundation & scaffolding:** DONE (pnpm + Docker + NestJS 11 + TypeORM + event bus + halt-flag + money helpers).
-**M1 — Exchange & market data:** DONE (ccxt/Binance testnet, MarketDataModule, shared trigger, 251 tests, 3 review rounds, zero blockers).
-**M2 — Persistence & data model:** DONE (13 domain-owned entities, 353 tests, reversible migrations + 90-day partitioned tick_aggregates, 2 review rounds + post-review smoke test, zero blockers, testnet persistence verified).
-**M3 — Strategy engine:** DONE (4 pure strategies v0–v3, registry + config-selected active version, orchestrator stamps flow_type/signal_score/event_id and writes dry-run decisions, 202 tests, 2 review rounds, zero blockers).
-**M4 — Risk management:** DONE (bypass-proof risk gate, 3-slot position model, BTC-correlated single-candidate, daily/weekly loss windows, in-flight reservation ledger, funding suppression + flow rules, spread/liquidity/SL/time-stop/cooldown/market-stress/consecutive-loss/overtrading/OI/tier-3 gates, isolated-margin default, model-divergence kill-switch, 700 tests, 2 review rounds, zero blockers).
-**M5 — Execution (testnet):** DONE (ExecutionModule idempotent open/add/reduce/close, marketable-limit-IOC + post-only-maker + reduce-market policies, partial-fill FillAccumulator, LocalProtectiveMonitor arm/disarm, ccxt testnet, EXECUTION_MODE config, 898 tests, 5 review rounds, zero blockers, testnet smoke runbook documented).
-**M5.5 — Adversarial backfill (pre-M6 hardening):** DONE (2 production bugs fixed in M2, 172 adversarial tests added across M1–M5, dev-qa-cycle validation complete, 3-round strict cap held, zero blockers/highs at close, pre-M6 deferred items catalogued).
-**M6 — Position management & reconciliation:** DONE (8 implementation waves: W0 shared-contracts, W1 state-machine + transition, W1.5 PENDING_OPEN entry, W2 SubscriptionRetainer, W3 LocalProtectiveMonitor eval, W4a+W4b reconciliation + 6 drift cases + mutation primitives, W5 funding + PnL, W6 PositionInstrumentor, W7 account_snapshots, W8 crash-recovery 10-phase pipeline; 5 review rounds with 8 contract adjudications; 78 adversarial tests zero production bugs; 851 focused tests; R5 clean all reviewers; zero blockers/highs at close; 3 pre-go-live blockers flagged for M7 validation; deferred reservation-linkage + cosmetic reshims + tech-debt to M7 W0).
-**M7 — Backtesting & performance:** DONE (BacktestRunnerService replay loop, fill simulator (tier slippage, latency, missed-fill, intra-bar stops), PnL/funding/slippage accounting, Sharpe/Sortino/drawdown metrics, IBacktestReport; 82 new tests, 2 review rounds, zero blockers/highs at close; known approximations catalogued: lowFidelity always true until depth-aware extension, entry notional for funding, force_close exit reason pending enum, cross-symbol metrics zeroed, missing BTC bars marked low-fidelity; deferred OrderPolicyRouter injection + eventAnchoredVwap reconstruction + force_close enum + depth-aware extension to M8).
-**M8 — Strategy versioning & comparison:** DONE (walk-forward OOS splits, paired circular-block bootstrap n=10k 95% CI on expectancy-per-unit-risk, per-regime metrics, 12-criterion all-of promotion gate ADR 0019; direction decision v0/v1/v2/v3 now data-backed; W0 force_close enum + M2 partition rollover, W1 OrderPolicyRouter injection, W2–7 stats/comparison/promotion/CLI, W8 59 adversarial tests; 3 fix rounds 0 blockers/highs at close; ADRs 0016–0019; 264 focused tests + 254+ adversarial/integration green; deferred M8 W6.1 criteria 7+9, M9 depth-aware, M11 eventAnchoredVwap + CLI auth).
-**M9 — Observability, control & read API:** DONE (startup schema-validation gate, auth guard HS256 bearer + revoked_jti, HaltController + rate-limit + audit, ReadApi REST + CursorCodec, socket.io /live gateway, TelegramAlertSink outbound-only, DailyPnlSummaryScheduler, RiskListeners; ADRs 0020–0025; 3 review rounds zero blockers/highs; live-app 10h smoke caught 2 production bugs + schema validation fixes; zero crashes; deferred M11 follow-ups catalogued).
-**M10 — Dashboard:** DONE (Vite + React 19 + TS + Tailwind v4 + shadcn/ui + TanStack Query; login endpoint (ADR 0027 bootstrap-secret), LoginRateLimiter + auth, read views + WS cache merge, kill-switch UI; engine Dockerfile + nginx containerisation; ADRs 0026–0027; 3 review rounds zero blockers/highs; live-app compose smoke verified login + real-time updates + XFF spoof rejection; 170 engine tests + 152 dashboard tests green).
-**M11a — Local soak hardening (PAPER mode):** R0–R4 + live-smoke fix wave DONE. Complete end-to-end PAPER-mode implementation (engine-local paper-trading against live Binance market data + M7 `FillSimulatorCore` + deterministic HMAC-seeded fills + boot-mode HMAC chain + nullity probe + reconciliation). **PAPER architecture (D1–D17):** shared ports (`IExecutionClient`, `IAccountStateSource`) + typed DTOs (`IOrder` with `reduceOnly`, `IPosition`, `IBalance`, `IFunding`, `IOrderIntent`); engine adapters (`CcxtExecutionClient`, `ExchangeAccountStateSource`, `PaperExecutionClient`, `PaperAccountStateSource`); `paper-mode/` module with capability guard, persistence (9 tables: `paper_account_state`, `paper_account_state_history`, `paper_account_state_meta`, `paper_account_snapshots`, `paper_simulator_idempotency`, `paper_state_audit`, `paper_crn_tape`, `boot_mode_history`, `boot_mode_chain_rotations`), HMAC-chained audit, deterministic fill simulator (`StreamingFillAdapter`), drawdown handler, funding service (D4 sign convention), reconciliation adapter (D12 CRITICAL on drift), nullity probe (D13 two-call + capability preflight), mark-price WS bridge (D5 throttled MTM). **Boot-mode-history HMAC chain** (D6 + D7): append-only typed rows, transition matrix with single-use tokens, crypto key subkey per purpose, sequence-numbered HMAC binding to prevent clock-skew attacks. **Mode-aware key-permission assertion** (D8 Fallback Profile LOCKED): PAPER on dedicated zero-balance sub-account with `enableFutures: true` only, gated by D13 probe invariants at boot (zero balance, zero positions, zero open orders, non-empty IP allow-list, non-null trading authority, no transfer permissions). **FillSimulatorCore extracted to shared** (D15, M7 numerical-equivalence regression test green). **Engine-shape execution port** (`IEngineExecutionClient` / `ENGINE_EXECUTION_CLIENT` dispatch token): `ExchangeOrderSubmitter` + `ProtectiveOrderAttacher` env-dispatch to `PaperExecutionClient` under PAPER (compile-time guarantee: no live-order leak via RateLimitPolicyService import guard). **Auth/bootstrap DI cycle fixes:** 3 leaf-module extractions (BootModeHistoryModule, KeyPermissionAssertionService, DerivedKeyService reshuffle). **Test counts:** ~2,384 unit tests green (658 M11a-new adversarial tests across R0–R3 cycles); 12 pre-existing PG-integration suites unaffected (require local Postgres). **Reviewer cycle:** R0 (doc-only) → R1 (3 fix waves, HMAC chains + boot sequence) → R2a (2 fix waves, IAccountStateSource + IExecutionClient ports) → R2b (1 fix wave, paper account state atomic migrations) → R2c (1 fix wave, FillSimulator + funding + MTM) → R2d (1 fix wave, reconciliation paper cases + NullityProbe) → R3 (audit + 11 new tests, module-graph + atomicity + causality + TOST + CRN) → R4 (4 reviewers, 1 consolidated fix wave + 1 shared lowFidelity follow-up) → **post-R4 live-smoke fix wave** (4 CRITICAL bugs: HMAC-chain manager.save() INSERT...RETURNING atomic capture, Binance `/sapi/v1/account/apiRestrictions/ipRestriction` discontinued endpoint dropped, sub-account response-shape defaults corrected, boot alert severity fixed from CRITICAL to INFO) all clean at close. **Blockers/Highs resolved:** R0 D8 endpoint-accessibility blocker (Fallback Profile design locked); R1 3 blockers + 5 highs (boot sequence, HMAC chain, Fallback Profile predicate); R2a 0 blockers + 0 highs; R2b–R2d 0 blockers + 0 highs per sub-wave; R3 audit green; R4 0 blockers + 0 highs; post-smoke: 4 bugs caught + fixed, engine now boots cleanly end-to-end. **Addendum merged into `M11a-local-soak.md`:** W1.1 reworded to PAPER design (D1–D17 locked decisions folded into new "PAPER-mode architecture" section with all anchor IDs preserved); D10 closed-trade counting integrated into "Minimum trade count"; lowFidelity downgrade + M11b gate hardening integrated into "Reduced evaluation gate"; pre-soak sanity step (asymmetric TOST D10) + sample-size pre-flight integrated into W4.4; TESTNET pre-M11b drill section added before exit criteria; Definition of Done updated for PAPER + TESTNET gates; operator runbook step added for IP allow-list verification (Binance UI only). **Addendum file deleted** (R4.2 scribe task complete). **Engine builds clean**, lint-touched-files clean, PAPER boot smoke complete (key-permission PASSED, boot pipeline 9/9, all paper-mode services active, PaperExchangeNullityProbe cycling, zero restarts post-fix). **9–10h soak monitor running,** hourly self-checks, zero unhandled exceptions.
-**Deferred to M15:** M15 gates on (a) PAPER soak passing per `docs/plans/M11a-local-soak.md` soak-exit criteria AND (b) TESTNET pre-M15 drill green (order-lifecycle + reconciliation + rate-limit under burst load); simulator-config-hash real source (sentinel today, R3.1); soak-evaluator wave (CRN tape, TOST calibration, sample-size pre-flight, lowFidelity rankings); `HaltSourceEnum.PAPER_DRAWDOWN` / `PAPER_RECONCILIATION_DRIFT` dedicated values (shared change deferred M15); engine `IExchangeOrderSnapshot` → shared `IOrder` full migration (dual-shape today via D2 + D14 ports).
-**M12 — Analysis MCP:** W0–W6 DONE + post-close live-app smoke (fix wave 6). Read-only MCP server + analysis data layer. W0: workspace structure (`apps/mcp/`, `packages/analysis/`), DB role migration (`mcp_reader` default-read-only, 30s timeout, 5s lock-timeout, SELECT-only on 13 tables), root ESLint boundary rule (forbids `@bot/engine` + relative reaches for `apps/mcp/**` + `packages/analysis/**`). W1: analysis query layer (`DataSourceFactory` pool-3 TLS-strict, 4 query functions, `CursorCodec` pagination with filterHash binding, validation + consts). W3: MCP server (`RuntimeGuard` Layer C boundary scan, `ToolRegistry` write-reject-by-construction, Zod schemas + constants). W4: 5 read-only tools (`get_performance`, `compare_versions`, `list_positions`, `get_decisions`, `run_backtest`); run_backtest spawns engine CLI (abs-path validation, env allowlist, Sema(1), 10-min SIGTERM→SIGKILL, redacted stderr for postgres URLs + Bearer + IPv4/IPv6). **ADRs 0033 + 0034 Accepted-and-shipped:** structural boundary (workspace deps forbid @bot/engine; ESLint + runtime guards defense-in-depth), DB isolation (read-only role + 30s stmt-timeout + 3-conn pool + per-tool query budgets). W5: adversarial QA (34 SQL-injection tests, boundary compile-time spec, DB-role permission integration, DTO boundary, IPv6/JWT/URL redaction). W6: 4 reviewers + 5 fix waves; R1 2 blockers closed fix-wave-1; R2–R5 highs + mediums (security, logic, clean-code). Test counts: @bot/analysis 94 (all green), @bot/mcp 99 (all green), @bot/engine M12-touched 11 (all green); DB-role integration spec conditional on local PG. **Boundary verified at close:** `@bot/mcp` imports only @bot/shared + @bot/analysis; tsc --noEmit rejects @bot/engine; ESLint blocks patterns; runtime guard scans require.cache. Operator runbook: `docs/runbooks/mcp-deployment.md`. **Post-scribe live-app smoke (per `feedback-milestone-app-smoke`) caught 3 production bugs (symbol regex too narrow for CCXT format, getPerformance label fallback masks valid versions, engine onModuleDestroy crashed on rate-limited close()). All 3 fixed in fix wave 6; re-smoke verified end-to-end. Test counts: 97 analysis + 100 MCP + new engine onModuleDestroy spec. `.env.example` gained an MCP section (default MCP_DB_PORT=5433 per host port mapping).** Outstanding mediums deferred (TOCTOU, quoting, rotation, missing index, Math.floor vs round, refactor nits, formatter pass). Zero blockers, zero highs at close.
-**Pre-M15 deferred items** (carried from prior milestone close logs, plus items from M13, M14):
-- M15 Verify LIVE master-account `/sapi/v1/account/apiRestrictions` response shape includes every field the allowlist predicate checks — the M11a live-smoke fix loosened sub-account-only field defaults from true→false; if Binance master-account responses ever omit a field, the predicate would silently pass an unsafe key in LIVE mode. **Rationale:** sub-account and master-account response shapes diverge; live go-live must re-validate Binance docs vs real endpoint.
-- M14.5/M15 LLM review/QA/scribe agents wired into CI on PRs (phase-2, user explicitly deferred per locked scope decision M14; proposed for future pipeline, not shipping in M14).
-- M14+ Coverage-threshold gate (code coverage % bar on coverage reports, non-blocking advisory until baseline defined).
-- M14+ Dependabot/Renovate automation (supply-chain gate can work stand-alone; auto-PR-per-bump when available, future enhancement).
-- M14+ Short-position funding-sign boundary test (optional belt-and-suspenders; funding math verified in M4/M6 but asymmetric position direction not explicitly tested for sign inversion).
-- M11 auth_tokens table confirmed stateless (engine auth is strictly HS256 token verification + revoked_jti in-memory set; no persistent per-user auth state needed; M9 revoked_jti sweep deferred cosmetic).
-- M13+ MCP_ENGINE_CMD realpathSync TOCTOU (spawn block-level symlink race).
-- M13+ GRANT CONNECT identifier quoting (Postgres reserved-word safety).
-- M13+ mcp_reader NOLOGIN-until-rotate (deferred password mgmt policy).
-- M13+ missing index on decisions(position_id, ts) (query perf gate).
-- M13+ windowDays Math.floor vs round (cosmetic quant).
-- M13+ paired test for analysisValidation.ts + BacktestCliArgError own file (test nit).
-- M13+ McpToolErrorKindEnum as proper TS enum (clean-code nit).
-- M13+ control-flow spacing mass edit (~30 spots, formatter pass).
-- M13+ waitForChild/buildRuntime/listPositions function-size refactors (deferred after M12).
-- M11 AuthFailureReasonEnum.BAD_SIGNATURE split (W1.5).
-- M11 BaseRepository uuid-PK widening (cosmetic + scaling).
-- M11 risk_state.updated_at true newer-wins (W2.4 pre-soak blocker, depends TESTNET validation).
-- M11 LiveGateway AppConfigService injection + parser parity test (W2.5).
-- M11 HKDF cursor sub-key derivation (W1.7).
-- M11 revoked_jti TTL prune + age-floor (W1.6).
-- M11 notePragmaticTransition clamps + try-block order + startOfRiskDayMs init + lastTransitionAuditId JSDoc (W2.6).
-- M11 AUTH token TTL comment (W2.8).
-- M11 Cache-Control halt/history endpoints (W2.7).
-- M11 pino-pretty dev-arg fallback (W2.9, engine-side fallback when pretty transport missing at logger init).
-- M11 strategy-comparison UI (walk-forward OOS, bootstrap CIs, per-regime tables, charting, deferred pending depth-aware + lowFidelity depth-aware extension).
-- M13 SDF idempotency pre-check before LLM call (cost optimization; detect week_iso re-fire early).
-- M13 `pickTopSymbols` hardcoded to `['BTCUSDT', 'ETHUSDT', 'SOLUSDT']` (needs engine per-symbol trade-count surface on `IPerformanceByVersionView`).
-- M13 `assertSharedRunConfig` in `runComparisonBacktests` only checks window equality (needs engine `simulatorConfigHash` + `seed` on `IBacktestReport`).
-- M13 6 ADR 0019 promotion-gate criteria NOT_AVAILABLE (5, 7, 8, 9, 10b, 11) — bootstrap CI per-version, slippage robustness, drop-best-5%, stress windows, per-week concentration, regime-target map (all require engine extensions to `IBacktestReport`/`IPerformanceByVersionView`).
-- M13 `verifyBearer` / `runUnderWallclock` / `runBoundaryGuard` function-size extractions (refactor post-M13).
-- M13 arg-count > 2 DTO refactors in agent (code-conventions compliance; composeMarkdown done, other call sites pending).
-- M13 `void param;` suppressions cleanup (3 in runWeeklyLoop + main).
-- M13 ESLint disable noise (5 pragmas in agent) — eliminable via scoped `apps/agent/src/**` override in `eslint.config.js`.
-- M13 pino logger redact paths may need broadening as more sub-objects appear (defense-in-depth for secrets leakage).
-- M13+ Engine auth CLI TTL cap is 900s — weekly agent runs require automated minting OR a separate long-lived-token issuance path. Deferred to a future M14/M15 wave with bearer-rotation cron job.
-- M13+ `AuthFailureReasonEnum.BAD_AUDIENCE` confirmed still relevant — verifier currently uses BAD_SCOPE for audience mismatch (live-smoke gap).
+**Current status:** M17 done, M15 next — full milestone history, test counts, and go-live gates in `docs/milestone-log.md`.
 
-**M13 — Agentic weekly loop:** W0–W6 DONE. Unattended weekly outer-loop agent (Vercel AI SDK, tool-calling over M12 MCP) that analyzes recent active strategy performance, drafts new `strategy_versions` rows (config-param search, `status='draft'` only via SDF), backtests draft vs active, and writes human-reviewable comparison report. **W0:** workspace (`apps/agent/`, @bot/agent deps locked), `agent_writer` role + `draft_strategy_version` SDF + `agent_run_history` table, ESLint boundary (forbids @bot/engine/@bot/analysis/@bot/mcp), compose service. **W1:** MCP HTTP transport (localhost 127.0.0.1-only, bearer-auth), `getHaltState` 6th tool, agent `McpClient` (Zod-validated JSON-RPC), `redactForLlm` egress-allowlist chokepoint (ADR 0037). **W2:** AI SDK loop (Vercel AI Gateway default `anthropic/claude-opus-4-7` + fallback sonnet, `buildPrompt` + `ProposedDraftSchema.strict` + cost-cap enforcement, `buildReport` markdown + JSON with ADR 0019 12-criterion table). **W3:** draft persistence via SDF (idempotency on `parent_version_id + week_iso`), `agentRunHistory` INSERT, `AgentPgClient` (max=2, sentinel-password refusal). **W4:** backtest comparison (two `runBacktest` calls active+draft, `comparisonStats`, `promotionGate` 12-criterion evaluation). **W5:** weekly cron sidecar (ofelia `docker exec`), manual CLI (`--week-iso`, `--dry-run`, `--parent-version-id`), 45-min wallclock cap (SIGTERM→SIGKILL+5s), runbook (`docs/runbooks/agent-weekly-loop.md`). **W6a:** adversarial QA (6 vectors: egress violation, prompt-injection, LLM hallucination, DB-role bypass, MCP transport spoofing, boundary compile/lint/runtime); **W6b:** 4-reviewer parallel (security, logic, clean-code, quant), 6 fix waves, all blockers/highs resolved, majority mediums closed. **ADRs 0035–0038 Accepted-and-shipped:** structural boundary (compile + lint + runtime guards), `agent_writer` SDF (write-impossible-by-construction), LLM egress allowlist (allowlist per ADR 0037, redaction layer before any prompt build), localhost HTTP MCP transport (reuses M9 bearer auth). **Test counts at close:** 259 agent + 102 analysis + 123 MCP + engine regression green. **Boundary verified:** imports-only @bot/shared, tsc rejects @bot/engine/analysis/mcp, ESLint blocks patterns, runtime guard scans require.cache. **Deferred to M14:** SDF idempotency pre-check (cost optimization), pickTopSymbols hardcoded (needs engine per-symbol trade-count surface), assertSharedRunConfig (needs simulatorConfigHash + seed on IBacktestReport), 6 ADR 0019 criteria NOT_AVAILABLE (5,7,8,9,10b,11 — requires engine extensions). **Deferred to pre-M15:** function-size refactors, DTO arg-count, void-param suppressions, ESLint pragmas scope, pino redaction paths. **Smoke result:** Post-scribe live-app smoke (per feedback-milestone-app-smoke) caught 4 production gaps not visible to unit tests: (1) engine token missing `aud` claim → fix W7; (2) bot-mcp Dockerfile + compose service → fix W8; (3) MCP/engine auth-key derivation mismatch → fix W9; (4) mcp_reader missing SELECT on revoked_jti → fix W10; all 4 closed in fix waves 7–10; agent boots end-to-end against the real stack, halt-aware short-circuit fires correctly. Zero blockers, zero highs at close.
+**M17 — Automated daily DB backup (DONE):** In-engine NestJS scheduler (dynamic cron registration, re-entrancy mutex, atomic writes via .tmp→rename, anchored filename + realpath guard against path traversal). Daily UTC pg_dump of soak DB to host-bind-mounted `DB_BACKUP_DIR`, keeps 3 newest `trade_bot_*.sql.gz` dumps, prunes rest. Image carries `postgresql18-client` (Alpine 3.23, v18.4, build-time smoke). Env config validated (5-field cron, @Min 1 retention). CI test job: `DB_BACKUP_ENABLED=false`. 73 specs green. 1 reviewer round: 1 HIGH (fixed), 3 mediums (fixed), 5 clean-code must-fix (fixed). Re-review confirmed all clear, 0 new findings. Bonus fix: postgres-test tmpfs mount corrected to `/var/lib/postgresql` (was wrong directory path for PGDATA). Zero blockers, zero highs at close.
 
-**M14 — CI review gate:** DONE. Deterministic CI gates from scratch (10 jobs: install, build, typecheck, lint, format, test with Postgres service, boundary ADR-spec validation, SCA allowlist-filtered, lockfile single-source, exchange-dep pin+provenance). No LLM agents in CI per locked user scope decision; phase-2 agents deferred. Repo `main` provably green at root level for first time (legacy root-level gates never passed: 22 test failures until real-Postgres migrate-only run surfaced M13 DB-write bug). **Green-up:** `.eslintrc.js` + `globals` + `^_` convention + ignore patterns (killed ~12,220 `no-undef`), `.prettierignore` scope (format gate = CODE only, excludes docs/prose to avoid 5,197-line low-value repad churn; deliberate ADR 0039 §2.2 refinement); `packages/shared` gets `typecheck` script, engine gets `tsconfig.typecheck.json`, prettier formatted 97 files, ~90 lint errors fixed (dead code, require-imports). **Production bug caught:** M13 agent DB-write path broken — `agent_writer` role has `default_transaction_read_only=on`, SDF SET LOCAL fires too late (must SET before any query); every weekly agent write would fail in production. Invisible to mocked unit tests; only full-suite against migrate-only real-Postgres exposed it. Fixed in `AgentPgClient.ts` (explicit SET TRANSACTION READ WRITE) + paired tests. Also fixed 21 migrate-only failures (partition fixtures, stale auth_tokens refs, UUID fixtures, KeyPermission predicates, BACKTEST_ARTEFACT_ROOT path, migration count). **Supply-chain:** `.github/audit-allowlist.json` (empty by design), `.github/exchange-critical-deps.json` (ccxt 4.5.54, decimal.js 10.6.0, pg 8.21.0), `pnpm.auditConfig.ignoreGhsas: []` kept empty (design enforcement), pure modules + 30 CI-gate unit tests (auditAllowlistFilter, exchangeDepPinCheck, ciPaths, runScaGate, runPinGate). **ADRs 0039–0041 Accepted-and-shipped:** gate policy + branch protection (0039), SCA + lockfile integrity + exception process (0040 with §2.2 refinement: ignoreGhsas-empty enforcement), exchange-dep pinning + provenance layer-2 deferred (0041 with §2.4: sha512 binding + advisory attestation non-blocking lookup). **Dep changes:** ccxt `^4.5.54`→`4.5.54` (exact pin), react-router-dom `7.1.5`→`7.15.1` (cleared 4 HIGH advisories). **Test counts:** engine suite 2,555 pass / 0 fail (migrate-only PG, was 22 failing); +30 CI-gate unit tests; agent 261; dashboard 153; all root gates clean (lint, format, typecheck, build, frozen-lockfile). **Review cycle:** 2 rounds. R1: 0 blockers, 2 highs (S-H1 SCA fail-open inverted; S-H2 provenance inert), R2: all four reviewers 0 blockers / 0 highs. **Runbook:** `docs/runbooks/ci-gates.md` (10 jobs, job-name contract, branch-protection payload NOT YET APPLIED, allowlist-rotation + exchange-dep-bump procedures, emergency-revert, Postgres service details, boundary-grep refinement note). Zero blockers, zero highs at close. **Deferred to M14.5/M15:** LLM review/QA/scribe agents in CI (proposed future phase-2), coverage-threshold gate, Dependabot/Renovate automation, short-position funding-sign test (optional belt-and-suspenders), M11 auth_tokens confirmed stateless/no-action, **branch protection MUST be APPLIED by repo owner via runbook payload (NOT YET APPLIED).**
+<!-- rtk-instructions v2 -->
+# RTK (Rust Token Killer) - Token-Optimized Commands
 
-**Next:** **M15 — Cloud go-live** (gates: M11a PAPER soak exit criteria + TESTNET pre-M15 drill green; proof-of-edge tradeable by M8 walk-forward bootstrap; deployed to Binance live $500 tier-1 symbols isolated, zero crashes 7d, ready for scaling post-validation).
+## Golden Rule
+
+**Always prefix commands with `rtk`**. If RTK has a dedicated filter, it uses it. If not, it passes through unchanged. This means RTK is always safe to use.
+
+**Important**: Even in command chains with `&&`, use `rtk`:
+```bash
+# ❌ Wrong
+git add . && git commit -m "msg" && git push
+
+# ✅ Correct
+rtk git add . && rtk git commit -m "msg" && rtk git push
+```
+
+## RTK Commands by Workflow
+
+### Build & Compile (80-90% savings)
+```bash
+rtk cargo build         # Cargo build output
+rtk cargo check         # Cargo check output
+rtk cargo clippy        # Clippy warnings grouped by file (80%)
+rtk tsc                 # TypeScript errors grouped by file/code (83%)
+rtk lint                # ESLint/Biome violations grouped (84%)
+rtk prettier --check    # Files needing format only (70%)
+rtk next build          # Next.js build with route metrics (87%)
+```
+
+### Test (60-99% savings)
+```bash
+rtk cargo test          # Cargo test failures only (90%)
+rtk go test             # Go test failures only (90%)
+rtk jest                # Jest failures only (99.5%)
+rtk vitest              # Vitest failures only (99.5%)
+rtk playwright test     # Playwright failures only (94%)
+rtk pytest              # Python test failures only (90%)
+rtk rake test           # Ruby test failures only (90%)
+rtk rspec               # RSpec test failures only (60%)
+rtk test <cmd>          # Generic test wrapper - failures only
+```
+
+### Git (59-80% savings)
+```bash
+rtk git status          # Compact status
+rtk git log             # Compact log (works with all git flags)
+rtk git diff            # Compact diff (80%)
+rtk git show            # Compact show (80%)
+rtk git add             # Ultra-compact confirmations (59%)
+rtk git commit          # Ultra-compact confirmations (59%)
+rtk git push            # Ultra-compact confirmations
+rtk git pull            # Ultra-compact confirmations
+rtk git branch          # Compact branch list
+rtk git fetch           # Compact fetch
+rtk git stash           # Compact stash
+rtk git worktree        # Compact worktree
+```
+
+Note: Git passthrough works for ALL subcommands, even those not explicitly listed.
+
+### GitHub (26-87% savings)
+```bash
+rtk gh pr view <num>    # Compact PR view (87%)
+rtk gh pr checks        # Compact PR checks (79%)
+rtk gh run list         # Compact workflow runs (82%)
+rtk gh issue list       # Compact issue list (80%)
+rtk gh api              # Compact API responses (26%)
+```
+
+### JavaScript/TypeScript Tooling (70-90% savings)
+```bash
+rtk pnpm list           # Compact dependency tree (70%)
+rtk pnpm outdated       # Compact outdated packages (80%)
+rtk pnpm install        # Compact install output (90%)
+rtk npm run <script>    # Compact npm script output
+rtk npx <cmd>           # Compact npx command output
+rtk prisma              # Prisma without ASCII art (88%)
+```
+
+### Files & Search (60-75% savings)
+```bash
+rtk ls <path>           # Tree format, compact (65%)
+rtk read <file>         # Code reading with filtering (60%)
+rtk grep <pattern>      # Search grouped by file (75%). Format flags (-c, -l, -L, -o, -Z) run raw.
+rtk find <pattern>      # Find grouped by directory (70%)
+```
+
+### Analysis & Debug (70-90% savings)
+```bash
+rtk err <cmd>           # Filter errors only from any command
+rtk log <file>          # Deduplicated logs with counts
+rtk json <file>         # JSON structure without values
+rtk deps                # Dependency overview
+rtk env                 # Environment variables compact
+rtk summary <cmd>       # Smart summary of command output
+rtk diff                # Ultra-compact diffs
+```
+
+### Infrastructure (85% savings)
+```bash
+rtk docker ps           # Compact container list
+rtk docker images       # Compact image list
+rtk docker logs <c>     # Deduplicated logs
+rtk kubectl get         # Compact resource list
+rtk kubectl logs        # Deduplicated pod logs
+```
+
+### Network (65-70% savings)
+```bash
+rtk curl <url>          # Compact HTTP responses (70%)
+rtk wget <url>          # Compact download output (65%)
+```
+
+### Meta Commands
+```bash
+rtk gain                # View token savings statistics
+rtk gain --history      # View command history with savings
+rtk discover            # Analyze Claude Code sessions for missed RTK usage
+rtk proxy <cmd>         # Run command without filtering (for debugging)
+rtk init                # Add RTK instructions to CLAUDE.md
+rtk init --global       # Add RTK to ~/.claude/CLAUDE.md
+```
+
+## Token Savings Overview
+
+| Category | Commands | Typical Savings |
+|----------|----------|-----------------|
+| Tests | vitest, playwright, cargo test | 90-99% |
+| Build | next, tsc, lint, prettier | 70-87% |
+| Git | status, log, diff, add, commit | 59-80% |
+| GitHub | gh pr, gh run, gh issue | 26-87% |
+| Package Managers | pnpm, npm, npx | 70-90% |
+| Files | ls, read, grep, find | 60-75% |
+| Infrastructure | docker, kubectl | 85% |
+| Network | curl, wget | 65-70% |
+
+Overall average: **60-90% token reduction** on common development operations.
+<!-- /rtk-instructions -->

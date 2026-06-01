@@ -270,7 +270,8 @@ describe('HaltService — wasAlreadyHalted flag on IHaltChangedEvent emit', () =
         const captured: IHaltChangedEvent[] = [];
         events.on(HALT_CHANGED_EVENT, (e: IHaltChangedEvent) => captured.push(e));
 
-        const service = new HaltService(auditRepo as unknown as ControlAuditRepository, haltFlag, sink, flatten, events);
+        const riskHaltState = { clearHaltForDate: async (): Promise<void> => undefined };
+        const service = new HaltService(auditRepo as unknown as ControlAuditRepository, haltFlag, sink, flatten, riskHaltState, events);
 
         return { service, auditRepo, events, captured };
     }
@@ -348,7 +349,8 @@ describe('HaltStateRestoreService — newer-wins between control_audit and risk_
         const sink: IAlertSink = new NoopAlertSink();
         const flatten = new StubFlattenCoordinator();
         const events = new EventEmitter2();
-        const haltService = new HaltService(auditRepo as unknown as ControlAuditRepository, flag, sink, flatten, events);
+        const riskHaltState = { clearHaltForDate: async (): Promise<void> => undefined };
+        const haltService = new HaltService(auditRepo as unknown as ControlAuditRepository, flag, sink, flatten, riskHaltState, events);
         const restore = new HaltStateRestoreService(
             auditRepo as unknown as ControlAuditRepository,
             haltService,

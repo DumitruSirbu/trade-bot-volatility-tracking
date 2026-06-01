@@ -173,6 +173,9 @@ function buildMocks() {
         openPositionsPort,
         instrumentPort,
         universe,
+        // M11a W2: ShadowStrategyOrchestratorService stub — no-op so the
+        // adversarial active-path assertions remain insulated from the shadow path.
+        shadowOrchestrator: { runShadows: jest.fn().mockResolvedValue(undefined) },
     };
 }
 
@@ -190,6 +193,7 @@ function buildService(mocks: ReturnType<typeof buildMocks>): StrategyService {
         mocks.openPositionsPort as any,
         mocks.instrumentPort as any,
         mocks.universe as any,
+        mocks.shadowOrchestrator as any,
     );
 }
 

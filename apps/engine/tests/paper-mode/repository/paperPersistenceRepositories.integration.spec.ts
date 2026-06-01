@@ -1,7 +1,7 @@
 /**
  * M11a R2b wave A — repository CRUD smoke + adversarial duplicate-key path
  * for the five PAPER persistence repositories. Requires live Postgres
- * (DB_PORT=5433 docker compose up -d postgres).
+ * (docker compose --profile test up -d --wait postgres-test).
  *
  * Coverage:
  *   - PaperAccountStateRepository: insert → findByClientOrderId →
