@@ -111,12 +111,28 @@ function buildAppConfig(
     } as never;
 }
 
+// Tracks every real CronJob instance handed to addCronJob so teardown can
+// stop them.  Without this the live timer (start=true) keeps the event loop
+// alive after the suite finishes.
+const startedCronJobs: Array<{ stop: () => void }> = [];
+
 function buildSchedulerRegistry() {
     return {
-        addCronJob: jest.fn(),
+        addCronJob: jest.fn((_name: string, job: { stop: () => void }) => {
+            startedCronJobs.push(job);
+        }),
         deleteCronJob: jest.fn(),
     };
 }
+
+afterEach(() => {
+    // splice empties the array up-front, so a throwing job.stop() can never
+    // leave an orphan entry to bleed into the next test.
+    const jobs = startedCronJobs.splice(0);
+    for (const job of jobs) {
+        job.stop();
+    }
+});
 
 function buildScheduler(
     alerts = buildAlerts(),

@@ -98,6 +98,18 @@ class StubRevokedRepo implements IRevokedJtiRepositoryPort {
     }
 }
 
+// Tracks every WsAuthAdapter started by buildGateway so the sweeper interval
+// is cleared in teardown.  The interval is unref'd but still fires warnings
+// while the process is alive.
+const builtAdapters: WsAuthAdapter[] = [];
+
+afterEach(() => {
+    for (const adapter of builtAdapters) {
+        adapter.onModuleDestroy();
+    }
+    builtAdapters.length = 0;
+});
+
 function buildGateway(opts: { clock?: () => number; revoked?: StubRevokedRepo } = {}): {
     gateway: LiveGateway;
     server: FakeServer;
@@ -142,6 +154,7 @@ function buildGateway(opts: { clock?: () => number; revoked?: StubRevokedRepo } 
         listSockets: (): Iterable<FakeSocket> => namespace.sockets.values(),
     };
     adapter.startSweeper(source);
+    builtAdapters.push(adapter);
 
     return { gateway, server, namespace, adapter };
 }

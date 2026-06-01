@@ -136,6 +136,7 @@ jobs:
     test:
         name: test
         runs-on: ubuntu-latest
+        timeout-minutes: 20
         needs: install
         # Ephemeral CI Postgres for the engine's DB-integration suites. The
         # password below is a THROWAWAY value for a container that is destroyed

@@ -144,6 +144,18 @@ function fakePosition(id: number, overrides: Partial<PositionEntity> = {}): Posi
     return base as PositionEntity;
 }
 
+// Tracks every WsAuthAdapter started by buildGateway so the sweeper interval
+// is cleared in teardown.  The interval is unref'd but still fires warnings
+// while the process is alive.
+const builtAdapters: WsAuthAdapter[] = [];
+
+afterEach(() => {
+    for (const adapter of builtAdapters) {
+        adapter.onModuleDestroy();
+    }
+    builtAdapters.length = 0;
+});
+
 function buildGateway(opts: { revoked?: StubRevokedRepo; positions?: StubPositionRepository; clock?: () => number }): {
     gateway: LiveGateway;
     server: FakeServer;
@@ -193,6 +205,7 @@ function buildGateway(opts: { revoked?: StubRevokedRepo; positions?: StubPositio
     };
 
     adapter.startSweeper(source);
+    builtAdapters.push(adapter);
 
     return { gateway, server, namespace, adapter };
 }
