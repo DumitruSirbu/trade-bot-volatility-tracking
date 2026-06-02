@@ -10,6 +10,7 @@ Items resolved or no longer applicable should be removed. New items added at the
 |------|----------------|--------|-------|
 | Verify LIVE master-account `/sapi/v1/account/apiRestrictions` response shape — sub-account and master-account shapes diverge | `KeyPermissionAssertionService` | M11a | Predicate could silently pass unsafe key if master-account omits a field; must re-validate Binance docs vs real endpoint |
 | `risk_state.updated_at` true newer-wins upsert (W2.4) | `RiskStateRepository` | M11 | Pre-soak blocker; depends on TESTNET validation |
+| Rate-limit drift `header-used ≈ 1` anomaly — investigate whether public market-data endpoint weights tally on different Binance IP-weight ledger than local bucket assumes | `apps/engine/src/exchange/` | M17 incident | Cross-ref `docs/plans/M18-rate-limit-drift-directional-alert.md` |
 | `AuthFailureReasonEnum.BAD_AUDIENCE` — verifier currently uses `BAD_SCOPE` for audience mismatch | `apps/engine/src/auth/` | M13 | Live-smoke gap |
 | Engine auth CLI token TTL cap is 900s — weekly agent runs need automated minting or long-lived-token issuance | `apps/agent/` | M13 | Agent will fail after 15 min without token refresh |
 | Branch protection payload NOT YET APPLIED by repo owner | GitHub repo settings | M14 | Must apply via `docs/runbooks/ci-gates.md` before any live merge |
@@ -46,6 +47,9 @@ Items resolved or no longer applicable should be removed. New items added at the
 | Item | File / Location | Origin | Notes |
 |------|----------------|--------|-------|
 | Extract shared `WsAuthAdapter` teardown helper used by both `LiveGateway.spec.ts` and `LiveGateway.adversarial.spec.ts` | `apps/engine/tests/ws/` | M17 post-ship | DRY — both specs `afterEach` call `adapter.onModuleDestroy()` identically |
+| Remove dead `EXCHANGE_TESTNET` env var — superseded by `EXCHANGE_ENV`, currently misleading (retained read-only in EnvironmentVariables.ts:69) | `apps/engine/src/config/EnvironmentVariables.ts` | M17 incident | Cost debugging time today when operator thought it controlled exchange selector |
+| Backup/drift alerts reuse `AlertTypeEnum.UNHANDLED_EXCEPTION` — consider dedicated alert type `AlertTypeEnum.BACKUP_FAILURE` or `AlertTypeEnum.DRIFT_DETECTED` | `apps/engine/src/backup/`, `apps/engine/src/alert/` | M17 incident | Separates backup infra alerts from unhandled exceptions |
+| Backup probe `assertDirWritable()` could use `flag:'wx'` (exclusive create) IF probe filename made per-run unique (currently per-pid reused across runs); pg_dump-non-zero credential test could inject sentinel password into mock stderr to be non-vacuous | `apps/engine/src/backup/DbBackupScheduler.ts`, `apps/engine/tests/backup/DbBackupScheduler.spec.ts` | M17 hardening | Low-priority polish |
 | `buildLibpqEnv` decodeURIComponent on malformed percent-encoded DATABASE_URL can throw unwrapped | `apps/engine/src/backup/DbBackupScheduler.ts` | M17 | Operator-trusted env var; not wrapped in DbBackupFailedException |
 | On pipeline rejection while pg_dump running, child process not explicitly killed | `apps/engine/src/backup/DbBackupScheduler.ts` | M17 | stdout teardown self-terminates; LOW risk |
 | `emitHaltChanged` has 5 params; needs `IEmitHaltChangedParams` DTO | `HaltService.ts:218` | M11a soak | CC-M3 |

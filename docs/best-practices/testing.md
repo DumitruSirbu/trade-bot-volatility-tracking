@@ -45,6 +45,13 @@ docker compose --profile test up -d --wait postgres-test
 
 `pnpm --filter @bot/engine test` triggers a `pretest` hook that starts the container. In CI the container is provided as a service.
 
+> **Leave the `.env.test` password as-is.** The default `test_only_change_me` is a
+> deliberate, throwaway credential for the ephemeral tmpfs test DB — it must match the
+> `postgres-test` container default, so editing it only breaks the connection unless you
+> also recreate the container with a matching `TEST_DB_PASSWORD`. The `_change_me` warning
+> applies to the soak/prod `.env`, **not** to `.env.test`. The only rule for `.env.test`
+> is the one in the template: never reuse a soak or production credential here.
+
 ### Three DSNs
 
 | Variable | Database | Used by |
