@@ -243,8 +243,7 @@ describe('RateLimitPolicyService — adversarial', () => {
 
             // CHECK — no drift/under-count alert must have been published
             const underCountAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
-                ([p]: [{ title: string }]) =>
-                    typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
+                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
             );
             expect(underCountAlerts).toHaveLength(0);
         });
@@ -299,8 +298,7 @@ describe('RateLimitPolicyService — adversarial', () => {
 
             // CHECK — exactly one UNDER-COUNT WARN
             const underCountAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
-                ([p]: [{ title: string }]) =>
-                    typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
+                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
             );
             expect(underCountAlerts).toHaveLength(1);
             const [payload] = underCountAlerts[0] as [{ severity: string }];
@@ -345,17 +343,14 @@ describe('RateLimitPolicyService — adversarial', () => {
             // So we need headerUsed = floor(capacity * RATE_LIMIT_DRIFT_THRESHOLD_FRACTION).
             const { service, alerts } = buildService();
 
-            const atThresholdHeaderUsed = Math.floor(
-                REQUEST_WEIGHT_CAPACITY * RATE_LIMIT_DRIFT_THRESHOLD_FRACTION,
-            );
+            const atThresholdHeaderUsed = Math.floor(REQUEST_WEIGHT_CAPACITY * RATE_LIMIT_DRIFT_THRESHOLD_FRACTION);
             // Sanity: this value must be ≥ 1 with the production constants
             expect(atThresholdHeaderUsed).toBeGreaterThanOrEqual(1);
 
             service.reconcileFromHeaders(buildHeaders({ usedWeight1m: atThresholdHeaderUsed }));
 
             const underCountAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
-                ([p]: [{ title: string }]) =>
-                    typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
+                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
             );
             expect(underCountAlerts).toHaveLength(1);
         });
@@ -365,9 +360,7 @@ describe('RateLimitPolicyService — adversarial', () => {
             // fraction = (threshold_units - 1) / capacity < RATE_LIMIT_DRIFT_THRESHOLD_FRACTION
             const { service, alerts } = buildService();
 
-            const atThresholdHeaderUsed = Math.floor(
-                REQUEST_WEIGHT_CAPACITY * RATE_LIMIT_DRIFT_THRESHOLD_FRACTION,
-            );
+            const atThresholdHeaderUsed = Math.floor(REQUEST_WEIGHT_CAPACITY * RATE_LIMIT_DRIFT_THRESHOLD_FRACTION);
             const belowThresholdHeaderUsed = atThresholdHeaderUsed - 1;
 
             // Only meaningful if > 0 (would be 0 only if threshold fraction were 0)
@@ -378,8 +371,7 @@ describe('RateLimitPolicyService — adversarial', () => {
             service.reconcileFromHeaders(buildHeaders({ usedWeight1m: belowThresholdHeaderUsed }));
 
             const underCountAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
-                ([p]: [{ title: string }]) =>
-                    typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
+                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
             );
             expect(underCountAlerts).toHaveLength(0);
         });
@@ -406,8 +398,7 @@ describe('RateLimitPolicyService — adversarial', () => {
 
             // CHECK — only one Telegram WARN
             const underCountAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
-                ([p]: [{ title: string }]) =>
-                    typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
+                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
             );
             expect(underCountAlerts).toHaveLength(1);
         });
@@ -446,8 +437,7 @@ describe('RateLimitPolicyService — adversarial', () => {
 
             // CHECK — two alerts total (one before the window, one after)
             const underCountAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
-                ([p]: [{ title: string }]) =>
-                    typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
+                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
             );
             expect(underCountAlerts).toHaveLength(2);
         });
