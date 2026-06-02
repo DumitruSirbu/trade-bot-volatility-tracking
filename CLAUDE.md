@@ -78,9 +78,9 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 
 ## Status
 
-**Current status:** M17 done, M15 next — full milestone history, test counts, and go-live gates in `docs/milestone-log.md`.
+**Current status:** M18 done, M15 next — full milestone history, test counts, and go-live gates in `docs/milestone-log.md`.
 
-**M17 — Automated daily DB backup (DONE):** In-engine NestJS scheduler (dynamic cron registration, re-entrancy mutex, atomic writes via .tmp→rename, anchored filename + realpath guard against path traversal). Daily UTC pg_dump of soak DB to host-bind-mounted `DB_BACKUP_DIR`, keeps 3 newest `trade_bot_*.sql.gz` dumps, prunes rest. Image carries `postgresql18-client` (Alpine 3.23, v18.4, build-time smoke). Env config validated (5-field cron, @Min 1 retention). CI test job: `DB_BACKUP_ENABLED=false`. 73 specs green. 1 reviewer round: 1 HIGH (fixed), 3 mediums (fixed), 5 clean-code must-fix (fixed). Re-review confirmed all clear, 0 new findings. Bonus fix: postgres-test tmpfs mount corrected to `/var/lib/postgresql` (was wrong directory path for PGDATA). Zero blockers, zero highs at close.
+**M18 — Directional rate-limit drift alert (DONE):** Engine-only fix (no shared change). Drift gate made directional: silent on safe direction (localUsed > headerUsed where continuous-refill local bucket intentionally conservative), fires only on under-count (headerUsed > localUsed ≥ 0.1 capacity) — genuine stale-weight / approaching-429 canary. `RateLimitPolicyService.reconcileClass()` replaced Math.abs with signed underCountFraction. Log key changed rateLimit.drift → rateLimit.underCount. 22 directional tests green, full src/exchange 53 green. 1 review round: logic CLEAN, clean-code 2 must-fix + 2 should-fix fixed, continuity re-review CLEAN. Operational note: external log-scrapers keyed on old drift key must update. Zero blockers, zero highs at close.
 
 <!-- rtk-instructions v2 -->
 # RTK (Rust Token Killer) - Token-Optimized Commands

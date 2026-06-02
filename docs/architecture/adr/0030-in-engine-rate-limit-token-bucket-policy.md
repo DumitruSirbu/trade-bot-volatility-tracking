@@ -218,11 +218,18 @@ The implementation:
    tick. Rationale: the header is a point-in-time snapshot; trusting it to
    release headroom we have not yet refilled would race with another
    in-flight call.
-3. **Drift detection.** When the absolute difference between local-used and
-   header-used exceeds 10% of the class capacity, a `RATE_LIMIT_DRIFT`
-   event is emitted (logged WARN, recorded once per 5 minutes to avoid
-   alert spam; Telegram alert only on the first occurrence per boot). M11b
-   will use this signal to validate any shared-state limiter design.
+3. **Drift detection (M18 amendment).** The local token bucket runs
+   intentionally conservative (continuously refilling, peaking transiently
+   above Binance's near-empty rolling window during bursty market-data
+   polls, then draining via refill). This means `localUsed > headerUsed` is
+   the expected **safe** direction and must stay silent. Only when Binance
+   has counted **more** than we have (`headerUsed > localUsed` by ≥ 10% of
+   class capacity) does a drift detection fire — this is the genuine
+   "stale weight table / approaching a 429 we cannot see" canary. When
+   true, a `RATE_LIMIT_DRIFT` event is emitted (logged WARN, recorded once
+   per 5 minutes to avoid alert spam; Telegram alert only on the first
+   occurrence per boot). M11b will use this signal to validate any
+   shared-state limiter design.
 
 ### 2.6 Failure mode — 429 and 418
 

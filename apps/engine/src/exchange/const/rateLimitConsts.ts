@@ -32,8 +32,11 @@ export const RAW_REQUESTS_5M_WINDOW_MS = 300_000;
 // a single symbol cannot starve the other 2 slots of the M4 3-slot model.
 export const PER_SYMBOL_ORDERS_SHARE = 0.3;
 
-// Drift detection (ADR 0030 §2.5): when |local-used - header-used| exceeds
-// this fraction of class capacity, emit RATE_LIMIT_DRIFT.
+// Drift detection (ADR 0030 §2.5): when the SIGNED under-count
+// (header-used − local-used) / capacity exceeds this fraction — i.e. Binance
+// has counted more than we have and we may be approaching a 429 we cannot see —
+// emit a WARN. The opposite direction (local-used > header-used) is the safe,
+// conservative case and is intentionally silent (no absolute-difference check).
 export const RATE_LIMIT_DRIFT_THRESHOLD_FRACTION = 0.1;
 
 // 429/418 fallback freeze when Retry-After header is missing (ADR 0030 §2.6).
@@ -52,9 +55,9 @@ export const RATE_LIMIT_FREEZE_CAP_MS = 60 * 60_000;
 // while not punishing a single transient 429 that recurs hours later.
 export const RATE_LIMIT_FREEZE_DECAY_FACTOR = 5;
 
-// Drift-alert coalescing — emit Telegram WARN once per process boot on the
-// first drift event, then suppress further alerts for this window (ADR 0030
-// §2.5).
+// Drift-alert coalescing — on a drift event emit one Telegram WARN, then
+// suppress further alerts within this window and re-arm after it elapses
+// (ADR 0030 §2.5).
 export const RATE_LIMIT_DRIFT_LOG_COALESCE_MS = 5 * 60_000;
 
 // Binance header names (case-insensitive at the HTTP layer; the helper

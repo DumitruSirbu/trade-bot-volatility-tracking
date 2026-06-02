@@ -365,12 +365,14 @@ export class RateLimitPolicyService implements IRateLimitPolicy, OnModuleInit {
         }
 
         const localUsed = bucket.capacity - bucket.currentTokens;
-        const driftAbs = Math.abs(localUsed - headerUsed);
-        const driftFraction = driftAbs / bucket.capacity;
+        // Only an UNDER-count is dangerous: Binance has counted more than we have,
+        // so we may be approaching a 429 we cannot see. local > header is the SAFE
+        // (conservative) direction and must stay silent — see ADR 0030 §2.5.
+        const underCountFraction = (headerUsed - localUsed) / bucket.capacity;
 
-        if (driftFraction >= RATE_LIMIT_DRIFT_THRESHOLD_FRACTION) {
-            this.lastDriftPct = driftFraction;
-            this.maybeFireDriftAlert(bucket, localUsed, headerUsed, driftFraction);
+        if (underCountFraction >= RATE_LIMIT_DRIFT_THRESHOLD_FRACTION) {
+            this.lastDriftPct = underCountFraction;
+            this.maybeFireDriftAlert(bucket, localUsed, headerUsed, underCountFraction);
         }
 
         if (headerUsed > localUsed) {
@@ -379,7 +381,7 @@ export class RateLimitPolicyService implements IRateLimitPolicy, OnModuleInit {
         }
     }
 
-    private maybeFireDriftAlert(bucket: IBucket, localUsed: number, headerUsed: number, driftFraction: number): void {
+    private maybeFireDriftAlert(bucket: IBucket, localUsed: number, headerUsed: number, underCountFraction: number): void {
         const nowMs = this.clock.now().getTime();
 
         if (nowMs - this.lastDriftAlertAtMs < RATE_LIMIT_DRIFT_LOG_COALESCE_MS) {
@@ -387,15 +389,21 @@ export class RateLimitPolicyService implements IRateLimitPolicy, OnModuleInit {
         }
 
         this.lastDriftAlertAtMs = nowMs;
-        this.logger.warn(`rateLimit.drift class=${bucket.className} localUsed=${localUsed} headerUsed=${headerUsed} driftPct=${driftFraction.toFixed(3)}`);
+        this.logger.warn(
+            `rateLimit.underCount class=${bucket.className} localUsed=${localUsed} headerUsed=${headerUsed} underCountFraction=${underCountFraction.toFixed(3)}`,
+        );
+
+        const body =
+            `Local-used ${localUsed}/${bucket.capacity} vs header-used ${headerUsed}/${bucket.capacity}: ` +
+            `engine is under-counting vs Binance by ${(underCountFraction * 100).toFixed(1)}% and may be approaching a 429.`;
 
         const payload: IAlertPayload = {
             type: AlertTypeEnum.UNHANDLED_EXCEPTION,
             severity: AlertSeverityEnum.WARN,
             occurredAt: new Date(nowMs).toISOString(),
-            title: `Rate-limit drift detected (${bucket.className})`,
-            body: `Local-used ${localUsed}/${bucket.capacity} vs header-used ${headerUsed}/${bucket.capacity} (drift ${(driftFraction * 100).toFixed(1)}%).`,
-            data: { className: bucket.className, driftPct: driftFraction.toFixed(3) },
+            title: `Rate-limit UNDER-COUNT detected (${bucket.className}) — approaching limit`,
+            body,
+            data: { className: bucket.className, driftPct: underCountFraction.toFixed(3) },
         };
 
         void this.alerts.publish(payload).catch((cause) => {
