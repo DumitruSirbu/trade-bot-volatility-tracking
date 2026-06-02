@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { readdir, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGzip } from 'node:zlib';
@@ -12,6 +12,7 @@ import { CronJob } from 'cron';
 
 import { ALERT_SINK, IAlertSink } from '../alert/sink/AlertSinkModule';
 import { CLOCK, IClock } from '../common/clock/Clock';
+import { DomainException } from '../common/exception';
 import { NodeEnvEnum } from '../config/enum';
 import { AppConfigService } from '../config/service';
 import {
@@ -19,6 +20,7 @@ import {
     BACKUP_FILENAME_PATTERN,
     BACKUP_FILENAME_PREFIX,
     BACKUP_TMP_SUFFIX,
+    BACKUP_WRITE_PROBE_PREFIX,
     DB_BACKUP_CRON_JOB_NAME,
     DB_BACKUP_FAILED_REASON,
     PG_DUMP_PORTABILITY_FLAGS,
@@ -133,6 +135,7 @@ export class DbBackupScheduler implements OnModuleInit, OnModuleDestroy {
 
     private async dump(dir: string, fileName: string): Promise<number> {
         this.assertNotTestDatabase();
+        await this.assertDirWritable(dir);
 
         const finalPath = join(dir, fileName);
         const tmpPath = `${finalPath}${BACKUP_TMP_SUFFIX}`;
@@ -143,6 +146,28 @@ export class DbBackupScheduler implements OnModuleInit, OnModuleDestroy {
         const { size } = await stat(finalPath);
 
         return size;
+    }
+
+    // Pre-flight writability probe (stale-mount class): write and unlink a tiny
+    // `.write_probe_<pid>` file BEFORE spawning pg_dump. A recreated host bind
+    // mount leaves the container path stale, so createWriteStream would fail
+    // mid-dump with an opaque "nonexistent directory"; probing first turns that
+    // into a loud, typed failure with no wasted pg_dump spawn. The probe name
+    // never matches BACKUP_FILENAME_PATTERN, so the pruner ignores any straggler.
+    private async assertDirWritable(dir: string): Promise<void> {
+        const probePath = join(dir, `${BACKUP_WRITE_PROBE_PREFIX}${process.pid}`);
+
+        try {
+            await writeFile(probePath, '', { flag: 'w' });
+        } catch (cause) {
+            throw new DbBackupFailedException('writability probe', `backup dir not writable — mount may be stale: ${describe(cause)}`);
+        } finally {
+            await unlink(probePath).catch((cleanupCause: NodeJS.ErrnoException) => {
+                if (cleanupCause.code !== 'ENOENT') {
+                    this.logger.warn(`dbBackup.probe.cleanupFailed code=${cleanupCause.code}`);
+                }
+            });
+        }
     }
 
     // Spawns pg_dump (argv array — NOT a shell string, review M3) and streams
@@ -233,14 +258,16 @@ export class DbBackupScheduler implements OnModuleInit, OnModuleDestroy {
     }
 
     private async alertDumpFailed(cause: unknown, now: Date): Promise<void> {
-        this.logger.error(`dbBackup.dump.failed reason=${DB_BACKUP_FAILED_REASON} cause=${describe(cause)}`);
+        const detail = describeWithCause(cause);
+
+        this.logger.error(`dbBackup.dump.failed reason=${DB_BACKUP_FAILED_REASON} cause=${detail}`);
 
         const payload: IAlertPayload = {
             type: AlertTypeEnum.UNHANDLED_EXCEPTION,
-            severity: AlertSeverityEnum.WARN,
+            severity: AlertSeverityEnum.CRITICAL,
             occurredAt: now.toISOString(),
             title: 'Daily DB backup failed',
-            body: `pg_dump backup failed. Reason=${DB_BACKUP_FAILED_REASON}. cause=${describe(cause)}`,
+            body: `pg_dump backup failed. Reason=${DB_BACKUP_FAILED_REASON}. cause=${detail}`,
             data: { reason: DB_BACKUP_FAILED_REASON },
         };
 
@@ -357,10 +384,44 @@ function buildLibpqEnv(databaseUrl: string): NodeJS.ProcessEnv {
     return env;
 }
 
+// Serialises an arbitrary thrown value to a meaningful, credential-free string.
+// A non-Error object (e.g. an fs error like { code: 'ESTALE', message: '...' })
+// must NOT collapse to a useless '[object Object]' — that would defeat the
+// cause-surfacing fix and blind the operator. fs-error fields (code/errno/
+// syscall/path/message) carry no secret, so they are safe to emit.
 function describe(cause: unknown): string {
     if (cause instanceof Error) {
         return `${cause.name}: ${cause.message}`;
     }
 
-    return String(cause);
+    if (cause === null || typeof cause !== 'object') {
+        return String(cause);
+    }
+
+    const record = cause as { message?: unknown; code?: unknown };
+    const parts = [record.code, record.message].filter((v): v is string => typeof v === 'string' && v.length > 0);
+
+    if (parts.length > 0) {
+        return parts.join(': ');
+    }
+
+    try {
+        return JSON.stringify(cause);
+    } catch {
+        return String(cause);
+    }
+}
+
+// Like describe() but appends the DomainException's carried `cause` detail (the
+// sanitised pg_dump stderr tail / exit code / "nonexistent directory") when
+// present. Without this the real failure cause is dropped from both the error
+// log and the Telegram alert. The carried string is already credential-free.
+function describeWithCause(cause: unknown): string {
+    const head = describe(cause);
+
+    if (cause instanceof DomainException && cause.cause !== undefined) {
+        return `${head} (cause=${describe(cause.cause)})`;
+    }
+
+    return head;
 }

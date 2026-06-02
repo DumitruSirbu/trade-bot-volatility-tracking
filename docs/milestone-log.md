@@ -53,6 +53,24 @@ In-engine NestJS `DbBackupScheduler` + dynamic cron registration via `SchedulerR
 
 **Zero blockers, zero highs at close.**
 
+### M17.1 — DB-backup hardening + operational incident (2026-06-02)
+
+**Operational incident (2026-06-02 03:00 UTC):** Daily M17 auto-backup failed silently. Root cause: host `./backups` bind-mount directory was deleted/recreated while engine container ran, leaving container's `/var/backups/trade-bot` mount STALE. Dump's `createWriteStream` hit "nonexistent directory" error, surfacing only as generic `"pg_dump pipeline"` WARN log with underlying cause stripped. Operator fixed operationally by recreating engine container. **Secondary issue on reboot:** Engine crash-looped on boot with Binance `-2015 (Invalid API-key/IP/permissions)`. Root cause: `EXCHANGE_ENV=paper` correctly routes to LIVE Binance (`fapi.binance.com`, per ADR 0032), but `.env` held invalid credentials. Note: `EXCHANGE_TESTNET` is a DEAD env var (only "retained read-only" per EnvironmentVariables.ts:69) — `EXCHANGE_ENV` is the real selector. Operator rotated in valid key; engine boots healthy.
+
+**Hardening fixes (code complete, all verified):**
+1. **Pre-flight writability probe `assertDirWritable()`** — writes/unlinks `.write_probe_<pid>` before spawning pg_dump, converting stale-mount crash into loud typed failure BEFORE wasted dump. Probe cleanup narrowed to WARN only on non-ENOENT. Constant: `BACKUP_WRITE_PROBE_PREFIX = '.write_probe_'`.
+2. **`describeWithCause()` + hardened `describe()` cause-surfacing** — underlying cause (pg_dump stderr tail / fs-error code:message) now appears in BOTH error log AND Telegram alert body; non-Error objects serialize meaningfully (no `[object Object]`), with JSON.stringify fallback.
+3. **Failure-alert severity WARN → CRITICAL.**
+
+**Tests:** 72 backup specs green (27 added during hardening). **Review:** security/logic/clean-code — 0 blockers, 0 highs, 0 mediums.
+
+**Tech-debt entries added:**
+- HIGH: (none)
+- MEDIUM: rate-limit drift `header-used ≈ 1` anomaly — investigate whether public market-data endpoint weights tally on different Binance IP-weight ledger than local bucket assumes. Cross-ref `docs/plans/M18-rate-limit-drift-directional-alert.md`.
+- LOW: remove dead `EXCHANGE_TESTNET` env var (superseded by `EXCHANGE_ENV`; cost debugging time today). LOW: backup/drift alerts reuse `AlertTypeEnum.UNHANDLED_EXCEPTION` — consider dedicated alert type. LOW: backup probe `writeFile` could use `flag:'wx'` IF filename made per-run unique; pg_dump-non-zero credential test could inject sentinel password into mock stderr (non-vacuous).
+
+**Files modified:** `apps/engine/src/backup/DbBackupScheduler.ts` (assertDirWritable, describe, describeWithCause), `apps/engine/src/backup/const/backupConsts.ts` (BACKUP_WRITE_PROBE_PREFIX), `apps/engine/tests/backup/DbBackupScheduler.spec.ts` (27 new specs), `docs/work-log.md`, `docs/milestone-log.md`, `docs/tech-debt.md`.
+
 ---
 
 ## M0 — Foundation & scaffolding

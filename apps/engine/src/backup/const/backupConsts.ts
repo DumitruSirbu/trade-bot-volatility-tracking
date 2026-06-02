@@ -39,6 +39,13 @@ export const PG_DUMP_PORTABILITY_FLAGS: ReadonlyArray<string> = ['--no-owner', '
 // never promoted to a real backup (review M3).
 export const BACKUP_TMP_SUFFIX = '.tmp';
 
+// Pre-flight writability probe filename prefix. Before spawning pg_dump the
+// scheduler writes and unlinks a tiny `.write_probe_<pid>` file so a stale /
+// missing bind mount surfaces loudly BEFORE a pointless dump. The leading dot
+// and distinct shape keep it from ever matching BACKUP_FILENAME_PATTERN, so the
+// retention pruner never sees it even if cleanup is interrupted.
+export const BACKUP_WRITE_PROBE_PREFIX = '.write_probe_';
+
 // Trailing bytes of pg_dump stderr retained for the failure-cause string. The
 // tail is enough to surface the actual error (e.g. auth failure, missing role)
 // without unbounded buffering of a chatty stderr.

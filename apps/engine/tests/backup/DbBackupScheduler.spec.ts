@@ -35,6 +35,7 @@ jest.mock('node:fs/promises', () => ({
     rename: jest.fn(),
     stat: jest.fn(),
     unlink: jest.fn(),
+    writeFile: jest.fn(),
 }));
 
 // pipeline lives in node:stream/promises — mock it at module level so the
@@ -47,7 +48,7 @@ jest.mock('node:stream/promises', () => ({
 
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { readdir, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { createGzip } from 'node:zlib';
 
@@ -55,6 +56,7 @@ import {
     BACKUP_FILENAME_EXTENSION,
     BACKUP_FILENAME_PATTERN,
     BACKUP_FILENAME_PREFIX,
+    BACKUP_WRITE_PROBE_PREFIX,
     DB_BACKUP_CRON_JOB_NAME,
     DB_BACKUP_FAILED_REASON,
 } from '../../src/backup/const/backupConsts';
@@ -71,6 +73,7 @@ const mockRealpath = realpath as jest.MockedFunction<typeof realpath>;
 const mockRename = rename as jest.MockedFunction<typeof rename>;
 const mockStat = stat as jest.MockedFunction<typeof stat>;
 const mockUnlink = unlink as jest.MockedFunction<typeof unlink>;
+const mockWriteFile = writeFile as jest.MockedFunction<typeof writeFile>;
 
 // ─── fixture constants ────────────────────────────────────────────────────────
 
@@ -174,10 +177,11 @@ function setupStreamMocks() {
     mockCreateGzip.mockReturnValue(new PassThrough() as never);
 }
 
-// Configures a full successful run: pipeline resolves, child exits 0, prune
-// infrastructure (realpath/readdir/rename/stat/unlink) all succeed.
+// Configures a full successful run: writability probe passes, pipeline resolves,
+// child exits 0, prune infrastructure (realpath/readdir/rename/stat/unlink) all succeed.
 function setupSuccessfulRun(existingFiles: string[]) {
     setupStreamMocks();
+    mockWriteFile.mockResolvedValue(undefined);
     mockPipeline.mockResolvedValue(undefined);
 
     const child = buildMockChild(0);
@@ -274,7 +278,7 @@ describe('filename contract', () => {
 // ── 2. Retention boundaries ───────────────────────────────────────────────────
 
 describe('retention boundaries', () => {
-    it('with 2 existing dumps (below retention=3) — no file is unlinked after the new dump', async () => {
+    it('with 2 existing dumps (below retention=3) — no backup file is unlinked after the new dump', async () => {
         // BUILD — 2 old dumps + newly written = 3 total → at retention limit
         const existing = [backupFileName('2026-05-29T03:00:00Z'), backupFileName('2026-05-30T03:00:00Z')];
         setupSuccessfulRun(existing);
@@ -284,8 +288,11 @@ describe('retention boundaries', () => {
         // OPERATE
         await scheduler.runOnce(FIXED_NOW);
 
-        // CHECK — retention=3, 3 total → nothing pruned
-        expect(mockUnlink).not.toHaveBeenCalled();
+        // CHECK — retention=3, 3 total → no backup files pruned.
+        // The probe unlink (`.write_probe_<pid>`) fires once per run; filter it out.
+        const deletedPaths = mockUnlink.mock.calls.map((args) => String(args[0]));
+        const prunedBackups = deletedPaths.filter((p) => BACKUP_FILENAME_PATTERN.test(p.split('/').at(-1) as string));
+        expect(prunedBackups).toHaveLength(0);
     });
 
     it('with 3 existing dumps (at retention) — after a new dump the oldest is deleted and 3 remain', async () => {
@@ -299,10 +306,12 @@ describe('retention boundaries', () => {
         // OPERATE
         await scheduler.runOnce(FIXED_NOW);
 
-        // CHECK — 4 total, retention=3 → oldest deleted exactly once
-        expect(mockUnlink).toHaveBeenCalledTimes(1);
-        const deletedFileName = String(mockUnlink.mock.calls[0][0]).split('/').at(-1);
-        expect(deletedFileName).toBe(oldestFile);
+        // CHECK — 4 total, retention=3 → exactly one backup file deleted.
+        // Filter out the probe unlink (`.write_probe_<pid>`) before asserting prune count.
+        const deletedPaths = mockUnlink.mock.calls.map((args) => String(args[0]));
+        const prunedBackups = deletedPaths.filter((p) => BACKUP_FILENAME_PATTERN.test(p.split('/').at(-1) as string));
+        expect(prunedBackups).toHaveLength(1);
+        expect(prunedBackups[0]!.split('/').at(-1)).toBe(oldestFile);
     });
 
     it('with 5 existing dumps — pruned to exactly 3 (newest retained, 2 oldest deleted)', async () => {
@@ -322,10 +331,12 @@ describe('retention boundaries', () => {
         // OPERATE
         await scheduler.runOnce(FIXED_NOW);
 
-        // CHECK — 6 total, retention=3 → 3 deleted
-        expect(mockUnlink).toHaveBeenCalledTimes(3);
-
-        const deletedNames = mockUnlink.mock.calls.map((args) => String(args[0]).split('/').at(-1));
+        // CHECK — 6 total, retention=3 → 3 backup files deleted.
+        // Filter out the probe unlink (`.write_probe_<pid>`) before asserting prune count.
+        const deletedNames = mockUnlink.mock.calls
+            .map((args) => String(args[0]).split('/').at(-1) as string)
+            .filter((name) => BACKUP_FILENAME_PATTERN.test(name));
+        expect(deletedNames).toHaveLength(3);
 
         // The 3 newest are NOT deleted
         expect(deletedNames).not.toContain(EXPECTED_FILENAME);
@@ -338,7 +349,7 @@ describe('retention boundaries', () => {
         expect(deletedNames).toContain(backupFileName('2026-05-28T03:00:00Z'));
     });
 
-    it('with 0 existing dumps — first dump is kept and nothing is unlinked', async () => {
+    it('with 0 existing dumps — first dump is kept and no backup files are unlinked', async () => {
         // BUILD — empty dir after write
         setupSuccessfulRun([EXPECTED_FILENAME]);
         mockReaddir.mockResolvedValue([EXPECTED_FILENAME] as never);
@@ -347,8 +358,10 @@ describe('retention boundaries', () => {
         // OPERATE
         await scheduler.runOnce(FIXED_NOW);
 
-        // CHECK
-        expect(mockUnlink).not.toHaveBeenCalled();
+        // CHECK — no backup files pruned (probe unlink is not a backup file)
+        const deletedPaths = mockUnlink.mock.calls.map((args) => String(args[0]));
+        const prunedBackups = deletedPaths.filter((p) => BACKUP_FILENAME_PATTERN.test(p.split('/').at(-1) as string));
+        expect(prunedBackups).toHaveLength(0);
     });
 });
 
@@ -533,6 +546,7 @@ describe('re-entrancy mutex (review M4)', () => {
             settlePipeline = resolve;
         });
         setupStreamMocks();
+        mockWriteFile.mockResolvedValue(undefined);
         mockPipeline.mockReturnValue(pipelineBarrier);
 
         // Child emits close immediately; awaitCleanExit resolves, but pipeline
@@ -589,6 +603,7 @@ describe('adversarial failure modes', () => {
         it('publishes exactly one ALERT_SINK alert with type=UNHANDLED_EXCEPTION', async () => {
             // BUILD — pipeline resolves but exit code is 1
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockResolvedValue(undefined);
             mockSpawn.mockReturnValue(buildMockChild(1) as never);
             mockUnlink.mockResolvedValue(undefined);
@@ -604,9 +619,10 @@ describe('adversarial failure modes', () => {
             expect((payload as { type: string }).type).toBe(AlertTypeEnum.UNHANDLED_EXCEPTION);
         });
 
-        it('publishes alert with severity=WARN', async () => {
-            // BUILD
+        it('publishes alert with severity=CRITICAL (M17 escalation from WARN)', async () => {
+            // BUILD — M17 hardening escalated dump-failure alerts from WARN to CRITICAL
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockResolvedValue(undefined);
             mockSpawn.mockReturnValue(buildMockChild(1) as never);
             mockUnlink.mockResolvedValue(undefined);
@@ -618,12 +634,13 @@ describe('adversarial failure modes', () => {
 
             // CHECK
             const [payload] = alerts.publish.mock.calls[0];
-            expect((payload as { severity: string }).severity).toBe(AlertSeverityEnum.WARN);
+            expect((payload as { severity: string }).severity).toBe(AlertSeverityEnum.CRITICAL);
         });
 
         it('publishes alert with data.reason=DB_BACKUP_FAILED', async () => {
             // BUILD
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockResolvedValue(undefined);
             mockSpawn.mockReturnValue(buildMockChild(1) as never);
             mockUnlink.mockResolvedValue(undefined);
@@ -641,6 +658,7 @@ describe('adversarial failure modes', () => {
         it('does not call rename (temp is never promoted) when dump fails', async () => {
             // BUILD
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockResolvedValue(undefined);
             mockSpawn.mockReturnValue(buildMockChild(1) as never);
             mockUnlink.mockResolvedValue(undefined);
@@ -656,6 +674,7 @@ describe('adversarial failure modes', () => {
         it('unlinks the .tmp file (orphan cleanup) when pg_dump exits non-zero', async () => {
             // BUILD — exit 1 triggers failure path; the .tmp must be removed
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockResolvedValue(undefined);
             const child = buildMockChild(1);
             mockSpawn.mockReturnValue(child as never);
@@ -665,15 +684,17 @@ describe('adversarial failure modes', () => {
             // OPERATE
             await scheduler.runOnce(FIXED_NOW);
 
-            // CHECK — unlink called once for the .tmp orphan (no prune unlinks since dump failed)
-            expect(mockUnlink).toHaveBeenCalledTimes(1);
-            const unlinkedPath = String(mockUnlink.mock.calls[0][0]);
-            expect(unlinkedPath).toMatch(/\.tmp$/u);
+            // CHECK — the .tmp path must be among the unlinked paths.
+            // Two unlinks total: probe (`.write_probe_<pid>`) + .tmp orphan.
+            const unlinkedPaths = mockUnlink.mock.calls.map((args) => String(args[0]));
+            const tmpUnlinked = unlinkedPaths.some((p) => p.endsWith('.tmp'));
+            expect(tmpUnlinked).toBe(true);
         });
 
         it('resolves without throwing out of runOnce even when pg_dump exits non-zero', async () => {
             // BUILD
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockResolvedValue(undefined);
             mockSpawn.mockReturnValue(buildMockChild(1) as never);
             mockUnlink.mockResolvedValue(undefined);
@@ -690,6 +711,7 @@ describe('adversarial failure modes', () => {
         it('publishes exactly one DB_BACKUP_FAILED alert when the pipeline rejects', async () => {
             // BUILD — pipeline throws a stream error (e.g. ENOSPC or gzip corruption)
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockRejectedValue(new Error('ENOSPC: no space left on device'));
             // Child exits 0 but the pipeline already failed — failure wins
             mockSpawn.mockReturnValue(buildMockChild(0) as never);
@@ -709,6 +731,7 @@ describe('adversarial failure modes', () => {
         it('unlinks the .tmp file (orphan cleanup) when the pipeline rejects', async () => {
             // BUILD — orphan cleanup is mandatory; a partial .tmp must not linger
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockRejectedValue(new Error('stream error'));
             mockSpawn.mockReturnValue(buildMockChild(0) as never);
             mockUnlink.mockResolvedValue(undefined);
@@ -717,15 +740,17 @@ describe('adversarial failure modes', () => {
             // OPERATE
             await scheduler.runOnce(FIXED_NOW);
 
-            // CHECK — unlink called once on the .tmp path
-            expect(mockUnlink).toHaveBeenCalledTimes(1);
-            const unlinkedPath = String(mockUnlink.mock.calls[0][0]);
-            expect(unlinkedPath).toMatch(/\.tmp$/u);
+            // CHECK — the .tmp path must be among the unlinked paths.
+            // Two unlinks total: probe (`.write_probe_<pid>`) + .tmp orphan.
+            const unlinkedPaths = mockUnlink.mock.calls.map((args) => String(args[0]));
+            const tmpUnlinked = unlinkedPaths.some((p) => p.endsWith('.tmp'));
+            expect(tmpUnlinked).toBe(true);
         });
 
         it('does not rename (no dump promotion) when the pipeline rejects', async () => {
             // BUILD — a truncated .tmp is never promoted to the final filename
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockRejectedValue(new Error('stream error'));
             mockSpawn.mockReturnValue(buildMockChild(0) as never);
             mockUnlink.mockResolvedValue(undefined);
@@ -741,6 +766,7 @@ describe('adversarial failure modes', () => {
         it('does not unlink any prior backup dump when the pipeline rejects (prior dumps untouched)', async () => {
             // BUILD — prune is skipped after any dump failure; prior good dumps are safe
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockRejectedValue(new Error('stream error'));
             mockSpawn.mockReturnValue(buildMockChild(0) as never);
             // unlink is called once (tmp cleanup) but never for a prior dump file
@@ -761,6 +787,7 @@ describe('adversarial failure modes', () => {
         it('resolves without throwing out of runOnce when the pipeline rejects', async () => {
             // BUILD
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockRejectedValue(new Error('stream error'));
             mockSpawn.mockReturnValue(buildMockChild(0) as never);
             mockUnlink.mockResolvedValue(undefined);
@@ -789,6 +816,7 @@ describe('adversarial failure modes', () => {
         it('does not call rename when pipeline resolves but child exits non-zero', async () => {
             // BUILD — exit 1 → failure even though pipeline succeeded
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockResolvedValue(undefined);
             mockSpawn.mockReturnValue(buildMockChild(1) as never);
             mockUnlink.mockResolvedValue(undefined);
@@ -804,6 +832,7 @@ describe('adversarial failure modes', () => {
         it('does not call rename when child exits 0 but pipeline rejects', async () => {
             // BUILD — stream error → failure even though child exited cleanly
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockRejectedValue(new Error('gzip error'));
             mockSpawn.mockReturnValue(buildMockChild(0) as never);
             mockUnlink.mockResolvedValue(undefined);
@@ -823,6 +852,7 @@ describe('adversarial failure modes', () => {
         it('publishes exactly one alert when spawn emits an error event', async () => {
             // BUILD — 'error' event from child (e.g. ENOENT: pg_dump not found)
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockResolvedValue(undefined);
             const child = buildMockChild(undefined, new Error('ENOENT: pg_dump not found'));
             mockSpawn.mockReturnValue(child as never);
@@ -842,6 +872,7 @@ describe('adversarial failure modes', () => {
         it('resolves (does not crash) when spawn emits an error event', async () => {
             // BUILD
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockResolvedValue(undefined);
             const child = buildMockChild(undefined, new Error('ENOENT'));
             mockSpawn.mockReturnValue(child as never);
@@ -859,6 +890,7 @@ describe('adversarial failure modes', () => {
         it('resolves as success (dump counted) even when readdir throws during prune', async () => {
             // BUILD — dump succeeds; readdir (prune step) throws
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockResolvedValue(undefined);
             mockSpawn.mockReturnValue(buildMockChild(0) as never);
             mockRename.mockResolvedValue(undefined);
@@ -875,6 +907,7 @@ describe('adversarial failure modes', () => {
         it('does not publish an alert when only the prune step fails', async () => {
             // BUILD
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockResolvedValue(undefined);
             mockSpawn.mockReturnValue(buildMockChild(0) as never);
             mockRename.mockResolvedValue(undefined);
@@ -894,6 +927,7 @@ describe('adversarial failure modes', () => {
         it('the rename (dump promotion) is still performed even when a subsequent prune fails', async () => {
             // BUILD
             setupStreamMocks();
+            mockWriteFile.mockResolvedValue(undefined);
             mockPipeline.mockResolvedValue(undefined);
             mockSpawn.mockReturnValue(buildMockChild(0) as never);
             mockRename.mockResolvedValue(undefined);
@@ -928,8 +962,11 @@ describe('adversarial failure modes', () => {
             // OPERATE
             await scheduler.runOnce(FIXED_NOW);
 
-            // CHECK — 1 matching file, retention=3 → nothing pruned
-            expect(mockUnlink).not.toHaveBeenCalled();
+            // CHECK — 1 matching backup file, retention=3 → no backup files pruned.
+            // The probe unlink (`.write_probe_<pid>`) is excluded from this assertion.
+            const deletedPaths = mockUnlink.mock.calls.map((args) => String(args[0]));
+            const prunedBackups = deletedPaths.filter((p) => BACKUP_FILENAME_PATTERN.test(p.split('/').at(-1) as string));
+            expect(prunedBackups).toHaveLength(0);
         });
     });
 });
@@ -939,6 +976,8 @@ describe('adversarial failure modes', () => {
 describe('misconfig guard (review M2/N2)', () => {
     it('publishes an alert and does not spawn when NODE_ENV is not "test" and DSN targets port 6900', async () => {
         // BUILD — non-test env, port-6900 DSN (the M16 test-DB guard port)
+        // Note: assertNotTestDatabase() throws BEFORE assertDirWritable(), so writeFile
+        // is never reached in this path. No writeFile mock needed here.
         setupStreamMocks();
         const alerts = buildAlerts();
         const appConfig = buildAppConfig({
@@ -1024,5 +1063,519 @@ describe('secrets — credentials never in spawn argv', () => {
         expect(childEnv['PGPASSWORD']).toBe('secret');
         expect(childEnv['PGHOST']).toBe('localhost');
         expect(childEnv['PGDATABASE']).toBe('trade_bot');
+    });
+});
+
+// ── 10. Pre-flight writability probe (M17 hardening) ─────────────────────────
+//
+// assertDirWritable() writes `.write_probe_<pid>` then unlinks it before pg_dump
+// spawns. A stale / missing bind mount is now caught loudly before any wasted
+// spawn. These tests verify the three fix items:
+//   Fix-1: probe file is created and removed; pg_dump spawns exactly once on success.
+//   Fix-2: probe write failure → DbBackupFailedException, no spawn, CRITICAL alert.
+//   Fix-3: probe filename never matches BACKUP_FILENAME_PATTERN.
+
+describe('pre-flight writability probe (M17 hardening)', () => {
+    // ── 10a. Writable dir: probe created+removed, pg_dump spawns ──────────────
+
+    describe('when the backup dir is writable', () => {
+        it('calls writeFile once with a path rooted in the backup dir before spawn', async () => {
+            // BUILD
+            setupSuccessfulRun([EXPECTED_FILENAME]);
+            const scheduler = buildScheduler();
+
+            // OPERATE
+            await scheduler.runOnce(FIXED_NOW);
+
+            // CHECK — probe write happened once, path is inside the backup dir
+            expect(mockWriteFile).toHaveBeenCalledTimes(1);
+            const [probePath] = mockWriteFile.mock.calls[0] as [string, ...unknown[]];
+            expect(probePath).toContain(BACKUP_DIR);
+        });
+
+        it('unlinks the probe file (no straggler) after the dump succeeds', async () => {
+            // BUILD — unlink is called at least once for the probe itself; the
+            // dump succeeds so no .tmp cleanup unlink occurs.
+            setupSuccessfulRun([EXPECTED_FILENAME]);
+            mockReaddir.mockResolvedValue([] as never); // empty dir → no prune unlinks
+            const scheduler = buildScheduler();
+
+            // OPERATE
+            await scheduler.runOnce(FIXED_NOW);
+
+            // CHECK — unlink is called exactly once: the probe (no .tmp, no prune)
+            expect(mockUnlink).toHaveBeenCalledTimes(1);
+            const [unlinkedPath] = mockUnlink.mock.calls[0] as [string, ...unknown[]];
+            expect(unlinkedPath).toContain(BACKUP_WRITE_PROBE_PREFIX);
+        });
+
+        it('spawns pg_dump exactly once when the probe succeeds', async () => {
+            // BUILD
+            setupSuccessfulRun([EXPECTED_FILENAME]);
+            const scheduler = buildScheduler();
+
+            // OPERATE
+            await scheduler.runOnce(FIXED_NOW);
+
+            // CHECK — one spawn, one probe write — not two (no double-probe)
+            expect(mockSpawn).toHaveBeenCalledTimes(1);
+            expect(mockWriteFile).toHaveBeenCalledTimes(1);
+        });
+
+        it('logs dbBackup.dump.ok after a successful probe and dump', async () => {
+            // BUILD — confirm the happy path is end-to-end intact after probe addition
+            setupSuccessfulRun([EXPECTED_FILENAME]);
+            const scheduler = buildScheduler();
+            const logSpy = jest.spyOn((scheduler as unknown as { logger: { log: jest.Mock } }).logger, 'log');
+
+            // OPERATE
+            await scheduler.runOnce(FIXED_NOW);
+
+            // CHECK — success log emitted (regression guard: probe must not swallow success path)
+            const successLog = logSpy.mock.calls.some((args) => String(args[0]).includes('dbBackup.dump.ok'));
+            expect(successLog).toBe(true);
+        });
+    });
+
+    // ── 10b. Unwritable dir: throws before spawn, CRITICAL alert ─────────────
+
+    describe('when the backup dir is not writable (stale mount / ENOENT)', () => {
+        function buildEnoentError(): Error {
+            const err = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException;
+            err.code = 'ENOENT';
+
+            return err;
+        }
+
+        it('does NOT spawn pg_dump when writeFile rejects with ENOENT', async () => {
+            // BUILD — simulate the stale-mount regression: the probe fails
+            setupStreamMocks();
+            mockWriteFile.mockRejectedValue(buildEnoentError());
+            mockUnlink.mockResolvedValue(undefined);
+            const alerts = buildAlerts();
+            const scheduler = buildScheduler(alerts);
+
+            // OPERATE
+            await scheduler.runOnce(FIXED_NOW);
+
+            // CHECK — exact regression: pg_dump must NEVER be reached
+            expect(mockSpawn).not.toHaveBeenCalled();
+        });
+
+        it('publishes exactly one CRITICAL alert when writeFile rejects', async () => {
+            // BUILD
+            setupStreamMocks();
+            mockWriteFile.mockRejectedValue(buildEnoentError());
+            mockUnlink.mockResolvedValue(undefined);
+            const alerts = buildAlerts();
+            const scheduler = buildScheduler(alerts);
+
+            // OPERATE
+            await scheduler.runOnce(FIXED_NOW);
+
+            // CHECK — one alert, severity CRITICAL
+            expect(alerts.publish).toHaveBeenCalledTimes(1);
+            const [payload] = alerts.publish.mock.calls[0] as [{ severity: string }[]];
+            expect((payload as unknown as { severity: string }).severity).toBe(AlertSeverityEnum.CRITICAL);
+        });
+
+        it('resolves (does not throw out of runOnce) when writeFile rejects', async () => {
+            // BUILD
+            setupStreamMocks();
+            mockWriteFile.mockRejectedValue(buildEnoentError());
+            mockUnlink.mockResolvedValue(undefined);
+            const scheduler = buildScheduler();
+
+            // OPERATE + CHECK — runOnce absorbs all dump failures
+            await expect(scheduler.runOnce(FIXED_NOW)).resolves.toBeUndefined();
+        });
+
+        it('includes the ENOENT cause detail in the alert body when probe fails', async () => {
+            // BUILD — the alert body must carry the actual failure reason, not just a static msg
+            setupStreamMocks();
+            mockWriteFile.mockRejectedValue(buildEnoentError());
+            mockUnlink.mockResolvedValue(undefined);
+            const alerts = buildAlerts();
+            const scheduler = buildScheduler(alerts);
+
+            // OPERATE
+            await scheduler.runOnce(FIXED_NOW);
+
+            // CHECK — the carried cause string appears in the body
+            const [payload] = alerts.publish.mock.calls[0] as [{ body: string }[]];
+            const body = (payload as unknown as { body: string }).body;
+            expect(body).toContain('ENOENT');
+        });
+
+        it('does not call rename when probe write fails (no .tmp promotion)', async () => {
+            // BUILD
+            setupStreamMocks();
+            mockWriteFile.mockRejectedValue(buildEnoentError());
+            mockUnlink.mockResolvedValue(undefined);
+            const scheduler = buildScheduler();
+
+            // OPERATE
+            await scheduler.runOnce(FIXED_NOW);
+
+            // CHECK
+            expect(mockRename).not.toHaveBeenCalled();
+        });
+
+        it('does not call readdir/realpath (no prune attempt) when probe write fails', async () => {
+            // BUILD — prune is skipped entirely on any dump failure
+            setupStreamMocks();
+            mockWriteFile.mockRejectedValue(buildEnoentError());
+            mockUnlink.mockResolvedValue(undefined);
+            const scheduler = buildScheduler();
+
+            // OPERATE
+            await scheduler.runOnce(FIXED_NOW);
+
+            // CHECK
+            expect(mockReaddir).not.toHaveBeenCalled();
+            expect(mockRealpath).not.toHaveBeenCalled();
+        });
+
+        it('still attempts probe unlink in the finally block even though write failed', async () => {
+            // BUILD — the finally-unlink must run even when writeFile rejects
+            setupStreamMocks();
+            mockWriteFile.mockRejectedValue(buildEnoentError());
+            mockUnlink.mockResolvedValue(undefined);
+            const scheduler = buildScheduler();
+
+            // OPERATE
+            await scheduler.runOnce(FIXED_NOW);
+
+            // CHECK — unlink was called once (the probe cleanup in the finally block)
+            // The probe path was never created, but the finally-unlink fires regardless.
+            // unlink is mocked to resolve, so no secondary error from the cleanup.
+            expect(mockUnlink).toHaveBeenCalledTimes(1);
+            const [unlinkedPath] = mockUnlink.mock.calls[0] as [string, ...unknown[]];
+            expect(unlinkedPath).toContain(BACKUP_WRITE_PROBE_PREFIX);
+        });
+    });
+
+    // ── 10c. Probe filename never matches BACKUP_FILENAME_PATTERN ─────────────
+
+    describe('probe filename shape', () => {
+        it('the probe filename does NOT match BACKUP_FILENAME_PATTERN (pruner never touches it)', () => {
+            // BUILD — probe path is `.write_probe_<pid>`; verify the shape directly
+            const probeName = `${BACKUP_WRITE_PROBE_PREFIX}${process.pid}`;
+
+            // CHECK — the regex must NOT match so the pruner can never delete a straggler probe
+            expect(BACKUP_FILENAME_PATTERN.test(probeName)).toBe(false);
+        });
+
+        it('the probe filename starts with the BACKUP_WRITE_PROBE_PREFIX constant', async () => {
+            // BUILD — confirm the actual path written to disk uses the correct prefix
+            setupSuccessfulRun([]);
+            mockReaddir.mockResolvedValue([] as never);
+            const scheduler = buildScheduler();
+
+            // OPERATE
+            await scheduler.runOnce(FIXED_NOW);
+
+            // CHECK — writeFile received a path whose basename starts with the probe prefix
+            const [probePath] = mockWriteFile.mock.calls[0] as [string, ...unknown[]];
+            const probeName = probePath.split('/').at(-1) as string;
+            expect(probeName.startsWith(BACKUP_WRITE_PROBE_PREFIX)).toBe(true);
+        });
+
+        it('the probe path encodes process.pid so two distinct pids produce distinct paths', () => {
+            // BUILD — construct the probe names for two imaginary pids
+            const pidA = 12345;
+            const pidB = 99999;
+            const probeA = `${BACKUP_WRITE_PROBE_PREFIX}${pidA}`;
+            const probeB = `${BACKUP_WRITE_PROBE_PREFIX}${pidB}`;
+
+            // CHECK — different pids → different probe paths (no collision between processes)
+            expect(probeA).not.toBe(probeB);
+            expect(probeA).toContain(String(pidA));
+            expect(probeB).toContain(String(pidB));
+        });
+    });
+});
+
+// ── 11. Surface real cause via describeWithCause (M17 hardening) ──────────────
+//
+// alertDumpFailed() must include the DomainException's carried `cause` detail in
+// BOTH the logger.error call and the alert body. Without this fix the real failure
+// reason (pg_dump stderr tail / "nonexistent directory") was silently dropped.
+
+describe('failure cause surfaced in alert body and error log (M17 hardening)', () => {
+    // ── 11a. DbBackupFailedException carries cause → alert body includes it ────
+
+    it('alert body includes the carried cause string from DbBackupFailedException', async () => {
+        // BUILD — simulate a probe failure carrying a known sentinel cause string
+        const SENTINEL_CAUSE = 'nonexistent directory — mount may be stale';
+        setupStreamMocks();
+        // Force the probe to throw with the sentinel detail in the message
+        mockWriteFile.mockRejectedValue(new Error(SENTINEL_CAUSE));
+        mockUnlink.mockResolvedValue(undefined);
+        const alerts = buildAlerts();
+        const scheduler = buildScheduler(alerts);
+
+        // OPERATE
+        await scheduler.runOnce(FIXED_NOW);
+
+        // CHECK — the body must contain the carried cause, not just the static message
+        expect(alerts.publish).toHaveBeenCalledTimes(1);
+        const [payload] = alerts.publish.mock.calls[0] as [{ body: string }[]];
+        const body = (payload as unknown as { body: string }).body;
+        expect(body).toContain(SENTINEL_CAUSE);
+    });
+
+    it('alert body does not contain a bare "[object Object]" (non-Error cause handled gracefully)', async () => {
+        // BUILD — simulate an unusual throw of a plain object (not an Error)
+        setupStreamMocks();
+        mockWriteFile.mockRejectedValue({ code: 'ESTALE', message: 'stale file handle' });
+        mockUnlink.mockResolvedValue(undefined);
+        const alerts = buildAlerts();
+        const scheduler = buildScheduler(alerts);
+
+        // OPERATE
+        await scheduler.runOnce(FIXED_NOW);
+
+        // CHECK — must not crash and must not produce "[object Object]" in the body
+        expect(alerts.publish).toHaveBeenCalledTimes(1);
+        const [payload] = alerts.publish.mock.calls[0] as [{ body: string }[]];
+        const body = (payload as unknown as { body: string }).body;
+        expect(body).not.toContain('[object Object]');
+    });
+
+    it('logger.error call includes the carried cause detail', async () => {
+        // BUILD — the error log must carry the actual failure reason, not just the static msg.
+        // We simulate a probe failure (synchronous path) so the cause is deterministically
+        // captured in the logger call. The pg_dump stderr approach is timing-sensitive
+        // (captureStderrTail reads after close, data may not have arrived yet via setImmediate).
+        const SENTINEL_CAUSE = 'FATAL: role does not exist';
+        setupStreamMocks();
+        // Probe fails with the sentinel message → DbBackupFailedException wraps it
+        mockWriteFile.mockRejectedValue(new Error(SENTINEL_CAUSE));
+        mockUnlink.mockResolvedValue(undefined);
+        const alerts = buildAlerts();
+        const scheduler = buildScheduler(alerts);
+        const logSpy = jest.spyOn((scheduler as unknown as { logger: { error: jest.Mock } }).logger, 'error');
+
+        // OPERATE
+        await scheduler.runOnce(FIXED_NOW);
+
+        // CHECK — the dbBackup.dump.failed error log must contain the sentinel cause
+        const errorLogLine = logSpy.mock.calls.find((args) => String(args[0]).includes('dbBackup.dump.failed'));
+        expect(errorLogLine).toBeDefined();
+        expect(String(errorLogLine?.[0])).toContain(SENTINEL_CAUSE);
+    });
+});
+
+// ── 12. Severity escalation: dump failure alert must be CRITICAL ──────────────
+//
+// The M17 hardening escalated the dump-failure alert from WARN to CRITICAL.
+// These tests pin that requirement so a future regression (re-downgrading to WARN)
+// is immediately visible.
+
+describe('dump failure alert severity is CRITICAL (M17 hardening)', () => {
+    it('publishes severity=CRITICAL (not WARN) when pg_dump exits non-zero', async () => {
+        // BUILD — any dump failure must use AlertSeverityEnum.CRITICAL
+        setupStreamMocks();
+        mockWriteFile.mockResolvedValue(undefined);
+        mockPipeline.mockResolvedValue(undefined);
+        mockSpawn.mockReturnValue(buildMockChild(1) as never);
+        mockUnlink.mockResolvedValue(undefined);
+        const alerts = buildAlerts();
+        const scheduler = buildScheduler(alerts);
+
+        // OPERATE
+        await scheduler.runOnce(FIXED_NOW);
+
+        // CHECK — CRITICAL, never WARN
+        expect(alerts.publish).toHaveBeenCalledTimes(1);
+        const [payload] = alerts.publish.mock.calls[0] as [{ severity: string }[]];
+        expect((payload as unknown as { severity: string }).severity).toBe(AlertSeverityEnum.CRITICAL);
+        expect((payload as unknown as { severity: string }).severity).not.toBe(AlertSeverityEnum.WARN);
+    });
+
+    it('publishes severity=CRITICAL when pipeline rejects', async () => {
+        // BUILD
+        setupStreamMocks();
+        mockWriteFile.mockResolvedValue(undefined);
+        mockPipeline.mockRejectedValue(new Error('ENOSPC: no space left on device'));
+        mockSpawn.mockReturnValue(buildMockChild(0) as never);
+        mockUnlink.mockResolvedValue(undefined);
+        const alerts = buildAlerts();
+        const scheduler = buildScheduler(alerts);
+
+        // OPERATE
+        await scheduler.runOnce(FIXED_NOW);
+
+        // CHECK
+        const [payload] = alerts.publish.mock.calls[0] as [{ severity: string }[]];
+        expect((payload as unknown as { severity: string }).severity).toBe(AlertSeverityEnum.CRITICAL);
+    });
+
+    it('publishes severity=CRITICAL when the writability probe fails', async () => {
+        // BUILD — the most direct path to the new fix: probe ENOENT → CRITICAL alert
+        setupStreamMocks();
+        mockWriteFile.mockRejectedValue(new Error('ENOENT: no such file or directory'));
+        mockUnlink.mockResolvedValue(undefined);
+        const alerts = buildAlerts();
+        const scheduler = buildScheduler(alerts);
+
+        // OPERATE
+        await scheduler.runOnce(FIXED_NOW);
+
+        // CHECK
+        expect(alerts.publish).toHaveBeenCalledTimes(1);
+        const [payload] = alerts.publish.mock.calls[0] as [{ severity: string }[]];
+        expect((payload as unknown as { severity: string }).severity).toBe(AlertSeverityEnum.CRITICAL);
+    });
+
+    it('publishes severity=CRITICAL when the misconfig guard fires (non-test env + test port)', async () => {
+        // BUILD — misconfig guard throws DbBackupFailedException before the probe
+        setupStreamMocks();
+        const alerts = buildAlerts();
+        const appConfig = buildAppConfig({
+            nodeEnv: 'production',
+            databaseUrl: 'postgresql://bot:secret@localhost:6900/trade_bot',
+        });
+        const scheduler = buildScheduler(alerts, buildClock(), appConfig);
+
+        // OPERATE
+        await scheduler.runOnce(FIXED_NOW);
+
+        // CHECK
+        expect(alerts.publish).toHaveBeenCalledTimes(1);
+        const [payload] = alerts.publish.mock.calls[0] as [{ severity: string }[]];
+        expect((payload as unknown as { severity: string }).severity).toBe(AlertSeverityEnum.CRITICAL);
+    });
+});
+
+// ── 13. Credential safety — password absent from alert body ──────────────────
+//
+// Even when a DSN with a password is configured, the alert body published to
+// Telegram must never contain the raw password or the full DSN string.
+
+describe('credential safety — password absent from alert body and logs', () => {
+    const DSN_WITH_PASSWORD = 'postgresql://bot:supersecretpassword@localhost:5432/trade_bot';
+
+    it('alert body does not contain the database password when probe fails', async () => {
+        // BUILD — use a DSN whose password is a recognisable sentinel
+        setupStreamMocks();
+        mockWriteFile.mockRejectedValue(new Error('ENOENT: no such file or directory'));
+        mockUnlink.mockResolvedValue(undefined);
+        const alerts = buildAlerts();
+        const appConfig = buildAppConfig({ databaseUrl: DSN_WITH_PASSWORD });
+        const scheduler = buildScheduler(alerts, buildClock(), appConfig);
+
+        // OPERATE
+        await scheduler.runOnce(FIXED_NOW);
+
+        // CHECK — password must NOT appear in the alert body
+        const [payload] = alerts.publish.mock.calls[0] as [{ body: string }[]];
+        const body = (payload as unknown as { body: string }).body;
+        expect(body).not.toContain('supersecretpassword');
+    });
+
+    it('alert body does not contain the full DATABASE_URL string when probe fails', async () => {
+        // BUILD
+        setupStreamMocks();
+        mockWriteFile.mockRejectedValue(new Error('ENOENT'));
+        mockUnlink.mockResolvedValue(undefined);
+        const alerts = buildAlerts();
+        const appConfig = buildAppConfig({ databaseUrl: DSN_WITH_PASSWORD });
+        const scheduler = buildScheduler(alerts, buildClock(), appConfig);
+
+        // OPERATE
+        await scheduler.runOnce(FIXED_NOW);
+
+        // CHECK — full DSN must not appear in the body
+        const [payload] = alerts.publish.mock.calls[0] as [{ body: string }[]];
+        const body = (payload as unknown as { body: string }).body;
+        expect(body).not.toContain(DSN_WITH_PASSWORD);
+    });
+
+    it('alert body does not contain the password when pg_dump exits non-zero', async () => {
+        // BUILD — pg_dump path: password flows via PGPASSWORD child env, must not leak back into alert
+        setupStreamMocks();
+        mockWriteFile.mockResolvedValue(undefined);
+        mockPipeline.mockResolvedValue(undefined);
+        mockSpawn.mockReturnValue(buildMockChild(1) as never);
+        mockUnlink.mockResolvedValue(undefined);
+        const alerts = buildAlerts();
+        const appConfig = buildAppConfig({ databaseUrl: DSN_WITH_PASSWORD });
+        const scheduler = buildScheduler(alerts, buildClock(), appConfig);
+
+        // OPERATE
+        await scheduler.runOnce(FIXED_NOW);
+
+        // CHECK
+        const [payload] = alerts.publish.mock.calls[0] as [{ body: string }[]];
+        const body = (payload as unknown as { body: string }).body;
+        expect(body).not.toContain('supersecretpassword');
+    });
+});
+
+// ── 14. describe() asymmetric field coverage for non-Error plain objects ──────
+//
+// The parts-filter join in describe() must handle objects that carry only one
+// of the two recognised fields (code / message) without producing stray
+// punctuation, and must fall back to JSON for objects that carry neither.
+// Each case is paired directly to a specific asymmetric input so a regression
+// in any branch is immediately pinned to the exact cause shape.
+
+describe('describe() serialisation — asymmetric non-Error object fields (M17 hardening)', () => {
+    // Helper: run a probe-failure scenario and return the published alert body.
+    async function publishedBodyFor(cause: unknown): Promise<string> {
+        setupStreamMocks();
+        mockWriteFile.mockRejectedValue(cause);
+        mockUnlink.mockResolvedValue(undefined);
+        const alerts = buildAlerts();
+        const scheduler = buildScheduler(alerts);
+
+        await scheduler.runOnce(FIXED_NOW);
+
+        const [payload] = alerts.publish.mock.calls[0] as [{ body: string }[]];
+
+        return (payload as unknown as { body: string }).body;
+    }
+
+    it('code-only object: body contains the code string and no trailing colon artifact', async () => {
+        // BUILD — object has `code` but no `message`; parts-join must produce 'ESTALE', NOT 'ESTALE:'
+        // OPERATE
+        const body = await publishedBodyFor({ code: 'ESTALE' });
+
+        // CHECK
+        expect(body).toContain('ESTALE');
+        expect(body).not.toContain('[object Object]');
+        // A stray trailing colon from describe() itself would produce a double separator:
+        // wrapper "…stale: " + describe artifact "ESTALE: " → "stale: ESTALE: " (two colons close together).
+        // Assert no double-colon separator appears anywhere in the body.
+        expect(body).not.toMatch(/: :\s/u);
+    });
+
+    it('message-only object: body contains the message and no leading ": " artifact', async () => {
+        // BUILD — object has `message` but no `code`; parts-join must produce 'stale file handle',
+        // NOT ': stale file handle'. The wrapper already contributes one "stale: " separator; if
+        // describe() also emitted a leading colon the body would read "stale: : stale file handle".
+        // OPERATE
+        const body = await publishedBodyFor({ message: 'stale file handle' });
+
+        // CHECK
+        expect(body).toContain('stale file handle');
+        expect(body).not.toContain('[object Object]');
+        // A stray leading colon from describe() would produce a double-colon in the body.
+        expect(body).not.toMatch(/: :\s/u);
+    });
+
+    it('neither-code-nor-message object: body falls back to JSON containing the actual fields', async () => {
+        // BUILD — object has neither string `code` nor `message`; must JSON-serialise,
+        // NOT collapse to '[object Object]'
+        // OPERATE
+        const body = await publishedBodyFor({ errno: -116 });
+
+        // CHECK — JSON representation surfaced so the operator sees something useful
+        expect(body).not.toContain('[object Object]');
+        // The JSON fallback must include the field name and value
+        expect(body).toContain('errno');
+        expect(body).toContain('-116');
     });
 });
