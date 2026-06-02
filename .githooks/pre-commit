@@ -1,0 +1,48 @@
+#!/bin/sh
+#
+# Auto-fixing pre-commit hook (committed, zero new npm deps).
+#
+# Mirrors the CI `lint` and `format` jobs locally on the *staged* files so the
+# Prettier/ESLint failures CI catches become impossible to commit:
+#   - *.ts / *.tsx     -> prettier --write, then eslint --fix
+#   - *.json/.md/.yml  -> prettier --write
+# Fixed files are re-staged with `git add` so the fix lands in this commit.
+#
+# If `eslint --fix` still exits non-zero (an unfixable rule violation, i.e. a
+# real lint error), the commit is BLOCKED. Prettier auto-fix does not fail.
+#
+# Uses only git + `npx prettier` + `npx eslint` (all already in the repo).
+# Bypass with `git commit --no-verify` — CI remains the authoritative gate.
+
+set -eu
+
+# --- Collect staged added/copied/modified files, NUL-delimited (space-safe) ---
+staged_ts=$(git diff --cached --name-only --diff-filter=ACM -z \
+    -- '*.ts' '*.tsx')
+staged_doc=$(git diff --cached --name-only --diff-filter=ACM -z \
+    -- '*.json' '*.md' '*.yml' '*.yaml')
+
+# Fast path: nothing relevant staged.
+if [ -z "$staged_ts" ] && [ -z "$staged_doc" ]; then
+    exit 0
+fi
+
+# --- TypeScript: prettier --write, then eslint --fix ---
+if [ -n "$staged_ts" ]; then
+    printf '%s' "$staged_ts" | xargs -0 npx prettier --write
+    if ! printf '%s' "$staged_ts" | xargs -0 npx eslint --fix; then
+        echo ""
+        echo "pre-commit: ESLint found unfixable errors in staged TS files."
+        echo "pre-commit: fix them and re-stage, or bypass with --no-verify."
+        exit 1
+    fi
+    printf '%s' "$staged_ts" | xargs -0 git add --
+fi
+
+# --- JSON / Markdown / YAML: prettier --write only ---
+if [ -n "$staged_doc" ]; then
+    printf '%s' "$staged_doc" | xargs -0 npx prettier --write
+    printf '%s' "$staged_doc" | xargs -0 git add --
+fi
+
+exit 0

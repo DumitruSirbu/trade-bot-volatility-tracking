@@ -81,3 +81,5 @@ Items resolved or no longer applicable should be removed. New items added at the
 | pino-pretty dev-arg fallback (W2.9) | `apps/engine/` | M11 | |
 | `auth_tokens` table confirmed stateless — `revoked_jti` sweep cosmetic (W1.6 follow-up) | `apps/engine/` | M11 | |
 | `BaseRepository` uuid-PK widening (cosmetic + scaling) | `apps/engine/` | M11 | |
+| `AlertTypeEnum.UNHANDLED_EXCEPTION` misuse for drift → dedicated `RATE_LIMIT_DRIFT` / `RATE_LIMIT_UNDER_COUNT` shared-enum type | `apps/engine/src/exchange/`, `packages/shared/` | M18 | Semantic confusion only; reuse is benign. Shared enum change. |
+| Real-429 hardening (batch/space the 100-symbol OI & funding bursts) | `apps/engine/src/exchange/` | M18 | Worst-case load ~10%; headroom sufficient, deferred. |

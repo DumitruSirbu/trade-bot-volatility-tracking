@@ -2,14 +2,21 @@
  * Adversarial tests for RateLimitPolicyService (M11a W1.4 — ADR 0030).
  *
  * Covers: fail-fast on empty ORDERS_10S bucket, await on empty REQUEST_WEIGHT
- * bucket, per-symbol isolation, drift detection coalescing, 429/418 freeze
- * paths, malformed header parsing, monotonic bucket refill.
+ * bucket, per-symbol isolation, directional drift detection (M18 — under-count
+ * only, safe direction is silent), drift coalescing, 429/418 freeze paths,
+ * malformed header parsing, monotonic bucket refill.
  */
 
 import { RateLimitPolicyService } from '../RateLimitPolicyService';
 import { ExchangeRateLimitExhaustedException, SymbolRateLimitExhaustedException } from '../../exception';
 import { IRateLimitHeaders, IRateLimitedCall } from '../../interface/IRateLimitPolicy';
-import { ORDERS_10S_PUBLISHED_LIMIT, RATE_LIMIT_SAFETY_MARGIN, REQUEST_WEIGHT_1M_PUBLISHED_LIMIT } from '../../const/rateLimitConsts';
+import {
+    ORDERS_10S_PUBLISHED_LIMIT,
+    RATE_LIMIT_DRIFT_LOG_COALESCE_MS,
+    RATE_LIMIT_DRIFT_THRESHOLD_FRACTION,
+    RATE_LIMIT_SAFETY_MARGIN,
+    REQUEST_WEIGHT_1M_PUBLISHED_LIMIT,
+} from '../../const/rateLimitConsts';
 import { parseRateLimitHeaders } from '../../utils/parseRateLimitHeaders';
 
 // ─── factory helpers ──────────────────────────────────────────────────────────
@@ -201,80 +208,238 @@ describe('RateLimitPolicyService — adversarial', () => {
         });
     });
 
-    // ── Drift detection fires once, not per-call ─────────────────────────────
+    // ── Directional drift detection (M18) ────────────────────────────────────
+    //
+    // ADR 0030 §2.5 (M18 amendment): the drift alert is DIRECTIONAL.
+    // Only fires when headerUsed > localUsed by ≥ RATE_LIMIT_DRIFT_THRESHOLD_FRACTION
+    // of capacity (engine UNDER-counts Binance — dangerous).
+    // When localUsed > headerUsed (engine is CONSERVATIVE — safe), the alert
+    // must stay SILENT regardless of the magnitude of the difference.
 
-    describe('header drift > 10% fires WARN alert once per coalesce window', () => {
-        it('emits at most one alert for repeated drift in the coalesce window', async () => {
-            // BUILD
-            const { service, alerts, clock } = buildService();
+    describe('directional drift detection — safe direction is silent (M18 regression guard)', () => {
+        it('does NOT fire an alert when local-used is high and header-used is near-zero (the production screenshot case)', async () => {
+            // BUILD — reproduce the false-positive: local bucket has ~250 weight
+            // consumed, Binance reports only 1 used. This is the SAFE direction
+            // (local is over-counting / conservative). The old Math.abs code fired
+            // here; the new directional code must be silent.
+            const { service, alerts } = buildService();
 
-            // Simulate server reporting 50% capacity used (well above 10% drift
-            // threshold) while local accounting shows 0 used
-            const highDriftHeaders = buildHeaders({ usedWeight1m: Math.floor(REQUEST_WEIGHT_CAPACITY * 0.5) });
-
-            // OPERATE — reconcile many times within the coalesce window
-            for (let i = 0; i < 5; i++) {
-                // Advance by less than the coalesce window each time
-                clock.advance(60_000);
-                service.reconcileFromHeaders(highDriftHeaders);
-            }
-
-            // CHECK — only one Telegram WARN alert should have fired
-            const warnAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
-                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('drift'),
-            );
-            expect(warnAlerts.length).toBe(1);
-        });
-
-        it('allows a second alert after the coalesce window expires', async () => {
-            // BUILD
-            const { service, alerts: _alerts, clock } = buildService();
-            const COALESCE_WINDOW_MS = 5 * 60 * 1_000;
-
-            // After each reconcile the local accounting is updated to match the
-            // header, so fresh drift must be introduced by acquiring tokens first.
-            const highDriftUsed = Math.floor(REQUEST_WEIGHT_CAPACITY * 0.5);
-            const highDriftHeaders = buildHeaders({ usedWeight1m: highDriftUsed });
-
-            // First drift event: header says used=50%, local says used=0 → drift
-            service.reconcileFromHeaders(highDriftHeaders);
-
-            // Advance past coalesce window; also acquire tokens so local diverges
-            clock.advance(COALESCE_WINDOW_MS + 1000);
-            // After the advance, refill happens on next acquire. Reconcile again
-            // with a high server-reported usage to produce a second drift event.
-            service.reconcileFromHeaders(highDriftHeaders);
-
-            // CHECK — the second reconcile is past the coalesce window; but the
-            // local accounting may already match due to the first correction. We
-            // test the coalescing logic itself: if the window expired, a fresh
-            // drift fires a second alert.
-            // NOTE: If local is already corrected from the first reconcile, the
-            // second reconcile may not trigger drift. We acquire a non-order call
-            // first to ensure local state diverges from the header again.
-            const { service: s2, alerts: a2, clock: c2 } = buildService();
-            const lowDriftHeaders = buildHeaders({ usedWeight1m: highDriftUsed });
-            // First event
-            s2.reconcileFromHeaders(lowDriftHeaders);
-            // Advance past coalesce and simulate new usage
-            c2.advance(COALESCE_WINDOW_MS + 1000);
-            // Acquire some tokens to get local accounting above 0
-            const readCall: IRateLimitedCall = {
-                operation: 'fetchPositions',
-                requestWeight: 100,
+            // Acquire ~250 REQUEST_WEIGHT tokens to push local-used to ≈250
+            const heavyReadCall: IRateLimitedCall = {
+                operation: 'fetchTickers',
+                // fetchTickers costs 40 weight; acquire 6× = 240 consumed
+                requestWeight: 40,
                 isOrderOp: false,
                 symbol: null,
                 mode: 'await',
-                maxWaitMs: 100,
+                maxWaitMs: 0,
             };
-            await s2.acquire(readCall).catch(() => undefined);
-            // Now reconcile with a high header to produce fresh drift
-            s2.reconcileFromHeaders(buildHeaders({ usedWeight1m: highDriftUsed + 200 }));
+            for (let i = 0; i < 6; i++) {
+                await service.acquire(heavyReadCall).catch(() => undefined);
+            }
 
-            const warnAlerts = (a2.publish as jest.Mock).mock.calls.filter(
-                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('drift'),
+            // OPERATE — header says Binance only saw 1 unit used (safe direction)
+            service.reconcileFromHeaders(buildHeaders({ usedWeight1m: 1 }));
+
+            // CHECK — no drift/under-count alert must have been published
+            const underCountAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
+                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
             );
-            expect(warnAlerts.length).toBe(2);
+            expect(underCountAlerts).toHaveLength(0);
+        });
+
+        it('does NOT set lastDriftPct on safe-direction reconciliation', async () => {
+            // BUILD
+            const { service } = buildService();
+
+            const heavyReadCall: IRateLimitedCall = {
+                operation: 'fetchTickers',
+                requestWeight: 40,
+                isOrderOp: false,
+                symbol: null,
+                mode: 'await',
+                maxWaitMs: 0,
+            };
+            for (let i = 0; i < 6; i++) {
+                await service.acquire(heavyReadCall).catch(() => undefined);
+            }
+
+            // OPERATE — safe direction: local-used ≈ 240, header-used = 1
+            service.reconcileFromHeaders(buildHeaders({ usedWeight1m: 1 }));
+
+            // CHECK — snapshot must NOT report a drift percentage
+            const snap = service.snapshot();
+            expect(snap.lastDriftPct).toBeNull();
+        });
+    });
+
+    describe('directional drift detection — dangerous under-count fires WARN (M18)', () => {
+        it('fires exactly one WARN alert when header-used exceeds local-used by ≥ threshold', async () => {
+            // BUILD — local-used ≈ 10 (almost idle), header says capacity-50
+            // (far above local) — the dangerous under-count direction.
+            const { service, alerts } = buildService();
+
+            // Acquire a tiny amount so local-used > 0 but small
+            const lightCall: IRateLimitedCall = {
+                operation: 'fetchBalance',
+                requestWeight: 5,
+                isOrderOp: false,
+                symbol: null,
+                mode: 'await',
+                maxWaitMs: 0,
+            };
+            // Acquire twice → local-used = 10
+            await service.acquire(lightCall).catch(() => undefined);
+            await service.acquire(lightCall).catch(() => undefined);
+
+            // Header says near-full (capacity − 50). Difference >> threshold.
+            const dangerousHeaderUsed = REQUEST_WEIGHT_CAPACITY - 50;
+            service.reconcileFromHeaders(buildHeaders({ usedWeight1m: dangerousHeaderUsed }));
+
+            // CHECK — exactly one UNDER-COUNT WARN
+            const underCountAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
+                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
+            );
+            expect(underCountAlerts).toHaveLength(1);
+            const [payload] = underCountAlerts[0] as [{ severity: string }];
+            expect(payload.severity.toLowerCase()).toBe('warn');
+        });
+
+        it('sets lastDriftPct > 0 after a real under-count', () => {
+            // BUILD
+            const { service } = buildService();
+
+            const dangerousHeaderUsed = REQUEST_WEIGHT_CAPACITY - 50;
+            service.reconcileFromHeaders(buildHeaders({ usedWeight1m: dangerousHeaderUsed }));
+
+            // CHECK
+            const snap = service.snapshot();
+            expect(snap.lastDriftPct).not.toBeNull();
+            expect(snap.lastDriftPct!).toBeGreaterThan(0);
+        });
+
+        it('clamps currentTokens to capacity − headerUsed when header > local (upward-only reconciliation unchanged)', () => {
+            // BUILD — local is almost full (low used), header shows near-exhaustion
+            const { service } = buildService();
+            const dangerousHeaderUsed = REQUEST_WEIGHT_CAPACITY - 20;
+
+            // OPERATE
+            service.reconcileFromHeaders(buildHeaders({ usedWeight1m: dangerousHeaderUsed }));
+
+            // CHECK — REQUEST_WEIGHT_1M bucket tokens should be clamped down
+            const snap = service.snapshot();
+            const weightBucket = snap.classes.find((c) => c.className === 'REQUEST_WEIGHT_1M');
+            expect(weightBucket).toBeDefined();
+            expect(weightBucket!.currentTokens).toBeLessThanOrEqual(
+                REQUEST_WEIGHT_CAPACITY - dangerousHeaderUsed + 1, // small tolerance for refill
+            );
+        });
+    });
+
+    describe('directional drift detection — boundary conditions at exactly RATE_LIMIT_DRIFT_THRESHOLD_FRACTION', () => {
+        it('fires when under-count fraction equals the threshold exactly', () => {
+            // BUILD — engineer the under-count fraction to land precisely on the
+            // threshold. With localUsed = 0 the fraction = headerUsed / capacity.
+            // So we need headerUsed = floor(capacity * RATE_LIMIT_DRIFT_THRESHOLD_FRACTION).
+            const { service, alerts } = buildService();
+
+            const atThresholdHeaderUsed = Math.floor(REQUEST_WEIGHT_CAPACITY * RATE_LIMIT_DRIFT_THRESHOLD_FRACTION);
+            // Sanity: this value must be ≥ 1 with the production constants
+            expect(atThresholdHeaderUsed).toBeGreaterThanOrEqual(1);
+
+            service.reconcileFromHeaders(buildHeaders({ usedWeight1m: atThresholdHeaderUsed }));
+
+            const underCountAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
+                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
+            );
+            expect(underCountAlerts).toHaveLength(1);
+        });
+
+        it('is silent when under-count fraction is one integer unit below the threshold', () => {
+            // BUILD — localUsed = 0, headerUsed = threshold_units − 1
+            // fraction = (threshold_units - 1) / capacity < RATE_LIMIT_DRIFT_THRESHOLD_FRACTION
+            const { service, alerts } = buildService();
+
+            const atThresholdHeaderUsed = Math.floor(REQUEST_WEIGHT_CAPACITY * RATE_LIMIT_DRIFT_THRESHOLD_FRACTION);
+            const belowThresholdHeaderUsed = atThresholdHeaderUsed - 1;
+
+            // Only meaningful if > 0 (would be 0 only if threshold fraction were 0)
+            if (belowThresholdHeaderUsed <= 0) {
+                return;
+            }
+
+            service.reconcileFromHeaders(buildHeaders({ usedWeight1m: belowThresholdHeaderUsed }));
+
+            const underCountAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
+                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
+            );
+            expect(underCountAlerts).toHaveLength(0);
+        });
+    });
+
+    describe('under-count alert coalescing — at most one alert per RATE_LIMIT_DRIFT_LOG_COALESCE_MS window', () => {
+        it('emits at most one alert for repeated under-counts within the coalesce window', () => {
+            // BUILD
+            const { service, alerts, clock } = buildService();
+
+            // Header always at dangerous level; local starts at 0 so under-count
+            // fraction is ~50%, well above threshold.
+            const dangerousHeaderUsed = Math.floor(REQUEST_WEIGHT_CAPACITY * 0.5);
+            const dangerousHeaders = buildHeaders({ usedWeight1m: dangerousHeaderUsed });
+
+            // OPERATE — reconcile five times, each 60 s apart (well within the
+            // 5-minute coalesce window). After the first reconcile the bucket is
+            // clamped to capacity − headerUsed, so subsequent reconciles also
+            // show under-count because we do NOT re-acquire tokens in between.
+            for (let i = 0; i < 5; i++) {
+                clock.advance(60_000); // < RATE_LIMIT_DRIFT_LOG_COALESCE_MS
+                service.reconcileFromHeaders(dangerousHeaders);
+            }
+
+            // CHECK — only one Telegram WARN
+            const underCountAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
+                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
+            );
+            expect(underCountAlerts).toHaveLength(1);
+        });
+
+        it('fires a second alert after the coalesce window has elapsed', async () => {
+            // BUILD — fresh service
+            const { service, alerts, clock } = buildService();
+
+            // Make header > local on first reconcile (local = 0, header = 50%)
+            const dangerousHeaderUsed = Math.floor(REQUEST_WEIGHT_CAPACITY * 0.5);
+            const dangerousHeaders = buildHeaders({ usedWeight1m: dangerousHeaderUsed });
+
+            // First under-count event
+            service.reconcileFromHeaders(dangerousHeaders);
+
+            // After first reconcile the bucket was clamped: currentTokens =
+            // capacity - headerUsed. We advance time so the bucket refills
+            // (continuous refill) creating a new divergence from the header.
+            clock.advance(RATE_LIMIT_DRIFT_LOG_COALESCE_MS + 1_000);
+
+            // Acquire some tokens so local-used is low again (bucket refilled by
+            // clock advance; acquire a tiny amount to trigger refillAll).
+            const lightCall: IRateLimitedCall = {
+                operation: 'fetchBalance',
+                requestWeight: 5,
+                isOrderOp: false,
+                symbol: null,
+                mode: 'await',
+                maxWaitMs: 0,
+            };
+            await service.acquire(lightCall).catch(() => undefined);
+
+            // Second reconcile — same dangerous header, but bucket has refilled
+            // via continuous-refill so localUsed is again small.
+            service.reconcileFromHeaders(dangerousHeaders);
+
+            // CHECK — two alerts total (one before the window, one after)
+            const underCountAlerts = (alerts.publish as jest.Mock).mock.calls.filter(
+                ([p]: [{ title: string }]) => typeof p.title === 'string' && p.title.toLowerCase().includes('under-count'),
+            );
+            expect(underCountAlerts).toHaveLength(2);
         });
     });
 

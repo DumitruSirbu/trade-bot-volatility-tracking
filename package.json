@@ -8,6 +8,7 @@
         "node": ">=22"
     },
     "scripts": {
+        "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
         "build": "pnpm -r build",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",

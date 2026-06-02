@@ -1,3 +1,15 @@
+## 2026-06-02 — M18 directional rate-limit drift alert
+
+- Binance rate-limit drift Telegram WARN fired ~once per 5-min coalesce window; root cause: symmetric Math.abs comparison fired when local conservative (localUsed > headerUsed) — the SAFE direction
+- Fix: made drift gate DIRECTIONAL — fires only on signed under-count (headerUsed > localUsed by ≥ 0.1 capacity), genuine stale-weight / approaching-429 canary; safe direction now silent
+- Engine-only, no shared change: `RateLimitPolicyService.reconcileClass()` replaced Math.abs with signed underCountFraction; `maybeFireDriftAlert()` reworded (title "Rate-limit UNDER-COUNT detected", body states %)
+- Log key changed `rateLimit.drift` → `rateLimit.underCount` (field: underCountFraction); operator note: external soak log-scrapers on old drift key must update
+- RateLimitConsts comment updated (signed under-count semantics; coalesce-window corrected)
+- Tests: 22/22 RateLimitPolicyService.adversarial.spec.ts green (directional/boundary/coalesce tests; regression guard fails against old Math.abs code); full src/exchange folder 53/53 green
+- Review: bot-review-logic CLEAN (halt path byte-for-byte intact, canary preserved, lastDriftPct snapshot unchanged); bot-review-clean-code 2 must-fix + 2 should-fix fixed, continuity re-review CLEAN
+- ADR 0030 §2.5 "Drift detection" amended: documents directional rule (continuous-refill local model intentionally conservative, so localUsed > headerUsed expected/benign/silent; only headerUsed > localUsed ≥ threshold indicates real ban-approach worth WARN)
+- Zero blockers, zero highs at close
+
 ## 2026-05-31 — M16 test-DB isolation
 
 - Added `postgres-test` compose service (profile `test`, port 6900, tmpfs)

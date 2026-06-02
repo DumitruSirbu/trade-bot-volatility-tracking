@@ -31,6 +31,39 @@ should not be opened as PRs.
 
 ---
 
+## 0.1 Local pre-commit hook (auto-fix, zero new deps)
+
+A committed shell hook at `.githooks/pre-commit` mirrors the `lint` and `format`
+CI jobs locally on the **staged** files, so Prettier/ESLint failures cannot be
+committed. It is dependency-free (uses only `git` + the repo's own `npx
+prettier` / `npx eslint`); husky and lint-staged were rejected to keep the
+supply-chain posture conservative (see the `sca` and `deps:pin-and-provenance`
+gates).
+
+What it does on commit:
+
+- `*.ts` / `*.tsx` staged files → `prettier --write`, then `eslint --fix`.
+- `*.json` / `*.md` / `*.yml` / `*.yaml` staged files → `prettier --write`.
+- Re-stages the fixed files so the formatting fix lands in the same commit.
+- If `eslint --fix` leaves an **unfixable** error (a real rule violation), the
+  commit is **blocked** (`exit 1`) with a clear message. Prettier auto-fix does
+  not fail.
+
+Wiring is automatic: the root `prepare` script runs on `pnpm install` and sets
+`git config core.hooksPath .githooks`. It is guarded so a non-git context
+(Docker build, `--frozen-lockfile` CI install) never fails the install.
+
+One-time manual fallback (if the hook is not active):
+
+```sh
+git config core.hooksPath .githooks
+```
+
+Bypass for a single commit: `git commit --no-verify`. The hook is a local
+convenience — **CI remains the authoritative gate.**
+
+---
+
 ## 1. Required status checks (the job-name contract)
 
 Branch protection on `main` matches required checks **by job name**. The job
