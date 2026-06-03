@@ -15,11 +15,12 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MODEL_DIVERGENCE_TRIGGERED_EVENT, RISK_HALT_TRIGGERED_EVENT } from '../../alert/const/alertEvents';
 
 import { MS_PER_MINUTE } from '../../common/const';
-import { Money, MoneyValue } from '../../common/utils/money';
+import { Money, MoneyValue, parseMoney } from '../../common/utils/money';
 import { CANDLE_INTERVAL_MS } from '../../strategy/const';
 import { IProposedExit } from '../../strategy/interface';
 import {
     AGG_TRADE_BUY_FLOW_BALANCE,
+    COIN_DEPTH_FLOOR_10BPS_USDT,
     CONSECUTIVE_LOSS_HALT_COUNT,
     LIQUIDATION_SAFETY_BUFFER_FACTOR,
     MAX_LEVERAGE,
@@ -548,6 +549,10 @@ export class RiskGateService {
             return RejectReasonEnum.SPREAD_TOO_WIDE;
         }
 
+        if (this.isBookTooThin(intent, context)) {
+            return RejectReasonEnum.COIN_BOOK_TOO_THIN;
+        }
+
         if (this.isTier3Unvalidated(intent, context)) {
             return RejectReasonEnum.TIER3_NOT_VALIDATED;
         }
@@ -598,6 +603,44 @@ export class RiskGateService {
         const ceiling = TIER_SPREAD_CEILING_PCT[intent.coinTier];
 
         return spread > ceiling;
+    }
+
+    // Per-coin book-depth eligibility guard (ADR 0004 §6a). Depth AT or below the tier floor is
+    // too thin => coin_book_too_thin (a per-coin SKIP, never a halt — it runs after the halt
+    // checks). Fail-closed like isSpreadTooWide: an unknown tier, or missing/empty/unparseable/
+    // non-finite/non-positive depth, all resolve to too-thin so bad data costs a single skip,
+    // never a fill. book_depth_10bps_usdt crosses the shared boundary as a decimal string;
+    // parse it ONCE through the typed parseMoney helper inside a try/catch (whitespace/garbage
+    // throws MoneyParseException, caught here) and validate on the Decimal itself (.isFinite()
+    // catches 'NaN'/'Infinity', which decimal.js parses without throwing) so a malformed string
+    // can NEVER throw out of the gate. Boundary is <= (depth exactly at the floor rejects),
+    // opposite the spread's strict >.
+    private isBookTooThin(intent: IOrderIntent, context: IRiskGateContext): boolean {
+        const floor = COIN_DEPTH_FLOOR_10BPS_USDT[intent.coinTier];
+
+        if (floor === undefined) {
+            return true;
+        }
+
+        const depthRaw = context.snapshot.book_depth_10bps_usdt;
+
+        if (depthRaw === null || depthRaw === undefined || depthRaw === '') {
+            return true;
+        }
+
+        let depth: MoneyValue;
+
+        try {
+            depth = parseMoney(depthRaw);
+        } catch {
+            return true;
+        }
+
+        if (!depth.isFinite() || depth.lessThanOrEqualTo(0)) {
+            return true;
+        }
+
+        return depth.lessThanOrEqualTo(new Money(floor));
     }
 
     private isTier3Unvalidated(intent: IOrderIntent, context: IRiskGateContext): boolean {

@@ -24,6 +24,8 @@ import { CoinTierEnum, FlowTypeEnum, RegimeLabelEnum } from '@bot/shared';
 
 import { Money } from '../../../common/utils/money';
 import { CANDLE_5M_INTERVAL_MS } from '../../../market-data/const/candleConsts';
+import { MARKET_BREADTH_NEUTRAL_PCT, STRESS_BREADTH_DISTANCE_PCT } from '../../../risk/const';
+import { StressHaltEvaluator } from '../../../risk/service/StressHaltEvaluator';
 import { BacktestRunnerService } from '../BacktestRunnerService';
 
 // ─── factories ────────────────────────────────────────────────────────────────
@@ -1802,5 +1804,114 @@ describe('BacktestRunnerService — force-close survivors at end-of-window (R1b 
         expect(capturedTrades.length).toBe(1);
         expect(capturedTrades[0].symbol).toBe('ETHUSDT');
         expect(capturedTrades[0].exitReason).toBe('force_close');
+    });
+});
+
+// ─── M19 breadth sentinel regression ─────────────────────────────────────────
+//
+// Before the M19 fix, BacktestRunnerService seeded `marketBreadth5mUpPct: 0` for
+// every replay bar (cross-symbol breadth is not reconstructable in single-symbol
+// replay). With STRESS_BREADTH_DISTANCE_PCT=30, |0-50|=50 >= 30, which trips
+// MARKET_STRESS on bar 1, persists a halt, and GLOBAL_HALT-s every subsequent bar.
+//
+// After the fix the runner seeds MARKET_BREADTH_NEUTRAL_PCT (=50): |50-50|=0 < 30,
+// so the breadth halt never fires. These tests are the paired regression guard:
+// they fail if someone reverts the sentinel back to 0.
+
+describe('BacktestRunnerService — M19 breadth sentinel (marketBreadth5mUpPct=NEUTRAL, not 0)', () => {
+    // Test 1 — structural: the event built by the runner carries MARKET_BREADTH_NEUTRAL_PCT,
+    // not 0. Asserting the field value guards the sentinel at the source.
+
+    it('event built for a replay bar carries marketBreadth5mUpPct === MARKET_BREADTH_NEUTRAL_PCT (not 0)', async () => {
+        let capturedEvent: any = null;
+        const processEvent = jest.fn().mockImplementation((event: any) => {
+            capturedEvent = event;
+            return Promise.resolve({ skipped: true, rejectedByGate: false, missedFill: false, filled: false });
+        });
+
+        const barOpenTimeMs = new Date('2024-01-15T00:00:00.000Z').getTime();
+        const bar = buildCandle(barOpenTimeMs);
+
+        const runner = buildRunner({
+            pointInTimeUniverse: {
+                resolveForWindow: jest.fn().mockResolvedValue(['ETHUSDT']),
+                resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
+            },
+            candleLoader: {
+                loadFor5mWindow: jest.fn().mockImplementation(({ symbol, fromMs }: { symbol: string; fromMs: number }) => {
+                    if (symbol === 'BTCUSDT') return Promise.resolve([]);
+                    const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
+                    return Promise.resolve(isReplay ? [bar] : []);
+                }),
+                loadTicksForBar: jest.fn().mockResolvedValue([]),
+            },
+            indicatorStateBuilder: {
+                buildInitialWindow: jest.fn().mockReturnValue([]),
+                appendBar: jest.fn().mockReturnValue([bar]),
+                computeSnapshot: jest.fn().mockReturnValue({
+                    symbol: 'ETHUSDT',
+                    closedBarOpenTimeMs: barOpenTimeMs,
+                    vwapSession: new Money('2000'),
+                    vwap20bar: new Money('2000'),
+                    vwap24h: new Money('2000'),
+                    vwapEventAnchored: new Money('2000'),
+                    activeVwapAnchorType: 'session',
+                    vwapDeviationPct: 3.5,
+                    vwapDeviationSigma: 2.5,
+                    volumeRatio: 2.5,
+                    volume20barAvg: new Money('500000'),
+                    atr14: new Money('50'),
+                    adx14: 20,
+                    adxDiPlus: 10,
+                    adxDiMinus: 5,
+                    rsi14: 55,
+                    bollingerUpper: new Money('2100'),
+                    bollingerLower: new Money('1900'),
+                    bollingerPctB: 0.7,
+                    close: new Money('2070'),
+                    fiveMinMovePct: 1.0,
+                }),
+            },
+            orchestrator: { processEvent },
+        });
+
+        await runner.run(buildConfig());
+
+        expect(capturedEvent).not.toBeNull();
+        // The field must equal MARKET_BREADTH_NEUTRAL_PCT (50), never 0.
+        // Reverting the sentinel to 0 breaks this assertion.
+        expect(capturedEvent.marketBreadth5mUpPct).toBe(MARKET_BREADTH_NEUTRAL_PCT);
+        expect(capturedEvent.marketBreadth5mUpPct).not.toBe(0);
+    });
+
+    // Test 2 — contract: MARKET_BREADTH_NEUTRAL_PCT does NOT trip StressHaltEvaluator,
+    // whereas 0 would. Feeds both values through the real evaluator with calm params
+    // so the breadth term is the only variable.
+
+    it('MARKET_BREADTH_NEUTRAL_PCT does not trip StressHaltEvaluator breadth halt; 0 does (guard that 0 would have broken replays)', () => {
+        const evaluator = new StressHaltEvaluator();
+
+        const calmParams = buildParams();
+
+        // The sentinel value — must not trigger stress.
+        const neutralSnapshot = {
+            btc_1m_move_pct: 0.0,
+            eth_5m_move_pct: 0.0,
+            market_breadth_5m_up_pct: MARKET_BREADTH_NEUTRAL_PCT, // sentinel: 50
+            same_bar_trigger_count: 0,
+            open_interest_change_5m_pct: 0.0,
+            funding_rate_annualized: 0.0,
+            bid_ask_spread_pct: 0.0,
+            book_depth_10bps_usdt: '50000000',
+        } as any;
+
+        expect(evaluator.isStressed(neutralSnapshot, calmParams)).toBe(false);
+
+        // The old sentinel (0) would trip the halt: |0-50|=50 >= STRESS_BREADTH_DISTANCE_PCT=30.
+        // This assertion documents that 0 IS stressful, proving the fix was necessary.
+        const zeroSnapshot = { ...neutralSnapshot, market_breadth_5m_up_pct: 0 };
+
+        expect(Math.abs(0 - 50)).toBeGreaterThanOrEqual(STRESS_BREADTH_DISTANCE_PCT);
+        expect(evaluator.isStressed(zeroSnapshot, calmParams)).toBe(true);
     });
 });

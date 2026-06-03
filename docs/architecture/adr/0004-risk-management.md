@@ -319,12 +319,21 @@ fast-stress inputs), so it is deterministic and replayable with no extra I/O:
 - `same_bar_trigger_count` — universe-wide simultaneous triggering.
 - `open_interest_change_5m_pct` — OI shock.
 - `funding_rate_annualized` — funding extreme.
-- `bid_ask_spread_pct`, `book_depth_10bps_usdt` — spread-widening / depth-collapse.
+- `bid_ask_spread_pct` — spread-widening (market-wide liquidity-shock proxy).
+
+> **M19 amendment — `book_depth_10bps_usdt` is no longer a global stress input.**
+> Book depth is a **per-coin property**, not a market-wide signal. Wiring it into the
+> global halt meant the first thin tier-2 alt to trigger on a UTC day flipped
+> `risk_state.is_halted=true` and rejected every subsequent signal that day — even
+> deep-book tier-1 majors — as `global_halt`. Depth is therefore removed from the
+> stress-input list above and re-homed as a per-coin eligibility guard (§6a). The
+> global liquidity-shock signal that remains is **spread widening** (a market-wide
+> spread blowout is genuinely systemic and still halts).
 
 Thresholds are the existing risk-only params (`stress_btc_1m_shock_pct`,
-`stress_eth_1m_shock_pct`, `stress_breadth_pct`, `stress_same_bar_trigger_count`) plus
-named `riskConsts` for the OI/funding/spread/depth limits (no inline magic numbers,
-per conventions §"Constants Placement").
+`stress_eth_1m_shock_pct`, `stress_same_bar_trigger_count`) plus named `riskConsts` for
+the OI/funding/spread limits and the breadth-halt distance (`STRESS_BREADTH_DISTANCE_PCT`,
+see §6b) — no inline magic numbers, per conventions §"Constants Placement".
 
 **Override rule (locked):** when stress indicates trend-initiation, the gate **rejects
 mean-reversion entries with `MARKET_STRESS` regardless of the ADX/`regime_label`
@@ -333,6 +342,71 @@ begins; the fast-stress inputs lead it. The stress check sits **before** any
 regime/slot logic in the pipeline (§2), so it short-circuits ahead of ADX-derived
 eligibility. The halt is recorded on `risk_state` (`is_halted=true`,
 `halt_reason='market_stress'`) and is visible to M9 (Telegram alert).
+
+### 6a. Book depth — per-coin eligibility guard, NOT a global halt (M19)
+
+`book_depth_10bps_usdt` is enforced as a **per-coin, tier-keyed eligibility skip** inside
+the per-coin tier-filter group (`firstFailingTierFilter`), adjacent to the spread-ceiling
+check. It runs **after** the halt checks, so it can only skip the one thin coin — it can
+never persist a halt or block other coins for the rest of the day.
+
+- **Floors (risk-only const, computed enum keys):**
+  ```
+  COIN_DEPTH_FLOOR_10BPS_USDT: Record<CoinTierEnum, number> = {
+      [CoinTierEnum.TIER_1]: 20_000,
+      [CoinTierEnum.TIER_2]: 10_000,
+      [CoinTierEnum.TIER_3]: 5_000,
+  }
+  ```
+  Deeper-book tiers carry the higher floor; thin tier-3 alts are held to a lower bar but
+  still guarded.
+- **Reject reason:** `coin_book_too_thin` (`RejectReasonEnum.COIN_BOOK_TOO_THIN`) — a
+  per-coin skip, distinct from `market_stress`. The decision funnel and dashboard
+  reject-reason tooltip surface it so operators do not misread a thin-coin skip as a halt.
+- **Boundary rule (explicit, locked):** depth **at** the floor is rejected — the
+  comparison is `depth <= floor` (`new Money(depth).lessThanOrEqualTo(floor)`). This
+  preserves the pre-M19 global behavior (the old check used `<=` too). Note this is the
+  **opposite** boundary convention from the spread ceiling, which keeps a strict `>`
+  (spread exactly at the ceiling passes). The two are intentionally asymmetric: a book
+  exactly at the depth floor is "not deep enough"; a spread exactly at the ceiling is
+  "not too wide yet".
+- **Fail-closed (locked):** invalid, missing, empty, unparseable, non-positive depth, or
+  an unknown `coinTier`, all resolve to **too-thin → reject** (`coin_book_too_thin`). The
+  guard mirrors `isSpreadTooWide`'s `Number.isFinite` defense: it never throws out of the
+  gate and never passes-open on bad input. Bad depth data can only cost a single skip,
+  never an erroneous fill.
+
+### 6b. Breadth halt — risk-only distance const, decoupled from the flow-routing param (M19)
+
+The breadth-collapse **halt** fires when breadth is far from the neutral midpoint:
+
+- `MARKET_BREADTH_NEUTRAL_PCT = 50` — neutral midpoint of the 0–100 breadth scale.
+- `STRESS_BREADTH_DISTANCE_PCT = 30` — halt distance from neutral. The halt fires when
+  `|market_breadth_5m_up_pct − 50| >= 30`, i.e. at breadth **≤ 20** (broad selloff) or
+  **≥ 80** (broad melt-up).
+
+This **replaces** the previously dead test that read the `stress_breadth_pct` strategy
+param (=70) as a distance: because breadth is 0–100, the max possible distance from 50 is
+50, so `|breadth − 50| >= 70` could **never** fire. The breadth halt was permanently dead
+until M19.
+
+> **Decoupling — DO NOT re-couple (locked).** `STRESS_BREADTH_DISTANCE_PCT` (risk-only
+> const, =30) and `stress_breadth_pct` (strategy param, =70) are **two different knobs
+> with two different meanings**, and they must stay separate:
+> - `STRESS_BREADTH_DISTANCE_PCT` is a **risk-gate halt distance** — how far breadth must
+>   stray from neutral before the gate halts the whole market.
+> - `stress_breadth_pct` is a **strategy-signal threshold** consumed by
+>   `classifyFlowType()` (ADR 0003) to route `MARKET_BETA` flow. It is unchanged by M19.
+>
+> They once shared a name and a numeric source. Re-seeding the param 70→30 to "fix" the
+> halt would have silently changed `MARKET_BETA` flow classification — a strategy-signal
+> change masquerading as a risk fix. A future reader must **not** merge these back into a
+> single value or read the param inside the breadth halt. The halt reads the const; flow
+> classification reads the param; neither sees the other.
+
+Both §6a and §6b are **code-only** — the floors and the breadth distance are `riskConsts`,
+not `strategy_versions.params`. M19 writes nothing to the DB (no migration, no params
+re-seed).
 
 ### 7. Live-vs-backtest contract — ports for time and state, pure decision core
 

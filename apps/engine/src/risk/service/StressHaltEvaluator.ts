@@ -1,17 +1,13 @@
 import { IMarketSnapshot, IStrategyParams } from '@bot/shared';
 import { Injectable } from '@nestjs/common';
-
-import { Money } from '../../common/utils/money';
 import {
     MARKET_BREADTH_NEUTRAL_PCT,
-    STRESS_BOOK_DEPTH_FLOOR_USDT,
+    STRESS_BREADTH_DISTANCE_PCT,
     STRESS_ETH_5M_SHOCK_PCT,
     STRESS_FUNDING_ANNUALIZED_PCT,
     STRESS_OI_CHANGE_5M_PCT,
     STRESS_SPREAD_PCT,
 } from '../const';
-
-const STRESS_BOOK_DEPTH_FLOOR = new Money(STRESS_BOOK_DEPTH_FLOOR_USDT);
 
 // Global market-stress detector (ADR 0004 §6). Reads ONLY fields already on the market
 // snapshot (M1 fast-stress inputs) so it is deterministic and replayable with no extra I/O.
@@ -29,7 +25,7 @@ export class StressHaltEvaluator {
             return true;
         }
 
-        if (this.isBreadthCollapse(snapshot, params)) {
+        if (this.isBreadthCollapse(snapshot)) {
             return true;
         }
 
@@ -71,17 +67,20 @@ export class StressHaltEvaluator {
         return btcShock || ethShock;
     }
 
-    // Breadth collapse OR surge: a move of stress_breadth_pct away from the neutral midpoint.
-    private isBreadthCollapse(snapshot: IMarketSnapshot, params: IStrategyParams): boolean {
+    // Breadth collapse OR surge: a move of STRESS_BREADTH_DISTANCE_PCT away from the neutral
+    // midpoint (ADR 0004 §6b). Reads the risk-only halt-distance const, NOT the
+    // `stress_breadth_pct` strategy param — those two knobs are intentionally decoupled (the
+    // param keeps driving classifyFlowType MARKET_BETA routing unchanged).
+    private isBreadthCollapse(snapshot: IMarketSnapshot): boolean {
         const distanceFromBalance = Math.abs(snapshot.market_breadth_5m_up_pct - MARKET_BREADTH_NEUTRAL_PCT);
 
-        return distanceFromBalance >= params.stress_breadth_pct;
+        return distanceFromBalance >= STRESS_BREADTH_DISTANCE_PCT;
     }
 
+    // Spread widening is the remaining global liquidity-shock proxy (ADR 0004 §6 M19): a
+    // market-wide spread blowout is genuinely systemic and still halts. Book depth moved to a
+    // per-coin eligibility guard (RiskGateService.isBookTooThin, §6a) and no longer halts.
     private isLiquidityShock(snapshot: IMarketSnapshot): boolean {
-        const spreadWidening = snapshot.bid_ask_spread_pct >= STRESS_SPREAD_PCT;
-        const depthCollapse = new Money(snapshot.book_depth_10bps_usdt).lessThanOrEqualTo(STRESS_BOOK_DEPTH_FLOOR);
-
-        return spreadWidening || depthCollapse;
+        return snapshot.bid_ask_spread_pct >= STRESS_SPREAD_PCT;
     }
 }

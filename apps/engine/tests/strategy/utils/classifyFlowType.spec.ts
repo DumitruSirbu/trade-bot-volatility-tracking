@@ -358,4 +358,82 @@ describe('classifyFlowType', () => {
             expect(first).toBe(second);
         });
     });
+
+    // ─── M19 breadth-decoupling guard ─────────────────────────────────────────
+    // M19 moved the breadth halt to a risk-only const (STRESS_BREADTH_DISTANCE_PCT=30)
+    // inside StressHaltEvaluator. classifyFlowType still reads params.stress_breadth_pct
+    // (=70) for MARKET_BETA routing. This suite asserts that:
+    //   (a) MARKET_BETA routing is driven by params.stress_breadth_pct (unchanged at 70),
+    //       NOT by the risk-only halt const (30).
+    //   (b) Breadth values that now trip the halt (>=80 or <=20, distance 30) do NOT
+    //       change MARKET_BETA routing — they are irrelevant to flow classification.
+
+    describe('M19 breadth-decoupling guard — MARKET_BETA routing uses params.stress_breadth_pct=70, not halt const=30', () => {
+        // params.stress_breadth_pct is 70 in the shared `params` fixture above.
+
+        it('routes MARKET_BETA at breadth=75 via params.stress_breadth_pct=70, independent of the halt const', async () => {
+            // breadth=75: classifyFlowType returns MARKET_BETA iff breadth > params.stress_breadth_pct
+            // (70). 75 > 70 is true, so MARKET_BETA fires. The risk-halt const (30) is irrelevant
+            // to routing — this test verifies routing is param-driven, not const-driven.
+            const event = buildEvent({
+                idiosyncrasyScore: 0.1,
+                openInterestChange5mPct: 0.1,
+                fundingRateAnnualized: 0.01,
+                marketBreadth5mUpPct: 75.0, // > 70 (param) → MARKET_BETA routes
+                sameBarTriggerCount: 3,
+            });
+
+            // With params.stress_breadth_pct=70: 75 > 70 is true → MARKET_BETA.
+            expect(classifyFlowType(event, params)).toBe(FlowTypeEnum.MARKET_BETA);
+        });
+
+        it('does NOT route MARKET_BETA at breadth=80 when params.stress_breadth_pct=80 (boundary: strict >)', () => {
+            // breadth=80 would trip the risk halt (|80-50|=30 >= STRESS_BREADTH_DISTANCE_PCT=30).
+            // But for flow classification with stress_breadth_pct=80 (strict >), 80 is NOT > 80
+            // so MARKET_BETA does NOT fire. Proves flow uses param, not halt const.
+            const strictParams = buildParams({ stress_breadth_pct: 80.0, stress_same_bar_trigger_count: 3 });
+            const event = buildEvent({
+                idiosyncrasyScore: 0.1,
+                openInterestChange5mPct: 0.1,
+                fundingRateAnnualized: 0.01,
+                marketBreadth5mUpPct: 80.0, // NOT > 80 (strict) → no MARKET_BETA
+                sameBarTriggerCount: 3,
+            });
+
+            expect(classifyFlowType(event, strictParams)).not.toBe(FlowTypeEnum.MARKET_BETA);
+        });
+
+        it('still routes MARKET_BETA when breadth greatly exceeds params.stress_breadth_pct (routing is param-driven)', () => {
+            // breadth=90: exceeds both the halt const (|90-50|=40 >= 30) AND the param (90 > 70).
+            // classifyFlowType must still return MARKET_BETA because it reads the param.
+            const event = buildEvent({
+                idiosyncrasyScore: 0.1,
+                openInterestChange5mPct: 0.1,
+                fundingRateAnnualized: 0.01,
+                marketBreadth5mUpPct: 90.0,
+                sameBarTriggerCount: 3,
+            });
+
+            expect(classifyFlowType(event, params)).toBe(FlowTypeEnum.MARKET_BETA);
+        });
+
+        it('does NOT route MARKET_BETA at breadth=20 (would trip halt const, but 20 < stress_breadth_pct=70)', () => {
+            // breadth=20 trips the risk halt (|20-50|=30 >= STRESS_BREADTH_DISTANCE_PCT=30).
+            // classifyFlowType uses `> params.stress_breadth_pct` (=70) — 20 > 70 is false.
+            const event = buildEvent({
+                idiosyncrasyScore: 0.1,
+                openInterestChange5mPct: 0.1,
+                fundingRateAnnualized: 0.01,
+                marketBreadth5mUpPct: 20.0, // trips halt const but NOT the flow param
+                sameBarTriggerCount: 3,
+            });
+
+            expect(classifyFlowType(event, params)).not.toBe(FlowTypeEnum.MARKET_BETA);
+        });
+
+        it('params.stress_breadth_pct remains at 70 (pinned — changing it would alter MARKET_BETA routing)', () => {
+            // Pins the param value so any accidental re-seed (e.g. 70→30) is caught immediately.
+            expect(params.stress_breadth_pct).toBe(70.0);
+        });
+    });
 });

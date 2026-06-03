@@ -20,6 +20,7 @@ Items resolved or no longer applicable should be removed. New items added at the
 | Item | File / Location | Origin | Notes |
 |------|----------------|--------|-------|
 | M15 soak evaluator wave (CRN tape, TOST calibration, sample-size pre-flight, lowFidelity rankings) | `docs/plans/M11a-local-soak.md` | M11a | Gate before M15 cloud go-live |
+| Per-tier book-depth floors not empirically calibrated to realized slippage | `COIN_DEPTH_FLOOR_10BPS_USDT` in `apps/engine/src/risk/const/riskConsts.ts` | M19 | Floors `{t1:20k,t2:10k,t3:5k}` are reasonable round numbers, not derived from a depth-vs-slippage relationship at the live position size; recalibrate post-soak once real fills accumulate (quant review Medium) |
 | `HaltSourceEnum.PAPER_DRAWDOWN` / `PAPER_RECONCILIATION_DRIFT` dedicated values | `packages/shared/` | M11a | Shared change deferred M15 |
 | `IExchangeOrderSnapshot` → shared `IOrder` full migration (dual-shape via D2+D14 ports today) | `apps/engine/` | M11a | |
 | Simulator-config-hash real source (sentinel today) | `apps/engine/` | M11a | R3.1 |

@@ -73,6 +73,15 @@ export const TIER_SPREAD_CEILING_PCT: Record<CoinTierEnum, number> = {
     [CoinTierEnum.TIER_3]: 0.5,
 };
 
+// Per-coin tier-keyed 10bps book-depth floor (USDT). Depth <= floor => coin_book_too_thin,
+// a per-coin eligibility skip (NOT a halt) inside the per-coin tier-filter group (ADR 0004
+// §6a). Deeper-book tiers carry the higher floor; thin tier-3 alts are held to a lower bar.
+export const COIN_DEPTH_FLOOR_10BPS_USDT: Record<CoinTierEnum, number> = {
+    [CoinTierEnum.TIER_1]: 20_000,
+    [CoinTierEnum.TIER_2]: 10_000,
+    [CoinTierEnum.TIER_3]: 5_000,
+};
+
 // --- funding filter (§8/§ funding) ---
 
 // Halve notional when funding is unfavourable and at/over the suppress threshold.
@@ -87,17 +96,27 @@ export const AGG_TRADE_BUY_FLOW_BALANCE = 0.5;
 
 // --- global market-stress halt (§6) ---
 
-// OI shock (abs 5m pct), funding extreme (abs annualized pct), spread widening (pct), and
-// depth collapse (USDT) limits that trip the stress halt. The BTC 1m + breadth + same-bar
-// thresholds come from the strategy params (stress_* keys) per ADR 0004 §6.
+// OI shock (abs 5m pct), funding extreme (abs annualized pct), and spread widening (pct)
+// limits that trip the stress halt. Book depth is NO LONGER a global stress input (ADR 0004
+// §6 M19 amendment) — it is a per-coin eligibility guard (COIN_DEPTH_FLOOR_10BPS_USDT, §6a),
+// so a single thin alt can no longer halt the whole market. Spread widening remains the
+// market-wide liquidity-shock proxy. The BTC 1m + same-bar thresholds come from the strategy
+// params (stress_* keys); the breadth-halt distance is STRESS_BREADTH_DISTANCE_PCT below.
 export const STRESS_OI_CHANGE_5M_PCT = 5;
 export const STRESS_FUNDING_ANNUALIZED_PCT = 50;
 export const STRESS_SPREAD_PCT = 0.6;
-export const STRESS_BOOK_DEPTH_FLOOR_USDT = 20_000;
 
-// market_breadth_5m_up_pct neutral midpoint: 50% up = balanced breadth. Stress trips when the
-// distance from this midpoint reaches stress_breadth_pct (collapse OR surge).
+// market_breadth_5m_up_pct neutral midpoint: 50% up = balanced breadth. The breadth halt trips
+// when the distance from this midpoint reaches STRESS_BREADTH_DISTANCE_PCT (collapse OR surge).
 export const MARKET_BREADTH_NEUTRAL_PCT = 50;
+
+// Breadth-halt distance from neutral (risk-only). The halt fires when
+// |market_breadth_5m_up_pct - 50| >= 30, i.e. breadth <= 20 (broad selloff) or >= 80 (broad
+// melt-up). INTENTIONALLY DISTINCT from the `stress_breadth_pct` strategy param (=70) that
+// `classifyFlowType` consumes to route MARKET_BETA flow (ADR 0004 §6b) — do NOT re-couple
+// them: re-seeding the param to fix the halt would silently change flow classification. The
+// halt reads this const; flow classification reads the param; neither sees the other.
+export const STRESS_BREADTH_DISTANCE_PCT = 30;
 
 // ETH index shock threshold on the 5m horizon. The snapshot only carries eth_5m_move_pct (a
 // 5m field), while strategy params only define a 1m ETH threshold (stress_eth_1m_shock_pct).

@@ -25,7 +25,13 @@
 import { CoinTierEnum, CorrelationModeEnum, OrderIntentActionEnum, PositionSideEnum, RejectReasonEnum, RiskOutcomeEnum } from '@bot/shared';
 
 import { Money } from '../../../src/common/utils/money';
-import { DAILY_LOSS_LIMIT_USDT, MAX_EXPOSURE_PER_COIN_USDT, MAX_SAME_DIRECTION_EXPOSURE_USDT, WEEKLY_LOSS_LIMIT_USDT } from '../../../src/risk/const';
+import {
+    COIN_DEPTH_FLOOR_10BPS_USDT,
+    DAILY_LOSS_LIMIT_USDT,
+    MAX_EXPOSURE_PER_COIN_USDT,
+    MAX_SAME_DIRECTION_EXPOSURE_USDT,
+    WEEKLY_LOSS_LIMIT_USDT,
+} from '../../../src/risk/const';
 import { ReservationStateEnum } from '../../../src/risk/enum';
 import { IRiskGateContext } from '../../../src/risk/interface';
 import { ReservationLedger } from '../../../src/risk/service/ReservationLedger';
@@ -1365,6 +1371,330 @@ describe('RiskGateService', () => {
             gate.expireStaleReservations(NOW_MS + TTL_MS + 1_000);
 
             expect(ledger.listActive()).toHaveLength(0);
+        });
+    });
+
+    // ─── coin book depth — per-tier floor (M19) ───────────────────────────────
+
+    describe('coin book depth — per-tier floor', () => {
+        // Happy-path: deep books pass the depth gate for each tier.
+
+        it('approves tier-1 intent when book_depth_10bps_usdt is well above the tier-1 floor', async () => {
+            const { gate } = makeGate();
+            const context = buildPassingContext({
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: '50000000.00' }), // far above 20_000
+            });
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context);
+
+            expect(result.outcome).toBe(RiskOutcomeEnum.APPROVED);
+        });
+
+        // Thin-book rejection per tier.
+
+        it('rejects with coin_book_too_thin when tier-1 depth is below the tier-1 floor (20_000)', async () => {
+            const { gate } = makeGate();
+            const thinDepth = COIN_DEPTH_FLOOR_10BPS_USDT[CoinTierEnum.TIER_1] - 1; // 19_999
+            const context = buildPassingContext({
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: String(thinDepth) }),
+            });
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+        });
+
+        it('rejects with coin_book_too_thin when tier-2 depth is below the tier-2 floor (10_000)', async () => {
+            const { gate } = makeGate();
+            const thinDepth = COIN_DEPTH_FLOOR_10BPS_USDT[CoinTierEnum.TIER_2] - 1; // 9_999
+            const context = buildPassingContext({
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: String(thinDepth) }),
+            });
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_2 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+        });
+
+        it('rejects with coin_book_too_thin when tier-3 depth is below the tier-3 floor (5_000)', async () => {
+            const { gate } = makeGate();
+            const thinDepth = COIN_DEPTH_FLOOR_10BPS_USDT[CoinTierEnum.TIER_3] - 1; // 4_999
+            const context = buildPassingContext({
+                // Tier-3 needs a validated version; but depth fires before tier3 check.
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: String(thinDepth) }),
+            });
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_3 }), context);
+
+            // Depth check fires before tier3_not_validated in the pipeline.
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+        });
+
+        // Boundary: tier-2 depth exactly AT the floor rejects (boundary is <=).
+
+        it('rejects tier-2 depth exactly at 10_000 (boundary: <= floor rejects)', async () => {
+            const { gate } = makeGate();
+            const context = buildPassingContext({
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: '10000' }), // exactly at tier-2 floor
+            });
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_2 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+        });
+
+        it('approves tier-2 depth at 10_000.01 — just above the floor (boundary: > floor passes)', async () => {
+            const { gate } = makeGate();
+            const context = buildPassingContext({
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: '10000.01' }),
+            });
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_2 }), context);
+
+            // Depth gate passes; intent reaches the next legitimate gate and should approve.
+            expect(result.outcome).toBe(RiskOutcomeEnum.APPROVED);
+        });
+    });
+
+    // ─── coin book depth — adversarial fail-closed (M19) ─────────────────────
+
+    describe('coin book depth — adversarial fail-closed', () => {
+        // Every adversarial case must:
+        //   1. Resolve to COIN_BOOK_TOO_THIN (not throw, not pass).
+        //   2. NOT write a halt to upsertDay — thin-depth is a per-coin skip, never a halt.
+
+        function buildAdversarialContext(depth: unknown) {
+            const riskState = buildRiskStatePort({ day: buildRiskStateDay({ isHalted: false }) });
+            const context = buildPassingContext({
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: depth as any }),
+                riskState,
+            });
+            return { context, riskState };
+        }
+
+        it('rejects with coin_book_too_thin and does NOT halt when depth is null', async () => {
+            const { gate } = makeGate();
+            const { context, riskState } = buildAdversarialContext(null);
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            expect(riskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+        });
+
+        it('rejects with coin_book_too_thin and does NOT halt when depth is undefined', async () => {
+            const { gate } = makeGate();
+            const { context, riskState } = buildAdversarialContext(undefined);
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            expect(riskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+        });
+
+        it('rejects with coin_book_too_thin and does NOT halt when depth is empty string', async () => {
+            const { gate } = makeGate();
+            const { context, riskState } = buildAdversarialContext('');
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            expect(riskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+        });
+
+        it('rejects with coin_book_too_thin and does NOT halt when depth is a non-numeric string', async () => {
+            const { gate } = makeGate();
+            const { context, riskState } = buildAdversarialContext('NaN_garbage');
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            expect(riskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+        });
+
+        it('rejects with coin_book_too_thin and does NOT halt when depth is negative', async () => {
+            const { gate } = makeGate();
+            const { context, riskState } = buildAdversarialContext('-1000');
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            expect(riskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+        });
+
+        it('rejects with coin_book_too_thin and does NOT halt when depth is zero', async () => {
+            const { gate } = makeGate();
+            const { context, riskState } = buildAdversarialContext('0');
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            expect(riskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+        });
+
+        it('rejects with coin_book_too_thin and does NOT halt for an unknown coinTier', async () => {
+            const { gate } = makeGate();
+            // Depth is deep; tier is unmapped — fail-closed on unknown tier.
+            const riskState = buildRiskStatePort({ day: buildRiskStateDay({ isHalted: false }) });
+            const context = buildPassingContext({
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: '50000000.00' }),
+                riskState,
+            });
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: 'TIER_UNKNOWN' as any }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            expect(riskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+        });
+
+        // The next four tests cover inputs that slipped past the old Number() guard but
+        // are correctly caught by the parseMoney try/catch introduced in the M19 review fix.
+
+        it('rejects with coin_book_too_thin and does NOT halt for whitespace-padded depth ("  100  ")', async () => {
+            // "  100  " passes Number() → 100, but decimal.js parseMoney throws on leading/trailing
+            // whitespace (MoneyParseException). The try/catch in isBookTooThin returns true (thin).
+            const { gate } = makeGate();
+            const { context, riskState } = buildAdversarialContext('  100  ');
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            expect(riskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+            await expect(gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context)).resolves.not.toThrow();
+        });
+
+        it('rejects with coin_book_too_thin and does NOT halt for hex-notation depth ("0x10")', async () => {
+            // decimal.js parses "0x10" to 16 (no throw), which is far below the tier-1 floor
+            // (20_000) → too thin. This pins that an exotic-but-parseable string resolves to a
+            // safe per-coin skip, never a fill — and never a halt.
+            const { gate } = makeGate();
+            const { context, riskState } = buildAdversarialContext('0x10');
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            expect(riskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+            await expect(gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context)).resolves.not.toThrow();
+        });
+
+        it('rejects with coin_book_too_thin for scientific-notation depth below tier floor ("1e3" = 1000 < tier-1 floor 20_000)', async () => {
+            // "1e3" is valid decimal.js input (parses to 1000). 1000 < COIN_DEPTH_FLOOR[TIER_1]=20_000 → thin.
+            // This confirms the guard works for scientific notation that happens to be below the floor.
+            const { gate } = makeGate();
+            const { context, riskState } = buildAdversarialContext('1e3');
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            expect(riskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+        });
+
+        it('rejects with coin_book_too_thin and does NOT halt for only-whitespace depth ("  ")', async () => {
+            // "  " (only whitespace) passes Number() → NaN but parseMoney throws.
+            // The try/catch returns true (thin). No throw escapes the gate.
+            const { gate } = makeGate();
+            const { context, riskState } = buildAdversarialContext('  ');
+
+            const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            expect(riskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+            await expect(gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context)).resolves.not.toThrow();
+        });
+
+        it('does NOT throw an exception for any adversarial depth input', async () => {
+            const { gate } = makeGate();
+            const adversarialInputs = [null, undefined, '', '  ', 'garbage', '0x10', '  100  ', '-999', '0', NaN, Infinity];
+
+            for (const depth of adversarialInputs) {
+                const context = buildPassingContext({
+                    snapshot: buildSnapshot({ book_depth_10bps_usdt: depth as any }),
+                });
+                await expect(gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_1 }), context)).resolves.not.toThrow();
+            }
+        });
+    });
+
+    // ─── day-contagion regression (M19 core proof) ───────────────────────────
+
+    describe('day-contagion regression — thin alt does NOT halt the day for deep coins', () => {
+        // This is the core M19 regression guard: before M19, a single thin-depth alt
+        // would flip risk_state.is_halted=true, causing every subsequent signal that
+        // day to be rejected as GLOBAL_HALT — even deep-book tier-1 coins. M19 moves
+        // depth to a per-coin eligibility skip so it can never set is_halted.
+        //
+        // Proof: evaluate a thin tier-2 signal → COIN_BOOK_TOO_THIN (not a halt).
+        // Then, with the SAME UTC-day risk state (still not halted), evaluate a deep
+        // tier-1 signal → APPROVED (or any reason other than GLOBAL_HALT).
+
+        it('thin tier-2 coin is skipped with coin_book_too_thin; deep tier-1 coin on the same UTC day is NOT global_halt', async () => {
+            const { gate } = makeGate();
+
+            // Shared risk-state fixture: today's row exists, not halted.
+            const sharedRiskState = buildRiskStatePort({ day: buildRiskStateDay({ isHalted: false }) });
+
+            // Step 1 — thin tier-2 signal.
+            const thinContext = buildPassingContext({
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: '5000' }), // below tier-2 floor (10_000)
+                riskState: sharedRiskState,
+            });
+            const thinResult = await gate.evaluate(
+                buildPassingIntent({ coinTier: CoinTierEnum.TIER_2, eventId: 'ALTUSDT:thin', symbol: 'ALTUSDT' }),
+                thinContext,
+            );
+
+            // Thin coin is skipped per-coin — not a halt.
+            expect(thinResult.outcome).toBe(RiskOutcomeEnum.REJECTED);
+            expect(thinResult.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            // upsertDay MUST NOT have been called with is_halted:true — depth is not a halt signal.
+            expect(sharedRiskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+
+            // Step 2 — deep tier-1 signal on the SAME UTC day (same risk state, still not halted).
+            const deepContext = buildPassingContext({
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: '50000000.00' }), // well above tier-1 floor
+                riskState: sharedRiskState,
+            });
+            const deepResult = await gate.evaluate(
+                buildPassingIntent({ coinTier: CoinTierEnum.TIER_1, eventId: 'SOLUSDT:deep', symbol: 'SOLUSDT' }),
+                deepContext,
+            );
+
+            // Deep tier-1 coin must NOT be rejected as GLOBAL_HALT.
+            expect(deepResult.rejectReason).not.toBe(RejectReasonEnum.GLOBAL_HALT);
+            // In a clean state it should approve entirely.
+            expect(deepResult.outcome).toBe(RiskOutcomeEnum.APPROVED);
+        });
+
+        it('thin tier-3 coin does NOT set is_halted so a subsequent deep tier-1 signal is NOT global_halt', async () => {
+            const { gate } = makeGate();
+
+            const sharedRiskState = buildRiskStatePort({ day: buildRiskStateDay({ isHalted: false }) });
+
+            // Thin tier-3.
+            const thinContext = buildPassingContext({
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: '100' }), // below tier-3 floor (5_000)
+                riskState: sharedRiskState,
+            });
+            const thinResult = await gate.evaluate(
+                buildPassingIntent({ coinTier: CoinTierEnum.TIER_3, eventId: 'MEME:thin', symbol: 'MEMEUSDT' }),
+                thinContext,
+            );
+
+            expect(thinResult.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+            expect(sharedRiskState.upsertDay).not.toHaveBeenCalledWith(expect.objectContaining({ isHalted: true }));
+
+            // Deep tier-1 follows — same day, same not-halted state.
+            const deepContext = buildPassingContext({
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: '50000000.00' }),
+                riskState: sharedRiskState,
+            });
+            const deepResult = await gate.evaluate(
+                buildPassingIntent({ coinTier: CoinTierEnum.TIER_1, eventId: 'BNBUSDT:deep', symbol: 'BNBUSDT' }),
+                deepContext,
+            );
+
+            expect(deepResult.rejectReason).not.toBe(RejectReasonEnum.GLOBAL_HALT);
+            expect(deepResult.outcome).toBe(RiskOutcomeEnum.APPROVED);
         });
     });
 });
