@@ -16,33 +16,43 @@
 
 set -eu
 
-# --- Collect staged added/copied/modified files, NUL-delimited (space-safe) ---
-staged_ts=$(git diff --cached --name-only --diff-filter=ACM -z \
-    -- '*.ts' '*.tsx')
-staged_doc=$(git diff --cached --name-only --diff-filter=ACM -z \
-    -- '*.json' '*.md' '*.yml' '*.yaml')
+# A NUL-delimited file list CANNOT be stored in a shell variable: command
+# substitution strips NUL bytes, collapsing every path into one blob that
+# xargs -0 then hands to prettier as a single bogus pattern (only single-file
+# commits survived). So pipe `git diff -z` STRAIGHT into `xargs -0` every time
+# (NULs preserved, space-safe), and use a separate plain capture purely for the
+# is-anything-staged presence test, where losing the NULs is harmless.
+list_ts() {
+    git diff --cached --name-only --diff-filter=ACM -z -- '*.ts' '*.tsx'
+}
+list_doc() {
+    git diff --cached --name-only --diff-filter=ACM -z -- '*.json' '*.md' '*.yml' '*.yaml'
+}
+
+has_ts=$(git diff --cached --name-only --diff-filter=ACM -- '*.ts' '*.tsx')
+has_doc=$(git diff --cached --name-only --diff-filter=ACM -- '*.json' '*.md' '*.yml' '*.yaml')
 
 # Fast path: nothing relevant staged.
-if [ -z "$staged_ts" ] && [ -z "$staged_doc" ]; then
+if [ -z "$has_ts" ] && [ -z "$has_doc" ]; then
     exit 0
 fi
 
 # --- TypeScript: prettier --write, then eslint --fix ---
-if [ -n "$staged_ts" ]; then
-    printf '%s' "$staged_ts" | xargs -0 npx prettier --write
-    if ! printf '%s' "$staged_ts" | xargs -0 npx eslint --fix; then
+if [ -n "$has_ts" ]; then
+    list_ts | xargs -0 npx prettier --write
+    if ! list_ts | xargs -0 npx eslint --fix; then
         echo ""
         echo "pre-commit: ESLint found unfixable errors in staged TS files."
         echo "pre-commit: fix them and re-stage, or bypass with --no-verify."
         exit 1
     fi
-    printf '%s' "$staged_ts" | xargs -0 git add --
+    list_ts | xargs -0 git add --
 fi
 
 # --- JSON / Markdown / YAML: prettier --write only ---
-if [ -n "$staged_doc" ]; then
-    printf '%s' "$staged_doc" | xargs -0 npx prettier --write
-    printf '%s' "$staged_doc" | xargs -0 git add --
+if [ -n "$has_doc" ]; then
+    list_doc | xargs -0 npx prettier --write
+    list_doc | xargs -0 git add --
 fi
 
 exit 0
