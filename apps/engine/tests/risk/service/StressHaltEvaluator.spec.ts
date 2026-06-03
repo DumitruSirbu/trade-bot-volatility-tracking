@@ -3,10 +3,15 @@
  *
  * Verifies each stress trigger independently, the override-ADX invariant,
  * and the within-limits (no-stress) baseline.
+ *
+ * M19: depth-collapse global stress removed (depth is now a per-coin eligibility
+ * guard in RiskGateService.isBookTooThin). Breadth halt uses risk-only const
+ * STRESS_BREADTH_DISTANCE_PCT=30; fires at breadth 20 (|20-50|=30) and 80
+ * (|80-50|=30); silent at 25 (|25-50|=25 < 30) and 75 (|75-50|=25 < 30).
  */
 
 import {
-    STRESS_BOOK_DEPTH_FLOOR_USDT,
+    STRESS_BREADTH_DISTANCE_PCT,
     STRESS_ETH_5M_SHOCK_PCT,
     STRESS_FUNDING_ANNUALIZED_PCT,
     STRESS_OI_CHANGE_5M_PCT,
@@ -25,12 +30,12 @@ function calmSnapshot() {
     return buildSnapshot({
         btc_1m_move_pct: 0.1,
         eth_5m_move_pct: 0.2,
-        market_breadth_5m_up_pct: 55, // 5 away from 50 — well under stress_breadth_pct=80
+        market_breadth_5m_up_pct: 55, // |55-50|=5 — well under STRESS_BREADTH_DISTANCE_PCT=30
         same_bar_trigger_count: 1,
         open_interest_change_5m_pct: 1, // below STRESS_OI_CHANGE_5M_PCT=5
         funding_rate_annualized: 10, // below STRESS_FUNDING_ANNUALIZED_PCT=50
         bid_ask_spread_pct: 0.1, // below STRESS_SPREAD_PCT=0.6
-        book_depth_10bps_usdt: '50000000', // above STRESS_BOOK_DEPTH_FLOOR_USDT=20000
+        book_depth_10bps_usdt: '50000000', // depth is no longer a global stress input (M19)
     });
 }
 
@@ -38,7 +43,7 @@ function calmParams() {
     return buildParams({
         stress_btc_1m_shock_pct: 1.0,
         stress_eth_1m_shock_pct: 1.5,
-        stress_breadth_pct: 80.0,
+        stress_breadth_pct: 80.0, // param kept for classifyFlowType; breadth HALT uses STRESS_BREADTH_DISTANCE_PCT=30
         stress_same_bar_trigger_count: 5,
     });
 }
@@ -116,25 +121,39 @@ describe('StressHaltEvaluator', () => {
         });
     });
 
-    describe('breadth collapse/surge trigger', () => {
-        it('triggers stress when market_breadth_5m_up_pct collapses (50-breadth >= stress_breadth_pct)', () => {
-            const snapshot = calmSnapshot();
-            // distanceFromBalance = |5 - 50| = 45; stress_breadth_pct=80 → no
-            // distanceFromBalance = |130 - 50| = 80 → yes
-            const stressed = { ...snapshot, market_breadth_5m_up_pct: 130 };
+    describe('breadth collapse/surge trigger — const STRESS_BREADTH_DISTANCE_PCT=30', () => {
+        // The breadth halt now reads STRESS_BREADTH_DISTANCE_PCT (risk-only const = 30),
+        // NOT params.stress_breadth_pct (= 80, used only by classifyFlowType for MARKET_BETA).
+        // Fires when |breadth - 50| >= 30, i.e. breadth <= 20 (broad selloff) or >= 80 (melt-up).
+
+        it('triggers stress at breadth=20 (|20-50|=30 >= STRESS_BREADTH_DISTANCE_PCT=30)', () => {
+            const stressed = { ...calmSnapshot(), market_breadth_5m_up_pct: 20 };
             expect(makeEvaluator().isStressed(stressed, calmParams())).toBe(true);
         });
 
-        it('triggers stress when breadth surges toward 100% (distance from 50 >= threshold)', () => {
-            const snapshot = calmSnapshot();
-            // need >= 80 from 50, i.e., >= 130 or <= -30; use 130
-            expect(makeEvaluator().isStressed({ ...snapshot, market_breadth_5m_up_pct: 130 }, calmParams())).toBe(true);
+        it('triggers stress at breadth=80 (|80-50|=30 >= STRESS_BREADTH_DISTANCE_PCT=30)', () => {
+            const stressed = { ...calmSnapshot(), market_breadth_5m_up_pct: 80 };
+            expect(makeEvaluator().isStressed(stressed, calmParams())).toBe(true);
         });
 
-        it('does NOT trigger when breadth is near 50% balance', () => {
-            const snapshot = calmSnapshot();
-            const calm = { ...snapshot, market_breadth_5m_up_pct: 55 }; // |55-50|=5 < 80
+        it('is silent at breadth=25 (|25-50|=25 < STRESS_BREADTH_DISTANCE_PCT=30)', () => {
+            const calm = { ...calmSnapshot(), market_breadth_5m_up_pct: 25 };
             expect(makeEvaluator().isStressed(calm, calmParams())).toBe(false);
+        });
+
+        it('is silent at breadth=75 (|75-50|=25 < STRESS_BREADTH_DISTANCE_PCT=30)', () => {
+            const calm = { ...calmSnapshot(), market_breadth_5m_up_pct: 75 };
+            expect(makeEvaluator().isStressed(calm, calmParams())).toBe(false);
+        });
+
+        it('is silent at breadth=55 — calm fixture (|55-50|=5 << 30)', () => {
+            const calm = { ...calmSnapshot(), market_breadth_5m_up_pct: 55 };
+            expect(makeEvaluator().isStressed(calm, calmParams())).toBe(false);
+        });
+
+        it('reflects STRESS_BREADTH_DISTANCE_PCT const value directly (const=30 means boundary fires at distance 30)', () => {
+            // This pins the const value; if the const changes the test description must be updated.
+            expect(STRESS_BREADTH_DISTANCE_PCT).toBe(30);
         });
     });
 
@@ -188,17 +207,19 @@ describe('StressHaltEvaluator', () => {
         });
     });
 
-    describe('depth collapse trigger', () => {
-        it('triggers stress when book_depth_10bps_usdt <= STRESS_BOOK_DEPTH_FLOOR_USDT', () => {
-            const snapshot = calmSnapshot();
-            const stressed = { ...snapshot, book_depth_10bps_usdt: String(STRESS_BOOK_DEPTH_FLOOR_USDT) };
-            expect(makeEvaluator().isStressed(stressed, calmParams())).toBe(true);
+    describe('depth is NO LONGER a global stress input (M19)', () => {
+        // book_depth_10bps_usdt was removed from isLiquidityShock. Thin-depth coins
+        // are now a per-coin skip (RiskGateService.isBookTooThin → COIN_BOOK_TOO_THIN),
+        // not a market-wide halt. Asserting that even at depth=0 the evaluator itself
+        // does NOT return stressed — the per-coin guard is elsewhere.
+        it('does NOT trigger stress for any book_depth value — depth is handled per-coin by RiskGateService', () => {
+            const thinDepth = { ...calmSnapshot(), book_depth_10bps_usdt: '1' };
+            expect(makeEvaluator().isStressed(thinDepth, calmParams())).toBe(false);
         });
 
-        it('does NOT trigger when depth is one unit above the floor', () => {
-            const snapshot = calmSnapshot();
-            const calm = { ...snapshot, book_depth_10bps_usdt: String(STRESS_BOOK_DEPTH_FLOOR_USDT + 1) };
-            expect(makeEvaluator().isStressed(calm, calmParams())).toBe(false);
+        it('does NOT trigger stress when book_depth_10bps_usdt is zero string', () => {
+            const zeroDepth = { ...calmSnapshot(), book_depth_10bps_usdt: '0' };
+            expect(makeEvaluator().isStressed(zeroDepth, calmParams())).toBe(false);
         });
     });
 

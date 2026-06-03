@@ -26,7 +26,7 @@ import { InstrumentRepository } from '../../market-data/repository/InstrumentRep
 import { OpenInterestRepository } from '../../market-data/repository/OpenInterestRepository';
 import { evaluateTrigger } from '../../market-data/trigger';
 import { resolveTriggerParams } from '../../market-data/utils';
-import { DEFAULT_MAINTENANCE_MARGIN_RATE } from '../../risk/const/riskConsts';
+import { DEFAULT_MAINTENANCE_MARGIN_RATE, MARKET_BREADTH_NEUTRAL_PCT } from '../../risk/const/riskConsts';
 import { IInstrumentConstraints } from '../../risk/interface';
 import { ReservationLedger } from '../../risk/service';
 import { IStrategy } from '../../strategy/interface';
@@ -595,7 +595,12 @@ export class BacktestRunnerService {
             bidAskSpreadPct: 0,
             bookDepth10bpsUsdt: bookSnapshot !== null ? (bookSnapshot.depth10bps ?? null) : null,
             bookDepth50bpsUsdt: bookSnapshot !== null ? (bookSnapshot.depth50bps ?? null) : null,
-            marketBreadth5mUpPct: 0,
+            // Cross-symbol breadth is not reconstructable in single-symbol replay — feed the
+            // neutral midpoint (no signal), NOT 0. Since M19 the breadth halt fires at
+            // |breadth-50| >= STRESS_BREADTH_DISTANCE_PCT (30); a 0 here would read as |0-50|=50,
+            // tripping MARKET_STRESS on bar 1, persisting the halt, and GLOBAL_HALT-ing every
+            // later bar. Neutral (|50-50|=0) trips neither the halt nor classifyFlowType routing.
+            marketBreadth5mUpPct: MARKET_BREADTH_NEUTRAL_PCT,
             sameBarTriggerCount: 0,
             aggTradeBuyVolumeRatio: 0,
         });

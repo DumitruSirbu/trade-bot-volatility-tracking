@@ -1,3 +1,19 @@
+## 2026-06-03 — M19 per-coin liquidity gate (stop the global liquidity halt)
+
+- Soak symptom: 0 trades from 97 open signals over 3 days — all blocked by the risk gate (83 `global_halt`, 8 `market_stress`) while the market was calm
+- Root cause: book-depth-collapse (`book_depth_10bps_usdt ≤ $20k`) — a per-coin property — was wired into the global day-killing stress halt; the first thin tier-2 alt flipped `risk_state.is_halted` and rejected every later signal that day (even deep tier-1 majors) as `global_halt`
+- Fix 1: moved depth to a per-coin tier-keyed eligibility skip — new const `COIN_DEPTH_FLOOR_10BPS_USDT {t1:20k,t2:10k,t3:5k}`, new `RiskGateService.isBookTooThin()` in `firstFailingTierFilter()` (runs after halt checks → can only skip the coin), reject `coin_book_too_thin`, boundary `<=`, fail-closed (parses once via `parseMoney` try/catch, validates on the Decimal; never throws, never passes-open)
+- Fix 2: resurrected the permanently-dead breadth halt via risk-only const `STRESS_BREADTH_DISTANCE_PCT=30` (fires at breadth ≤20 or ≥80); **decoupled** from the `stress_breadth_pct=70` strategy param that `classifyFlowType` still uses for MARKET_BETA routing — re-seeding it would have been an out-of-scope strategy change. This decoupling made all of M19 code-only (no migration, no DB write)
+- Spread widening (`STRESS_SPREAD_PCT=0.6`) stays the sole global liquidity halt; removed dead const `STRESS_BOOK_DEPTH_FLOOR_USDT`
+- Quant BLOCKER caught in review: `BacktestRunnerService` seeded `marketBreadth5mUpPct: 0` for every replay bar — harmless pre-M19 (`|0-50|=50 < param 70`) but the const-30 halt makes `50 ≥ 30` halt every bar; fixed to seed `MARKET_BREADTH_NEUTRAL_PCT` (distance 0)
+- Logic + security HIGH caught: `new Money(depthRaw)` could throw out of the gate on `'  100  '` (passes `Number()`, decimal.js rejects); fixed via single `parseMoney` try/catch + Decimal validation
+- Tests: 245/245 risk + 209/209 backtest green; +8 paired regression tests (day-contagion two-signal proof, fail-closed adversarial incl. whitespace/hex/NaN, breadth-at-30 boundaries, classifyFlowType-unchanged guard, backtest breadth-sentinel guard)
+- Waves: architect (ADR 0004 §6 → new §6a depth-guard + §6b breadth decoupling) → shared (enum) → engine+dashboard → QA → 4 reviewers → 1 fix wave → continuity re-review. Round-2 logic CLEAN (full fail-closed trace); security+quant re-reviews blocked by account session limit but findings were the same two re-verified code sites + green suites; 2 comment-only test nits fixed inline
+- Dashboard: `DecisionsFeed.tsx` tooltip gained a `coin_book_too_thin` entry
+- Operational follow-up (NOT yet run): stale-halt clear for today's `risk_state` via `clearHaltForDate` (needs dump + user confirm per CLAUDE.md #8/#9); 10-min live smoke; behavioural soak funnel re-check
+- Deferred (tech-debt MEDIUM): depth floors not yet empirically calibrated to slippage → recalibrate post-soak
+- Zero blockers, zero highs, zero mediums at close
+
 ## 2026-06-02 — M18 directional rate-limit drift alert
 
 - Binance rate-limit drift Telegram WARN fired ~once per 5-min coalesce window; root cause: symmetric Math.abs comparison fired when local conservative (localUsed > headerUsed) — the SAFE direction

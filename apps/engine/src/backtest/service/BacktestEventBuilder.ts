@@ -9,10 +9,12 @@ import { IIndicatorSnapshot } from '../../market-data/interface';
 const IDIOSYNCRASY_EPSILON = 0.0001;
 
 // Per-bar replay context the runner threads into the event builder (ADR 0015 §2.2). Fields
-// whose live source is cross-symbol aggregation (market_breadth_5m_up_pct,
-// same_bar_trigger_count) or sub-minute data the backtest does not load (btc_1m_move_pct)
-// arrive as neutral zeros; the caller marks the resulting trade `lowFidelity` so M8
-// analytics can distinguish replay degradation from live.
+// whose live source is cross-symbol aggregation (same_bar_trigger_count) or sub-minute data
+// the backtest does not load (btc_1m_move_pct) arrive as neutral sentinels; the caller marks
+// the resulting trade `lowFidelity` so M8 analytics can distinguish replay degradation from
+// live. market_breadth_5m_up_pct's neutral sentinel is the midpoint MARKET_BREADTH_NEUTRAL_PCT
+// (50), NOT 0 — since M19 the breadth halt fires on distance from 50, so a 0 would falsely trip
+// it (see BacktestRunnerService).
 export interface IBacktestEventContext {
     readonly coinTier: CoinTierEnum;
     readonly universeAgeHours: number;

@@ -89,6 +89,10 @@ const COLUMN_HELP: Record<string, React.ReactNode> = {
             <TooltipEntry term="global_halt" def="Engine-wide halt active (operator, loss limit, or rate-limit)" />
             <TooltipEntry term="max_positions_reached" def="3-slot position cap reached" />
             <TooltipEntry term="spread_too_wide" def="Bid/ask spread exceeds the allowed threshold" />
+            <TooltipEntry
+                term="coin_book_too_thin"
+                def="Order-book depth at 10bps is at/below the per-tier floor — this individual coin is too thin to trade (per-coin skip, not a market halt)"
+            />
             <TooltipEntry term="funding_suppressed" def="Funding rate too high to open" />
             <TooltipEntry term="cooldown_active" def="Symbol closed recently; cooldown period active" />
             <TooltipEntry term="daily_loss_limit" def="Daily loss cap reached; no new opens until tomorrow" />

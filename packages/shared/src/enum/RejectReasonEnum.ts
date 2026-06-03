@@ -6,6 +6,7 @@ export enum RejectReasonEnum {
     MARKET_STRESS = 'market_stress',
     OI_UNAVAILABLE = 'oi_unavailable',
     SPREAD_TOO_WIDE = 'spread_too_wide',
+    COIN_BOOK_TOO_THIN = 'coin_book_too_thin',
     BELOW_UNIVERSE_FLOOR = 'below_universe_floor',
     FUNDING_SUPPRESSED = 'funding_suppressed',
     COOLDOWN_ACTIVE = 'cooldown_active',
