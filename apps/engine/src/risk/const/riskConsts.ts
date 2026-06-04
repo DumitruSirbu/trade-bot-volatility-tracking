@@ -73,13 +73,22 @@ export const TIER_SPREAD_CEILING_PCT: Record<CoinTierEnum, number> = {
     [CoinTierEnum.TIER_3]: 0.5,
 };
 
-// Per-coin tier-keyed 10bps book-depth floor (USDT). Depth <= floor => coin_book_too_thin,
-// a per-coin eligibility skip (NOT a halt) inside the per-coin tier-filter group (ADR 0004
-// §6a). Deeper-book tiers carry the higher floor; thin tier-3 alts are held to a lower bar.
+// Per-coin tier-keyed 10bps book-depth floor (USDT) — M22 book-consumption-ratio anchor.
+// Depth <= floor => coin_book_too_thin, a per-coin eligibility skip (NOT a halt) inside the
+// per-coin tier-filter group (ADR 0004 §6a, M22 amendment). Floor chosen so a max-size order
+// (up to MAX_EXPOSURE_PER_COIN_USDT) consumes a small, bounded fraction of the one-sided
+// resting 10bps book. All ratios are one-sided (book_depth_10bps_usdt is one-sided notional):
+//   tier1 $10k → 2.5% consumption (non-binding for real BTC/ETH; filters volume-mis-ranked impostors)
+//   tier2 $2.5k → 10% consumption (~2 bps entry slippage; corrects M19's tier2=tier1 incoherence)
+//   tier3 $2k  → 12.5% consumption (~2.5 bps entry; guards exit-gap risk that $1k would not)
+// Soak evidence (2026-06-04, 10 rejects): 7 unblocked at $3,468–$9,174; 3 still blocked at
+// $529/$681/$2,321. One calm day proves M19 floors overcautious; 14-day post-deploy slippage
+// telemetry re-calibrates before any scale-up (see ADR 0004 §6a). Boundary is <= (depth at
+// the floor rejects); fail-closed (unknown tier / missing / unparseable → too-thin → reject).
 export const COIN_DEPTH_FLOOR_10BPS_USDT: Record<CoinTierEnum, number> = {
-    [CoinTierEnum.TIER_1]: 20_000,
-    [CoinTierEnum.TIER_2]: 10_000,
-    [CoinTierEnum.TIER_3]: 5_000,
+    [CoinTierEnum.TIER_1]: 10_000,
+    [CoinTierEnum.TIER_2]: 2_500,
+    [CoinTierEnum.TIER_3]: 2_000,
 };
 
 // --- funding filter (§8/§ funding) ---

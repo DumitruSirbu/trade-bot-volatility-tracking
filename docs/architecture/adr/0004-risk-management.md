@@ -361,40 +361,110 @@ the per-coin tier-filter group (`firstFailingTierFilter`), adjacent to the sprea
 check. It runs **after** the halt checks, so it can only skip the one thin coin — it can
 never persist a halt or block other coins for the rest of the day.
 
-- **Floors (risk-only const, computed enum keys):**
+> **M22 amendment — floors recalibrated to book-consumption anchor (2026-06-04).**
+> The M19 floors (`{ tier1: 20_000, tier2: 10_000, tier3: 5_000 }`) were conservative
+> round numbers, explicitly not derived from a depth-vs-slippage relationship. After the
+> M19/M20/M21 halt miscalibrations were fixed and the soak produced trade-flow evidence,
+> M22 replaces them with **book-consumption-ratio-anchored** floors. The correct anchor:
+> the floor is chosen so a max-size order (up to `MAX_EXPOSURE_PER_COIN_USDT = 250`)
+> consumes a **small, bounded fraction** of the **one-sided** resting 10bps book.
+
+- **Floors (risk-only const, computed enum keys) — M22 values (authoritative):**
   ```
   COIN_DEPTH_FLOOR_10BPS_USDT: Record<CoinTierEnum, number> = {
-      [CoinTierEnum.TIER_1]: 20_000,
-      [CoinTierEnum.TIER_2]: 10_000,
-      [CoinTierEnum.TIER_3]: 5_000,
+      [CoinTierEnum.TIER_1]: 10_000,
+      [CoinTierEnum.TIER_2]:  2_500,
+      [CoinTierEnum.TIER_3]:  2_000,
   }
   ```
-  Deeper-book tiers carry the higher floor; thin tier-3 alts are held to a lower bar but
-  still guarded.
+
+  **Book-consumption ratios (one-sided, $250 max order):**
+
+  | Tier   | Floor   | Consumption | Entry-slippage hint |
+  |--------|---------|-------------|---------------------|
+  | tier1  | $10,000 | 2.5%        | ~conservative       |
+  | tier2  |  $2,500 | 10%         | ~2 bps              |
+  | tier3  |  $2,000 | 12.5%       | ~2.5 bps            |
+
+  All ratios are against the **one-sided** resting 10bps book (`book_depth_10bps_usdt` is
+  assumed to be **one-sided** resting notional within 10bps of mid (see ADR 0001 line 289;
+  the 14-day post-deploy fills will confirm the actual measurement direction)). Note: many fills
+  land **below** $250 after funding halving and sizing; using the cap as anchor is
+  **conservative** (actual book consumption is lower).
+
+  **Per-tier rationale:**
+  - **tier1 $10,000** is non-binding for any genuine tier1 coin (BTC/ETH 10bps depth is
+    hundreds of thousands of USDT). It filters volume-mis-ranked tier1 impostors (e.g.,
+    coins ranked tier1 by 24h volume despite books in the $500–$5,000 range). This is a
+    cheap defence against the volume-only tier-ranking weakness (MEDIUM tech-debt). A
+    $5,000 tier1 floor would pass a $5,380-depth impostor; $10,000 does not.
+  - **tier2 $2,500** (~10% one-sided, ~2bps entry) corrects the incoherence in the M19
+    floors, where tier2 was held to tier1 strictness ($10,000 = 2.5% consumption identical
+    to the new tier1 floor). There is no reason a tier2 coin should face the same depth bar
+    as a tier1 major.
+  - **tier3 $2,000** holds consumption at ~12.5% one-sided (~2.5bps entry), keeping a
+    margin against the exit-gap risk that the entry-depth metric does not measure. A $1,000
+    floor would yield ~25% one-sided (~5bps entry), and tier3 alts are exactly the coins
+    whose books evaporate on a stop-loss exit. `MODEL_DIVERGENCE_SLIPPAGE_RATIO = 2` is the
+    only reactive backstop for exits; the floor is the only proactive guard at entry.
+
+- **Soak evidence (2026-06-04, 10 `coin_book_too_thin` rejections):**
+  - **7 unblocked** at the new floors: observed depths **$3,468–$9,174** — tier1/tier2
+    coins with real books that the M19 floors over-rejected at 4–80× the $250 max order
+    size.
+  - **3 still blocked** at the new floors: observed depths **$529, $681, $2,321** —
+    genuinely illiquid; correctly rejected under both old and new floors.
+  This is one calm day (n=10) — sufficient to prove the M19 floors were overcautious; not
+  sufficient to prove the new floors optimal. The 14-day post-deploy slippage telemetry
+  below is the mandatory re-calibration step before any scale-up.
+
 - **Reject reason:** `coin_book_too_thin` (`RejectReasonEnum.COIN_BOOK_TOO_THIN`) — a
   per-coin skip, distinct from `market_stress`. The decision funnel and dashboard
   reject-reason tooltip surface it so operators do not misread a thin-coin skip as a halt.
+
 - **Boundary rule (explicit, locked):** depth **at** the floor is rejected — the
-  comparison is `depth <= floor` (`new Money(depth).lessThanOrEqualTo(floor)`). This
-  preserves the pre-M19 global behavior (the old check used `<=` too). Note this is the
-  **opposite** boundary convention from the spread ceiling, which keeps a strict `>`
-  (spread exactly at the ceiling passes). The two are intentionally asymmetric: a book
-  exactly at the depth floor is "not deep enough"; a spread exactly at the ceiling is
-  "not too wide yet".
+  comparison is `depth <= floor` (`new Money(depth).lessThanOrEqualTo(floor)`). Depth
+  exactly at the floor → `coin_book_too_thin`. Depth one cent above → passes this guard.
+  This is the **opposite** boundary convention from the spread ceiling, which uses strict
+  `>` (spread exactly at the ceiling passes). The two are intentionally asymmetric: a book
+  exactly at the depth floor is "not deep enough"; a spread exactly at the ceiling is "not
+  too wide yet".
+
+- **One-sided measurement (operator-calibration note, locked):** all floors and
+  book-consumption ratios in this section are computed against the **one-sided** resting
+  10bps notional (`book_depth_10bps_usdt`). An operator cross-checking these ratios
+  against a two-sided order-book view will see approximately double the depth — the
+  consumption percentages will look half as large. Use the one-sided figure.
+
 - **Fail-closed (locked):** invalid, missing, empty, unparseable, non-positive depth, or
   an unknown `coinTier`, all resolve to **too-thin → reject** (`coin_book_too_thin`). The
   guard mirrors `isSpreadTooWide`'s `Number.isFinite` defense: it never throws out of the
   gate and never passes-open on bad input. Bad depth data can only cost a single skip,
   never an erroneous fill.
 
+- **14-day post-deploy slippage-telemetry requirement (mandatory calibration condition).**
+  For 14 days after the M22 engine restart, record (read-only):
+  - Per-fill `book_depth_10bps_usdt` at entry (`decisions.market_snapshot`).
+  - Realized entry and exit slippage (`positions`).
+  Watch for fills where **realized slippage > modeled** — those signal the floor was set
+  too low for that tier. Track near-miss bands per tier (depths just above each new floor).
+  **Re-calibrate the floors against the realized-slippage distribution before any scale-up
+  — not against another short calm soak.** The tech-debt items this telemetry informs:
+  - **Volume-only tier ranking (MEDIUM):** coins ranked by 24h volume may be mis-ranked
+    tier1 despite thin books; the $10k tier1 floor defends the symptom, not the ranking.
+  - **Entry-vs-exit depth gap (MEDIUM):** `book_depth_10bps_usdt` measures entry liquidity
+    and does not proxy exit liquidity. A coin can pass entry and gap on stop-loss exit when
+    its book thins. `MODEL_DIVERGENCE_SLIPPAGE_RATIO = 2` is the only reactive backstop;
+    real fills from M22's 14-day window begin sizing the eventual exit-liquidity-aware fix.
+
 ### 6b. Breadth halt — risk-only distance const, decoupled from the flow-routing param (M19)
 
 The breadth-collapse **halt** fires when breadth is far from the neutral midpoint:
 
 - `MARKET_BREADTH_NEUTRAL_PCT = 50` — neutral midpoint of the 0–100 breadth scale.
-- `STRESS_BREADTH_DISTANCE_PCT = 30` — halt distance from neutral. The halt fires when
-  `|market_breadth_5m_up_pct − 50| >= 30`, i.e. at breadth **≤ 20** (broad selloff) or
-  **≥ 80** (broad melt-up).
+- `STRESS_BREADTH_DISTANCE_PCT = 40` — halt distance from neutral. The halt fires when
+  `|market_breadth_5m_up_pct − 50| >= 40`, i.e. at breadth **≤ 10** (broad selloff) or
+  **≥ 90** (broad melt-up).
 
 This **replaces** the previously dead test that read the `stress_breadth_pct` strategy
 param (=70) as a distance: because breadth is 0–100, the max possible distance from 50 is
@@ -402,7 +472,7 @@ param (=70) as a distance: because breadth is 0–100, the max possible distance
 until M19.
 
 > **Decoupling — DO NOT re-couple (locked).** `STRESS_BREADTH_DISTANCE_PCT` (risk-only
-> const, =30) and `stress_breadth_pct` (strategy param, =70) are **two different knobs
+> const, =40) and `stress_breadth_pct` (strategy param, =70) are **two different knobs
 > with two different meanings**, and they must stay separate:
 > - `STRESS_BREADTH_DISTANCE_PCT` is a **risk-gate halt distance** — how far breadth must
 >   stray from neutral before the gate halts the whole market.
