@@ -597,7 +597,7 @@ export class BacktestRunnerService {
             bookDepth50bpsUsdt: bookSnapshot !== null ? (bookSnapshot.depth50bps ?? null) : null,
             // Cross-symbol breadth is not reconstructable in single-symbol replay — feed the
             // neutral midpoint (no signal), NOT 0. Since M19 the breadth halt fires at
-            // |breadth-50| >= STRESS_BREADTH_DISTANCE_PCT (30); a 0 here would read as |0-50|=50,
+            // |breadth-50| >= STRESS_BREADTH_DISTANCE_PCT (40); a 0 here would read as |0-50|=50,
             // tripping MARKET_STRESS on bar 1, persisting the halt, and GLOBAL_HALT-ing every
             // later bar. Neutral (|50-50|=0) trips neither the halt nor classifyFlowType routing.
             marketBreadth5mUpPct: MARKET_BREADTH_NEUTRAL_PCT,

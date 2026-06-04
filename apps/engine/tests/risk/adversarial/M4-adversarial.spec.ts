@@ -396,7 +396,7 @@ describe('S4 — halt fired between reservation and emit: intent blocked; reserv
         const { gate, ledger } = makeGate();
 
         const context = buildPassingContext({
-            snapshot: buildSnapshot({ btc_1m_move_pct: 5.0 }), // triggers stress
+            snapshot: buildSnapshot({ btc_5m_move_pct: 5.0 }), // M21: triggers stress via 5m field
         });
 
         const result = await gate.evaluate(buildValidIntent(), context);

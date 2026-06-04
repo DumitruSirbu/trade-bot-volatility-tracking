@@ -39,7 +39,15 @@ const baseSchema = z
         consecutive_loss_halt: z.number().min(1),
         max_trades_per_symbol_per_day: z.number().min(1),
         max_trades_per_bar_universe: z.number().min(1),
+        // DEPRECATED as of M21 (2026-06-04):
+        // The BTC shock path now reads btc_5m_move_pct against engine const STRESS_BTC_5M_SHOCK_PCT = 1.5 in riskConsts.ts.
+        // stress_btc_1m_shock_pct is no longer consumed by the live stress-halt path.
+        // Retained and still validated for historical replay compatibility.
         stress_btc_1m_shock_pct: z.number().positive(),
+        // DEPRECATED as of M21 (2026-06-04):
+        // The ETH shock path now reads eth_5m_move_pct against engine const STRESS_ETH_5M_SHOCK_PCT = 2.5 in riskConsts.ts.
+        // stress_eth_1m_shock_pct is no longer consumed by the live stress-halt path.
+        // Retained and still validated for historical replay compatibility.
         stress_eth_1m_shock_pct: z.number().positive(),
         stress_breadth_pct: z.number().min(0).max(100),
         stress_same_bar_trigger_count: z.number().min(1),

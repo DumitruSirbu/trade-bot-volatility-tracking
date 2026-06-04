@@ -315,6 +315,10 @@ The global market-stress halt reads **only fields already on the market snapshot
 fast-stress inputs), so it is deterministic and replayable with no extra I/O:
 
 - `btc_1m_move_pct`, `btc_5m_move_pct`, `eth_5m_move_pct` — index return shock.
+  **(M21 supersedes — see §6c.)** Both index legs now evaluate on the **5m** horizon
+  (`btc_5m_move_pct` / `eth_5m_move_pct`); `btc_1m_move_pct` has **exited the stress-halt
+  contract** and is no longer a stress input. It stays on the snapshot for
+  telemetry/idiosyncrasy only.
 - `market_breadth_5m_up_pct` — breadth collapse/surge.
 - `same_bar_trigger_count` — universe-wide simultaneous triggering.
 - `open_interest_change_5m_pct` — OI shock.
@@ -334,6 +338,13 @@ Thresholds are the existing risk-only params (`stress_btc_1m_shock_pct`,
 `stress_eth_1m_shock_pct`, `stress_same_bar_trigger_count`) plus named `riskConsts` for
 the OI/funding/spread limits and the breadth-halt distance (`STRESS_BREADTH_DISTANCE_PCT`,
 see §6b) — no inline magic numbers, per conventions §"Constants Placement".
+
+> **M21 supersedes the index-shock thresholds in this paragraph — see §6c.** The two
+> index legs are no longer threshold-driven by `stress_btc_1m_shock_pct` /
+> `stress_eth_1m_shock_pct` (now **deprecated** strategy params). The active, authoritative
+> index-shock thresholds are the engine consts `STRESS_BTC_5M_SHOCK_PCT = 1.5` and
+> `STRESS_ETH_5M_SHOCK_PCT = 2.5`, both on the 5m horizon. `stress_same_bar_trigger_count`
+> and the OI/funding/spread/breadth thresholds in this paragraph are unchanged.
 
 **Override rule (locked):** when stress indicates trend-initiation, the gate **rejects
 mean-reversion entries with `MARKET_STRESS` regardless of the ADX/`regime_label`
@@ -407,6 +418,96 @@ until M19.
 Both §6a and §6b are **code-only** — the floors and the breadth distance are `riskConsts`,
 not `strategy_versions.params`. M19 writes nothing to the DB (no migration, no params
 re-seed).
+
+### 6c. Index-shock horizon alignment — both legs on the 5m window (M21)
+
+**This subsection supersedes the §6 index-shock threshold bullets.** Where §6 (and its
+threshold paragraph) still describe `stress_btc_1m_shock_pct` against `btc_1m_move_pct` as
+the active BTC shock path, **that description is stale**. The active index-shock contract is
+the one defined here. M21 is **code-only and migration-free** (a const swap, an evaluator
+field swap, and deprecation comments — no DB write, no schema change; an engine restart picks
+it up).
+
+**Both index legs now evaluate on the 5-minute horizon (authoritative active thresholds):**
+
+- **BTC:** `isIndexShock` reads `btc_5m_move_pct` against the engine const
+  `STRESS_BTC_5M_SHOCK_PCT = 1.5`.
+- **ETH:** `isIndexShock` reads `eth_5m_move_pct` against the engine const
+  `STRESS_ETH_5M_SHOCK_PCT = 2.5` (raised from 2.0).
+
+Both are **engine-side `riskConsts`** (operator-level risk config, outside the strategy),
+**not** strategy params. Before M21 the two legs measured different time windows (BTC on 1m,
+ETH on 5m) — a structural inconsistency that also left the BTC leg empirically inert. Aligning
+both to 5m removes that inconsistency.
+
+**Calibration evidence (5-day M19/M20 paper soak):**
+
+- **BTC 1m leg never fired in 5 days.** Observed peak `btc_1m_move_pct` was **0.56%** —
+  only 56% of the old 1.0% floor. The 1m BTC leg was **empirically inert** as a stress signal
+  at that granularity. Moving BTC to 5m @ 1.5% is therefore **activating a previously dead
+  sensor**, not loosening a working halt — expect *more* BTC-driven index halts on volatile
+  macro/liquidation weeks; that is the intended trade, not a regression.
+- **BTC 5m peak was 1.04%.** The new `STRESS_BTC_5M_SHOCK_PCT = 1.5` sits well above observed
+  normal-market movement, giving a real buffer while still catching a genuine index shock. On
+  the compressed post-ETF vol regime a ~1.5% rolling-5m BTC move is multi-σ — genuine stress,
+  not microstructure noise. It is a **reasonable first cut on five calm days, not a proven
+  optimum** (hence the post-deploy telemetry below).
+- **ETH only observed near-event was 2.12%** (a single occurrence in 5 days). The old 2.0%
+  floor classified that one-off as stress (a false positive); **2.5% lifts the gate above it.**
+  Per ETH's ~1.2–1.5× short-horizon beta to BTC, a beta-consistent ETH floor against BTC 1.5%
+  lands ~**1.8–2.25%**, so 2.5% is **slightly conservative** — appropriate given the penalty is
+  a **full UTC-day halt** of all mean-reversion entries. The breadth halt (§6b) backstops the
+  same class of market-wide event.
+
+**Inclusive `>=` boundary (locked).** Both legs use `>=`: `Math.abs(move) >= threshold` →
+stressed. **At exactly the const → stressed; just below → silent.** QA must use this same
+boundary as the existing ETH tests (e.g. `btc_5m_move_pct = 1.5` → stressed; `= 1.49` →
+silent; `eth_5m_move_pct = 2.5` → stressed; `= 2.49` → silent).
+
+**Rolling-window measurement, NOT candle close-to-close (operator-calibration note).**
+`btc_5m_move_pct` / `eth_5m_move_pct` are the **rolling N-minute tape move at bar-close**
+(sourced from `MarketContextService.referenceMove`, 5m window) — the **same rolling-window
+semantics the idiosyncrasy numerator uses at trigger time**. They are **not** OHLC
+close-to-close candle returns. An operator calibrating these floors from a candle chart will
+misread the observed peaks (1.04% / 2.12%) unless they read the rolling-window move, not the
+candle body.
+
+**`btc_1m_move_pct` exits the stress-halt contract entirely.** It **remains on the snapshot**
+for telemetry and idiosyncrasy use, but it is removed from **both** `isIndexShock` **and**
+`hasInvalidStressInputs`. There is no longer any stress-halt consumer of the 1m BTC field. A
+future engineer must **not** "restore" it into the stress gate without first wiring a genuine
+consumer and a calibrated threshold. Correspondingly, the `stress_btc_1m_shock_pct` and
+`stress_eth_1m_shock_pct` **strategy params are deprecated** (annotated in
+`strategyParamsSchema.ts`, **not removed**): the keys are retained and stay validated/readable
+so historical replay and backtest fixtures do not error on them.
+
+**Atomicity (fail-closed guarantee, locked).** `hasInvalidStressInputs` (the fail-closed
+NaN/non-finite guard) and `isIndexShock` were changed in the **same commit** (M21). The guard
+moved its BTC check from `btc_1m_move_pct` → `btc_5m_move_pct` atomically with the
+`isIndexShock` field swap. This closes the window in which a NaN/garbage `btc_5m_move_pct`
+could flow into `isIndexShock` while the guard still watched the (now unused) 1m field — the
+gate would otherwise have silently stopped failing closed on a malformed BTC 5m value. The QA
+wave pins this with a `NaN btc_5m_move_pct → halts via hasInvalidStressInputs` test that fails
+if either edit is dropped.
+
+**Flash-crash sub-minute blind spot — accepted deferral (MEDIUM tech-debt).** A spike that
+blows out and recovers **within** a 5-minute window is invisible to the 5m gate. This is a
+**conscious deferral**, not an oversight: the 1m leg it replaces was empirically
+non-functional (never fired in 5 days, peak 0.56%), and **spread-widening (§6) plus the
+same-bar trigger count are better fast-stress proxies** for genuine microstructure shock.
+Logged as **MEDIUM tech-debt** for a future dedicated fast-stress signal — not a go-live
+blocker.
+
+**Post-deploy calibration telemetry (14-day near-miss band monitoring).** BTC 1.5% is a
+first cut on calm data, so for **14 days** after deploy, track (read-only) the daily max
+`|btc_5m_move_pct|` and `|eth_5m_move_pct|` from `decisions.market_snapshot` and count
+index-leg halts. Watch the near-miss bands `|btc_5m| ∈ [1.2, 1.5)` and `|eth_5m| ∈ [2.0, 2.5)`.
+If the BTC leg fires on days with **no** concurrent breadth/OI/spread co-stress (a sign of
+remaining miscalibration), revisit the floors **before any cloud-soak scale-up** — and revisit
+against that distribution, not another short calm soak. Next BTC adjustment band:
+**1.75–2.0%** if it fires too often, **1.25%** if it stays too quiet (but not below soak peak +
+epsilon without longer telemetry). **Do NOT re-tighten ETH toward 2.0%** — that repeats the
+soak failure mode the ETH 2.5% floor exists to fix.
 
 ### 7. Live-vs-backtest contract — ports for time and state, pure decision core
 
