@@ -156,15 +156,40 @@ describe('RiskGateService', () => {
     // ─── market stress overrides ADX ───────────────────────────────────────────
 
     describe('market-stress halt overrides ADX', () => {
-        it('rejects with market_stress when BTC 1m move exceeds threshold', async () => {
+        it('rejects with market_stress when BTC 5m move exceeds threshold (M21: reads btc_5m_move_pct)', async () => {
             const { gate } = makeGate();
             const context = buildPassingContext({
-                snapshot: buildSnapshot({ btc_1m_move_pct: 2.0 }), // well above stress_btc_1m_shock_pct=1.0
+                snapshot: buildSnapshot({ btc_5m_move_pct: 2.0 }), // well above STRESS_BTC_5M_SHOCK_PCT=1.5
             });
 
             const result = await gate.evaluate(buildPassingIntent(), context);
 
             expect(result.outcome).toBe(RiskOutcomeEnum.REJECTED);
+            expect(result.rejectReason).toBe(RejectReasonEnum.MARKET_STRESS);
+        });
+
+        it('shocked btc_1m_move_pct with calm btc_5m_move_pct does NOT return MARKET_STRESS (M21 horizon contract)', async () => {
+            // btc_1m_move_pct is now telemetry only (M21); only btc_5m_move_pct drives the index-shock halt.
+            // A shocked 1m field with a calm 5m field must pass through the stress check without halting.
+            const { gate } = makeGate();
+            const context = buildPassingContext({
+                snapshot: buildSnapshot({ btc_1m_move_pct: 5.0, btc_5m_move_pct: 0.5 }),
+            });
+
+            const result = await gate.evaluate(buildPassingIntent(), context);
+
+            expect(result.rejectReason).not.toBe(RejectReasonEnum.MARKET_STRESS);
+        });
+
+        it('calm btc_1m_move_pct with shocked btc_5m_move_pct returns MARKET_STRESS (M21 horizon contract)', async () => {
+            // btc_5m_move_pct=2.0 > STRESS_BTC_5M_SHOCK_PCT=1.5 → halt; 1m field is irrelevant.
+            const { gate } = makeGate();
+            const context = buildPassingContext({
+                snapshot: buildSnapshot({ btc_1m_move_pct: 0.5, btc_5m_move_pct: 2.0 }),
+            });
+
+            const result = await gate.evaluate(buildPassingIntent(), context);
+
             expect(result.rejectReason).toBe(RejectReasonEnum.MARKET_STRESS);
         });
 
@@ -174,7 +199,7 @@ describe('RiskGateService', () => {
             const context = buildPassingContext({
                 snapshot: buildSnapshot({
                     adx_14: 15, // low ADX → ranging
-                    btc_1m_move_pct: 5.0, // but massive BTC move → stress
+                    btc_5m_move_pct: 5.0, // but massive BTC 5m move → stress (M21: active field)
                 }),
             });
 
@@ -187,7 +212,7 @@ describe('RiskGateService', () => {
             const { gate } = makeGate();
             // Use a correlated intent (slot C) to potentially conflict, but stress fires first
             const context = buildPassingContext({
-                snapshot: buildSnapshot({ btc_1m_move_pct: 3.0 }),
+                snapshot: buildSnapshot({ btc_5m_move_pct: 3.0 }), // above STRESS_BTC_5M_SHOCK_PCT=1.5
             });
 
             const result = await gate.evaluate(buildPassingIntent({ correlationMode: CorrelationModeEnum.CORRELATED }), context);
@@ -199,7 +224,7 @@ describe('RiskGateService', () => {
             const { gate } = makeGate();
             const riskState = buildRiskStatePort({ day: buildRiskStateDay({ isHalted: false }) });
             const context = buildPassingContext({
-                snapshot: buildSnapshot({ btc_1m_move_pct: 3.0 }),
+                snapshot: buildSnapshot({ btc_5m_move_pct: 3.0 }), // above STRESS_BTC_5M_SHOCK_PCT=1.5
                 riskState,
             });
 
@@ -1226,7 +1251,7 @@ describe('RiskGateService', () => {
             it(`${action} is approved even during market stress`, async () => {
                 const { gate } = makeGate();
                 const context = buildPassingContext({
-                    snapshot: buildSnapshot({ btc_1m_move_pct: 5.0 }),
+                    snapshot: buildSnapshot({ btc_5m_move_pct: 5.0 }), // M21: active stress field
                 });
                 const intent = buildPassingIntent({ intentAction: action });
 

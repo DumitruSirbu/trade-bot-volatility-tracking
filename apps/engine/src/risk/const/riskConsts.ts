@@ -100,8 +100,10 @@ export const AGG_TRADE_BUY_FLOW_BALANCE = 0.5;
 // limits that trip the stress halt. Book depth is NO LONGER a global stress input (ADR 0004
 // §6 M19 amendment) — it is a per-coin eligibility guard (COIN_DEPTH_FLOOR_10BPS_USDT, §6a),
 // so a single thin alt can no longer halt the whole market. Spread widening remains the
-// market-wide liquidity-shock proxy. The BTC 1m + same-bar thresholds come from the strategy
-// params (stress_* keys); the breadth-halt distance is STRESS_BREADTH_DISTANCE_PCT below.
+// market-wide liquidity-shock proxy. The BTC and ETH index-shock thresholds are engine consts
+// (STRESS_BTC_5M_SHOCK_PCT, STRESS_ETH_5M_SHOCK_PCT below); the deprecated
+// stress_btc_1m_shock_pct / stress_eth_1m_shock_pct strategy params are no longer consumed. The
+// breadth-halt distance is STRESS_BREADTH_DISTANCE_PCT below.
 export const STRESS_OI_CHANGE_5M_PCT = 5;
 export const STRESS_FUNDING_ANNUALIZED_PCT = 50;
 export const STRESS_SPREAD_PCT = 0.6;
@@ -111,19 +113,32 @@ export const STRESS_SPREAD_PCT = 0.6;
 export const MARKET_BREADTH_NEUTRAL_PCT = 50;
 
 // Breadth-halt distance from neutral (risk-only). The halt fires when
-// |market_breadth_5m_up_pct - 50| >= 30, i.e. breadth <= 20 (broad selloff) or >= 80 (broad
-// melt-up). INTENTIONALLY DISTINCT from the `stress_breadth_pct` strategy param (=70) that
+// |market_breadth_5m_up_pct - 50| >= 40, i.e. breadth <= 10 (extreme selloff) or >= 90 (extreme
+// melt-up). Raised from 30 to 40 after soak data showed altcoin futures routinely reach 80-89%
+// breadth (18-21 bars/day) — the 80% line was treating normal correlated moves as a panic.
+// INTENTIONALLY DISTINCT from the `stress_breadth_pct` strategy param (=70) that
 // `classifyFlowType` consumes to route MARKET_BETA flow (ADR 0004 §6b) — do NOT re-couple
 // them: re-seeding the param to fix the halt would silently change flow classification. The
 // halt reads this const; flow classification reads the param; neither sees the other.
-export const STRESS_BREADTH_DISTANCE_PCT = 30;
+export const STRESS_BREADTH_DISTANCE_PCT = 40;
 
-// ETH index shock threshold on the 5m horizon. The snapshot only carries eth_5m_move_pct (a
-// 5m field), while strategy params only define a 1m ETH threshold (stress_eth_1m_shock_pct).
-// Comparing a 5m move against a 1m bound is a horizon mismatch, so the gate uses this
-// engine-side 5m threshold (risk config lives engine-side, ADR 0004 Conflicts #1) rather
-// than churning the shared strategy-params schema. BTC stays params-driven on its 1m field.
-export const STRESS_ETH_5M_SHOCK_PCT = 2.0;
+// BTC and ETH index-shock legs both run on the 5m horizon (ADR 0004 §6c, M21, 2026-06-04). The
+// snapshot carries btc_5m_move_pct and eth_5m_move_pct (both 5m fields); comparing them against
+// engine-side 5m thresholds removes the prior horizon mismatch (a 5m move vs a 1m param bound).
+// Risk config lives engine-side (ADR 0004 Conflicts #1), so these stay consts rather than
+// churning the shared strategy-params schema.
+//
+// STRESS_BTC_5M_SHOCK_PCT — calibrated: soak peak btc_5m_move_pct was 1.04%; 1.5% gives real
+// buffer. The old BTC 1m leg (stress_btc_1m_shock_pct strategy param) never fired in the 5-day
+// soak (peak 0.56% vs 1.0% floor) — empirically inert; switching to the 5m field activates a
+// previously dead sensor.
+export const STRESS_BTC_5M_SHOCK_PCT = 1.5;
+
+// STRESS_ETH_5M_SHOCK_PCT — raised 2.0 -> 2.5: the only observed near-event was 2.12% (single
+// occurrence); 2.5% lifts the gate above that false positive. Per ETH beta (~1.2-1.5x BTC), the
+// beta-consistent floor is ~1.8-2.25%, so 2.5% is slightly conservative — appropriate for a
+// full UTC-day halt penalty.
+export const STRESS_ETH_5M_SHOCK_PCT = 2.5;
 
 // --- model-divergence kill switch (§14, M9-fed) ---
 

@@ -1811,10 +1811,10 @@ describe('BacktestRunnerService — force-close survivors at end-of-window (R1b 
 //
 // Before the M19 fix, BacktestRunnerService seeded `marketBreadth5mUpPct: 0` for
 // every replay bar (cross-symbol breadth is not reconstructable in single-symbol
-// replay). With STRESS_BREADTH_DISTANCE_PCT=30, |0-50|=50 >= 30, which trips
+// replay). With STRESS_BREADTH_DISTANCE_PCT=40, |0-50|=50 >= 40, which trips
 // MARKET_STRESS on bar 1, persists a halt, and GLOBAL_HALT-s every subsequent bar.
 //
-// After the fix the runner seeds MARKET_BREADTH_NEUTRAL_PCT (=50): |50-50|=0 < 30,
+// After the fix the runner seeds MARKET_BREADTH_NEUTRAL_PCT (=50): |50-50|=0 < 40,
 // so the breadth halt never fires. These tests are the paired regression guard:
 // they fail if someone reverts the sentinel back to 0.
 
@@ -1894,8 +1894,12 @@ describe('BacktestRunnerService — M19 breadth sentinel (marketBreadth5mUpPct=N
         const calmParams = buildParams();
 
         // The sentinel value — must not trigger stress.
+        // M21: btc_5m_move_pct replaces btc_1m_move_pct as the active index-shock field;
+        // the fixture must supply btc_5m_move_pct so hasInvalidStressInputs does not
+        // fail-close on an absent (undefined) value.
         const neutralSnapshot = {
-            btc_1m_move_pct: 0.0,
+            btc_5m_move_pct: 0.0, // M21 active field — calm, below STRESS_BTC_5M_SHOCK_PCT=1.5
+            btc_1m_move_pct: 0.0, // telemetry only (M21)
             eth_5m_move_pct: 0.0,
             market_breadth_5m_up_pct: MARKET_BREADTH_NEUTRAL_PCT, // sentinel: 50
             same_bar_trigger_count: 0,
@@ -1907,7 +1911,7 @@ describe('BacktestRunnerService — M19 breadth sentinel (marketBreadth5mUpPct=N
 
         expect(evaluator.isStressed(neutralSnapshot, calmParams)).toBe(false);
 
-        // The old sentinel (0) would trip the halt: |0-50|=50 >= STRESS_BREADTH_DISTANCE_PCT=30.
+        // The old sentinel (0) would trip the halt: |0-50|=50 >= STRESS_BREADTH_DISTANCE_PCT=40.
         // This assertion documents that 0 IS stressful, proving the fix was necessary.
         const zeroSnapshot = { ...neutralSnapshot, market_breadth_5m_up_pct: 0 };
 

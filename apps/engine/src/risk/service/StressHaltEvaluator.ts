@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import {
     MARKET_BREADTH_NEUTRAL_PCT,
     STRESS_BREADTH_DISTANCE_PCT,
+    STRESS_BTC_5M_SHOCK_PCT,
     STRESS_ETH_5M_SHOCK_PCT,
     STRESS_FUNDING_ANNUALIZED_PCT,
     STRESS_OI_CHANGE_5M_PCT,
@@ -21,7 +22,7 @@ export class StressHaltEvaluator {
             return true;
         }
 
-        if (this.isIndexShock(snapshot, params)) {
+        if (this.isIndexShock(snapshot)) {
             return true;
         }
 
@@ -46,9 +47,12 @@ export class StressHaltEvaluator {
 
     // Fail-closed (ADR 0004 §6 safety): a NaN/Infinity in any consumed numeric stress input
     // is treated AS stress, never as "no stress" (a NaN comparison would otherwise be false).
+    // The guard now covers btc_5m_move_pct (the active index-shock field, ADR 0004 §6c);
+    // btc_1m_move_pct is intentionally absent — it exits the stress contract and stays on the
+    // snapshot for telemetry only.
     private hasInvalidStressInputs(snapshot: IMarketSnapshot): boolean {
         const scalars = [
-            snapshot.btc_1m_move_pct,
+            snapshot.btc_5m_move_pct,
             snapshot.eth_5m_move_pct,
             snapshot.market_breadth_5m_up_pct,
             snapshot.same_bar_trigger_count,
@@ -60,8 +64,8 @@ export class StressHaltEvaluator {
         return scalars.some((value) => !Number.isFinite(value));
     }
 
-    private isIndexShock(snapshot: IMarketSnapshot, params: IStrategyParams): boolean {
-        const btcShock = Math.abs(snapshot.btc_1m_move_pct) >= params.stress_btc_1m_shock_pct;
+    private isIndexShock(snapshot: IMarketSnapshot): boolean {
+        const btcShock = Math.abs(snapshot.btc_5m_move_pct) >= STRESS_BTC_5M_SHOCK_PCT;
         const ethShock = Math.abs(snapshot.eth_5m_move_pct) >= STRESS_ETH_5M_SHOCK_PCT;
 
         return btcShock || ethShock;
