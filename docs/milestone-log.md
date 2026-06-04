@@ -45,6 +45,27 @@ For the current milestone plan, see `docs/plans/`. For deferred items, see `docs
 
 ---
 
+## M22 — Depth-floor recalibration
+
+**Problem (from soak data):** MAGMA ($529 depth) and H ($5,380 depth) were tier-ranked as TIER_1 by volume, yet their books were too thin for the risk guard. M19 moved depth to a per-coin skip, but used conservative round-number floors `{t1:20k,t2:10k,t3:5k}` that left M19 floor-calibration as outstanding MEDIUM tech-debt. M22 recalibrated to empirically-anchored book-consumption-ratio values.
+
+**Fix (code-only — no migration, no DB write):**
+1. **Recalibrated depth floors.** New `COIN_DEPTH_FLOOR_10BPS_USDT { TIER_1: 10_000, TIER_2: 2_500, TIER_3: 2_000 }` (one-sided, $250 max order = `MAX_EXPOSURE_PER_COIN_USDT`). Rationale: `TIER_1` 10k at 2.5% consumption; `TIER_2` 2.5k at 10% consumption; `TIER_3` 2k at 12.5% consumption. Soak evidence (2026-06-04): 10 rejects total; 7 now unblocked (SHIB $3,468, DOGE $5,197, BNB $5,320, SOL $6,281, ETH $6,788, BLUR $9,174, APTOS $9,174); 3 still blocked (MAGMA $529, GFI $681, AKT $2,321). M19 floor of $20k would have been 4–80× the order size; new floors are 4–10×.
+2. **ADR 0004 §6a superseded in place.** New floor table, book-consumption ratio anchor, 2026-06-04 soak evidence (7 unblocked / 3 still blocked), inclusive `<=` boundary, one-sided measurement note, and 14-day post-deploy slippage-telemetry requirement. Calibration condition: entry fills vs modeled slippage must confirm before scale-up.
+3. **ADR 0004 §6b corrected.** `STRESS_BREADTH_DISTANCE_PCT` value drifted 40 in code but was documented as 30; fixed doc to 40.
+
+**Tech-debt entries added:** (1) Volume-only tier ranking (MAGMA / H impostors). (2) Entry-vs-exit depth gap (stop-loss slippage risk unguarded).
+
+**Tests:** 23 new in `RiskGateService.bookDepth.spec.ts`: per-tier boundary tests, regression proof, still-blocked symbol proofs (H as TIER_1 impostor), fail-closed assurance, const integrity.
+
+**Review cycle:** R1 (security CLEAN, logic 1 HIGH + 2M, clean-code 1 HIGH + 2M, quant 0H + 1M + 3L) → Fix wave (H logic tier-accurate tuple, H clean-code unused variable, mediums address breadth-drift doc note + funnel-mix check scope) → R2 (logic CLEAN, clean-code CLEAN). Zero blockers, zero highs, zero mediums at close.
+
+**Files modified:** `apps/engine/src/risk/const/riskConsts.ts`, `docs/architecture/adr/0004-risk-management.md` (§6a supersede in place, §6b correction), `apps/engine/src/risk/service/__tests__/RiskGateService.bookDepth.spec.ts` (new), `docs/tech-debt.md` (M19 entry rewritten, 2 new MEDIUM entries), `docs/plans/M22-depth-floor-recalibration.md` (amended with Composer review findings).
+
+**Zero blockers, zero highs at close.**
+
+---
+
 ## M17 — Automated daily DB backup (local disk, 3-deep retention)
 
 In-engine NestJS `DbBackupScheduler` + dynamic cron registration via `SchedulerRegistry.addCronJob`. Daily UTC `pg_dump` of the soak DB (`DATABASE_URL`), gzipped, written to host-bind-mounted `DB_BACKUP_DIR` (compose: `/var/backups/trade-bot` with explicit engine env override; host dev: `./backups`). Keeps the 3 newest `trade_bot_<YYYYMMDD_HHMM>.sql.gz` dumps and prunes older. Atomic write via `.tmp` → rename (no truncated dump promoted). Re-entrancy mutex (skip tick if dump in progress). Credentials via minimal libpq child env (never argv, never logged). Anchored filename pattern + `realpath` guard prevents path-traversal prune. Failure alert reuses `AlertTypeEnum.UNHANDLED_EXCEPTION` / `DB_BACKUP_FAILED`. Image carries `postgresql18-client` (Alpine 3.23, pg_dump 18.4, build-time smoke test). Non-root mount permissions documented + verified (uid 1000). `DB_BACKUP_DIR`, `DB_BACKUP_ENABLED`, `DB_BACKUP_CRON` (5-field UTC), `DB_BACKUP_RETENTION` (@Min 1) configured + validated. CI test job sets `DB_BACKUP_ENABLED: 'false'`. `backups/` gitignored. Read-only — never mutates soak DB.
