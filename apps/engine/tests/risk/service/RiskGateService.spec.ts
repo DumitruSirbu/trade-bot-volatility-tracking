@@ -1457,10 +1457,12 @@ describe('RiskGateService', () => {
 
         // Boundary: tier-2 depth exactly AT the floor rejects (boundary is <=).
 
-        it('rejects tier-2 depth exactly at 10_000 (boundary: <= floor rejects)', async () => {
+        const tier2Floor = COIN_DEPTH_FLOOR_10BPS_USDT[CoinTierEnum.TIER_2];
+
+        it('rejects tier-2 depth exactly at the floor (boundary: <= floor rejects)', async () => {
             const { gate } = makeGate();
             const context = buildPassingContext({
-                snapshot: buildSnapshot({ book_depth_10bps_usdt: '10000' }), // exactly at tier-2 floor
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: String(tier2Floor) }), // exactly at tier-2 floor
             });
 
             const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_2 }), context);
@@ -1468,10 +1470,10 @@ describe('RiskGateService', () => {
             expect(result.rejectReason).toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
         });
 
-        it('approves tier-2 depth at 10_000.01 — just above the floor (boundary: > floor passes)', async () => {
+        it('approves tier-2 depth just above the floor (boundary: > floor passes)', async () => {
             const { gate } = makeGate();
             const context = buildPassingContext({
-                snapshot: buildSnapshot({ book_depth_10bps_usdt: '10000.01' }),
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: String(tier2Floor + 0.01) }),
             });
 
             const result = await gate.evaluate(buildPassingIntent({ coinTier: CoinTierEnum.TIER_2 }), context);
@@ -1659,8 +1661,9 @@ describe('RiskGateService', () => {
             const sharedRiskState = buildRiskStatePort({ day: buildRiskStateDay({ isHalted: false }) });
 
             // Step 1 — thin tier-2 signal.
+            const tier2Floor = COIN_DEPTH_FLOOR_10BPS_USDT[CoinTierEnum.TIER_2];
             const thinContext = buildPassingContext({
-                snapshot: buildSnapshot({ book_depth_10bps_usdt: '5000' }), // below tier-2 floor (10_000)
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: String(tier2Floor - 1) }), // below tier-2 floor
                 riskState: sharedRiskState,
             });
             const thinResult = await gate.evaluate(
@@ -1697,7 +1700,7 @@ describe('RiskGateService', () => {
 
             // Thin tier-3.
             const thinContext = buildPassingContext({
-                snapshot: buildSnapshot({ book_depth_10bps_usdt: '100' }), // below tier-3 floor (5_000)
+                snapshot: buildSnapshot({ book_depth_10bps_usdt: '100' }), // below tier-3 floor
                 riskState: sharedRiskState,
             });
             const thinResult = await gate.evaluate(
