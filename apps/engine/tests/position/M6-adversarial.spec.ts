@@ -1628,7 +1628,9 @@ describe('9. Crash-window adversarials (ADR 0014)', () => {
         } as unknown as RiskStateRepository;
         const events = { emit: jest.fn() } as unknown as EventEmitter2;
 
-        const gate = new RiskGateService(ledger, new SlotManager(), new StressHaltEvaluator(), positionsRepo, riskStateRepo, events);
+        const gate = new RiskGateService(ledger, new SlotManager(), new StressHaltEvaluator(), positionsRepo, riskStateRepo, events, {
+            marketStressAutoResumeEnabled: false,
+        } as never);
 
         // NOT calling markRecoveryComplete
         const decision = await gate.evaluate({ intentAction: OrderIntentActionEnum.OPEN, symbol: 'BTCUSDT' } as never, {} as never);
@@ -1877,7 +1879,9 @@ describe('10. Anti-coverage assertions', () => {
         } as unknown as RiskStateRepository;
         const eventsMock = { emit: jest.fn() } as unknown as EventEmitter2;
 
-        const gate = new RiskGateService(ledger, new SlotManager(), new StressHaltEvaluator(), positionsRepo, riskStateRepo, eventsMock);
+        const gate = new RiskGateService(ledger, new SlotManager(), new StressHaltEvaluator(), positionsRepo, riskStateRepo, eventsMock, {
+            marketStressAutoResumeEnabled: false,
+        } as never);
         // Gate starts in recovery mode
 
         await gate.evaluate({ intentAction: OrderIntentActionEnum.OPEN, symbol: 'BTCUSDT' } as never, {} as never);

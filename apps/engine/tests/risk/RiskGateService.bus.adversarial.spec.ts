@@ -35,7 +35,15 @@ function makeGate(): { gate: RiskGateService; emitted: IEmittedEvent[] } {
             return true;
         }),
     };
-    const gate = new RiskGateService(ledger, slotManager, stress, positions as never, riskState as never, events as never);
+    const gate = new RiskGateService(
+        ledger,
+        slotManager,
+        stress,
+        positions as never,
+        riskState as never,
+        events as never,
+        { marketStressAutoResumeEnabled: false } as never,
+    );
     gate.markRecoveryComplete();
 
     return { gate, emitted };

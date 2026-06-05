@@ -105,7 +105,9 @@ describe('RiskGateService.reconcileClose — case (b) primitive (ADR 0010 §1b)'
         } as unknown as RiskStateRepository;
         const events = new EventEmitter2();
         const emitSpy = jest.spyOn(events, 'emit');
-        const gate = new RiskGateService(ledger, {} as SlotManager, {} as StressHaltEvaluator, positions, riskState, events);
+        const gate = new RiskGateService(ledger, {} as SlotManager, {} as StressHaltEvaluator, positions, riskState, events, {
+            marketStressAutoResumeEnabled: false,
+        } as never);
 
         return { gate, ledger, positions, riskState, events, emitSpy };
     }
@@ -178,7 +180,9 @@ describe('RiskGateService.recordExposureDrift — case (c) primitive (ADR 0010 �
         } as unknown as RiskStateRepository;
         const events = new EventEmitter2();
         const emitSpy = jest.spyOn(events, 'emit');
-        const gate = new RiskGateService(ledger, {} as SlotManager, {} as StressHaltEvaluator, positions, riskState, events);
+        const gate = new RiskGateService(ledger, {} as SlotManager, {} as StressHaltEvaluator, positions, riskState, events, {
+            marketStressAutoResumeEnabled: false,
+        } as never);
 
         return { gate, riskState, events, emitSpy };
     }

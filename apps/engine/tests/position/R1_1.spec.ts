@@ -291,7 +291,15 @@ describe('M6 R1.1.4 — RiskGateService.reconcileClose releases qty * entryPrice
             upsertDay: jest.fn().mockResolvedValue(undefined),
         };
         const events = { emit: jest.fn() };
-        const gate = new RiskGateService(ledger, new SlotManager(), new StressHaltEvaluator(), positions, riskState as never, events as never);
+        const gate = new RiskGateService(
+            ledger,
+            new SlotManager(),
+            new StressHaltEvaluator(),
+            positions,
+            riskState as never,
+            events as never,
+            { marketStressAutoResumeEnabled: false } as never,
+        );
         gate.markRecoveryComplete();
 
         return { gate, ledger, positions, riskState };
@@ -334,7 +342,15 @@ describe('M6 R1.1.5 — RiskGateService matcher disambiguates two reservations o
         const positions = { findById: jest.fn().mockResolvedValue(null) } as unknown as PositionRepository;
         const riskState = { findByDate: jest.fn().mockResolvedValue(null), upsertDay: jest.fn() };
         const events = { emit: jest.fn() };
-        const gate = new RiskGateService(ledger, new SlotManager(), new StressHaltEvaluator(), positions, riskState as never, events as never);
+        const gate = new RiskGateService(
+            ledger,
+            new SlotManager(),
+            new StressHaltEvaluator(),
+            positions,
+            riskState as never,
+            events as never,
+            { marketStressAutoResumeEnabled: false } as never,
+        );
         gate.markRecoveryComplete();
 
         return { gate, ledger };
