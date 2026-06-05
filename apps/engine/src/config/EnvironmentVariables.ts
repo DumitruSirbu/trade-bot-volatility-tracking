@@ -246,4 +246,15 @@ export class EnvironmentVariables {
     @IsInt()
     @Min(1)
     DB_BACKUP_RETENTION: number = 3;
+
+    // M23 (ADR 0004 §6d) — master switch for breadth market-stress auto-resume.
+    // OPTIONAL with NO field default: when absent, AppConfigService derives the
+    // value from EXCHANGE_ENV (paper → on, anything else → off) so a live deploy
+    // never inherits the loosening without an explicit operator override. When
+    // present, only the exact string 'true' (case-insensitive) enables it; any
+    // other value disables it (fail-safe to off, matching DB_BACKUP_ENABLED).
+    @IsOptional()
+    @Transform(({ value }) => String(value).toLowerCase().trim() === 'true')
+    @IsBoolean()
+    MARKET_STRESS_AUTO_RESUME_ENABLED?: boolean;
 }

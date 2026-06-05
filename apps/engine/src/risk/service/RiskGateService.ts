@@ -1,6 +1,7 @@
 import {
     CoinTierEnum,
     HaltSourceEnum,
+    IMarketStressResumedEvent,
     IModelDivergenceEvent,
     IRiskHaltEvent,
     OrderIntentActionEnum,
@@ -12,10 +13,11 @@ import {
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
-import { MODEL_DIVERGENCE_TRIGGERED_EVENT, RISK_HALT_TRIGGERED_EVENT } from '../../alert/const/alertEvents';
+import { MARKET_STRESS_RESUMED_EVENT, MODEL_DIVERGENCE_TRIGGERED_EVENT, RISK_HALT_TRIGGERED_EVENT } from '../../alert/const/alertEvents';
 
 import { MS_PER_MINUTE } from '../../common/const';
 import { Money, MoneyValue, parseMoney } from '../../common/utils/money';
+import { AppConfigService } from '../../config/service/AppConfigService';
 import { CANDLE_INTERVAL_MS } from '../../strategy/const';
 import { IProposedExit } from '../../strategy/interface';
 import {
@@ -23,6 +25,9 @@ import {
     COIN_DEPTH_FLOOR_10BPS_USDT,
     CONSECUTIVE_LOSS_HALT_COUNT,
     LIQUIDATION_SAFETY_BUFFER_FACTOR,
+    MARKET_STRESS_MAX_DAILY_REHALT,
+    MARKET_STRESS_RESUME_CLEAR_TICKS,
+    MARKET_STRESS_RESUME_ELIGIBLE_LEG,
     MAX_LEVERAGE,
     RESERVATION_TTL_MS,
     TIER3_VALIDATED_VERSION_IDS,
@@ -45,10 +50,16 @@ export const EXPOSURE_DRIFT_RECORDED_EVENT = 'risk.exposure.driftRecorded';
 
 // The state the gate loads ONCE per evaluate and threads down, so getDay/findOpen are not
 // re-queried per check (the decision logic stays pure — it reads this snapshot, not the DB).
+// `today` is mutable: on a breadth auto-resume (M23, ADR 0004 §6d) the gate flips isHalted/
+// haltReason in-memory so later coins in the same tick do not re-enter the halted branch.
 interface ILoadedState {
-    readonly today: IRiskStateDay | null;
+    today: IMutableRiskStateDay | null;
     readonly openPositions: IOpenPositionView[];
 }
+
+// Mutable view of the loaded day-row. The persisted row stays the source of truth; this is the
+// per-evaluate working copy whose halt fields the auto-resume branch clears in place.
+type IMutableRiskStateDay = { -readonly [Key in keyof IRiskStateDay]: IRiskStateDay[Key] };
 
 // The central risk gate (ADR 0004 §1/§2). The single chokepoint: nothing reaches execution
 // without passing it, and NO order action bypasses it. open/add run the full ordered check
@@ -94,6 +105,14 @@ export class RiskGateService {
     // emits cleanly.
     private stressEmittedForDate: string | null = null;
 
+    // M23 (ADR 0004 §6d) — breadth auto-resume in-memory state. All reset at UTC rollover; the
+    // clean-tick counter also resets to 0 on any non-clean tick, NaN fail-closed, recurrence, or
+    // restart. None is persisted (no migration; see ADR 0004 §6d restart quirk).
+    private stressClearCount = 0; // consecutive clean global-breadth ticks in the inner band
+    private stressReHaltCountForDate: string | null = null; // UTC day the re-halt counter belongs to
+    private stressReHaltCount = 0; // breadth re-halts this UTC day; at the cap → full-day lock
+    private autoResumeEmittedForDate: string | null = null; // dedup for the MARKET_STRESS_RESUMED emit
+
     constructor(
         private readonly ledger: ReservationLedger,
         private readonly slotManager: SlotManager,
@@ -111,6 +130,9 @@ export class RiskGateService {
         private readonly positions: IPositionQuery,
         private readonly riskState: RiskStateRepository,
         private readonly events: EventEmitter2,
+        // M23 (ADR 0004 §6d). Appended last so existing positional test instantiations keep
+        // compiling; NestJS resolves constructor params by type, so position is irrelevant for DI.
+        private readonly appConfig: AppConfigService,
     ) {}
 
     // M6 W8 (ADR 0014 §1, §9). Phase 9 of the boot pipeline opens the
@@ -407,7 +429,9 @@ export class RiskGateService {
     private async loadState(context: IRiskGateContext): Promise<ILoadedState> {
         const [today, openPositions] = await Promise.all([context.riskState.getDay(context.utcDateString), context.openPositions.findOpen()]);
 
-        return { today, openPositions };
+        // Copy the loaded row into a mutable working view so the M23 auto-resume branch can clear
+        // the day-halt in-memory for the rest of the tick without aliasing the port's snapshot.
+        return { today: today === null ? null : { ...today }, openPositions };
     }
 
     private async firstFailingCheck(
@@ -446,6 +470,15 @@ export class RiskGateService {
             this.stressEmittedForDate = null;
         }
 
+        // M23 (ADR 0004 §6d) — UTC-day rollover reset for the auto-resume counters. A fresh day
+        // re-arms the clean-tick counter, the per-day re-halt cap, and the resume-emit dedup.
+        if (this.stressReHaltCountForDate !== context.utcDateString) {
+            this.stressReHaltCountForDate = context.utcDateString;
+            this.stressReHaltCount = 0;
+            this.stressClearCount = 0;
+            this.autoResumeEmittedForDate = null;
+        }
+
         if (context.modelDivergenceDetected) {
             this.emitModelDivergenceOnce(context);
 
@@ -457,7 +490,11 @@ export class RiskGateService {
         this.divergenceEmitted = false;
 
         if (state.today !== null && state.today.isHalted) {
-            return RejectReasonEnum.GLOBAL_HALT;
+            const dayHaltReason = await this.resolveDayHalt(context, state);
+
+            if (dayHaltReason !== null) {
+                return dayHaltReason;
+            }
         }
 
         if (this.stress.isStressed(context.snapshot, context.params)) {
@@ -469,10 +506,105 @@ export class RiskGateService {
             this.emitMarketStressIfTransitioning(context, state);
             await this.persistHalt(context, state, RejectReasonEnum.MARKET_STRESS);
 
+            // M23 (ADR 0004 §6d) — advance the per-day breadth re-halt counter and reset the
+            // clean-tick counter ONLY for a market_stress halt. Kept at the call site (not inside
+            // persistHalt) so the command stays a pure DB write + flag set (CQS). persistHalt is
+            // idempotent on an already-halted day, so a re-evaluation that skips the write must not
+            // re-advance the counter — guard on the same not-yet-halted predicate persistHalt uses.
+            if (!(state.today !== null && state.today.isHalted)) {
+                this.stressReHaltCount++;
+                this.stressClearCount = 0;
+            }
+
             return RejectReasonEnum.MARKET_STRESS;
         }
 
         return null;
+    }
+
+    // M23 (ADR 0004 §6d) — day-halt resolution for an already-halted day. Returns the reject
+    // reason to short-circuit on, or null when a breadth halt auto-resumed (the caller then falls
+    // through to the fresh isStressed() engage check so a same-tick re-stress can re-halt). The
+    // branch runs BEFORE the legacy day-lock early return: every non-breadth stress leg, every
+    // loss-based reason, a hit re-halt cap, or a disabled flag all keep the full-day lock.
+    private async resolveDayHalt(context: IRiskGateContext, state: ILoadedState): Promise<RejectReasonEnum | null> {
+        const day = state.today;
+
+        if (day === null) {
+            return null;
+        }
+
+        if (!this.isBreadthAutoResumeEligible(day.haltReason)) {
+            return RejectReasonEnum.GLOBAL_HALT;
+        }
+
+        if (this.stressReHaltCount >= MARKET_STRESS_MAX_DAILY_REHALT) {
+            return RejectReasonEnum.GLOBAL_HALT;
+        }
+
+        if (this.stress.isGlobalStressed(context.snapshot)) {
+            this.stressClearCount = 0;
+
+            return RejectReasonEnum.GLOBAL_HALT;
+        }
+
+        this.stressClearCount++;
+
+        if (this.stressClearCount < MARKET_STRESS_RESUME_CLEAR_TICKS) {
+            return RejectReasonEnum.GLOBAL_HALT;
+        }
+
+        await this.autoResumeMarketStress(context, day);
+
+        return null;
+    }
+
+    // Only a breadth-SOLE market_stress halt auto-resumes (ADR 0004 §6d). The reason carries the
+    // canonical `market_stress:breadth` suffix; every other suffix (`:multi`, non-breadth legs,
+    // `:same_bar`, `:invalid`), a bare legacy `market_stress`, and every loss-based reason are not
+    // eligible. The whole branch is gated by the boot flag (paper-on, live-off).
+    private isBreadthAutoResumeEligible(haltReason: string | null): boolean {
+        if (!this.appConfig.marketStressAutoResumeEnabled) {
+            return false;
+        }
+
+        return haltReason === `${RejectReasonEnum.MARKET_STRESS}:${MARKET_STRESS_RESUME_ELIGIBLE_LEG}`;
+    }
+
+    // M23 (ADR 0004 §6d). Clear the persisted day-halt (preserving the PnL/exposure/trade
+    // counters), drop the in-memory flag, reset the clean-tick counter, re-arm the stress-emit
+    // dedup so a same-day re-halt still fires a fresh RISK_HALT_TRIGGERED (review M1), and emit
+    // MARKET_STRESS_RESUMED once per resume per UTC day. The caller flips the in-memory day row
+    // so later coins in the same tick do not re-enter the halted branch.
+    private async autoResumeMarketStress(context: IRiskGateContext, mutableDay: IMutableRiskStateDay): Promise<void> {
+        await context.riskState.clearHaltForDate(context.utcDateString);
+
+        mutableDay.isHalted = false;
+        mutableDay.haltReason = null;
+
+        this.stressClearCount = 0;
+        this.stressEmittedForDate = null;
+
+        this.logger.warn(
+            `market_stress auto-resumed leg=${MARKET_STRESS_RESUME_ELIGIBLE_LEG} breadth=${context.snapshot.market_breadth_5m_up_pct} reHalts=${this.stressReHaltCount}`,
+        );
+
+        if (this.autoResumeEmittedForDate === context.utcDateString) {
+            return;
+        }
+
+        this.autoResumeEmittedForDate = context.utcDateString;
+
+        const payload: IMarketStressResumedEvent = {
+            triggerLeg: MARKET_STRESS_RESUME_ELIGIBLE_LEG,
+            clearCount: MARKET_STRESS_RESUME_CLEAR_TICKS,
+            breadthAtResume: context.snapshot.market_breadth_5m_up_pct,
+            dailyReHaltCount: this.stressReHaltCount,
+            utcDateString: context.utcDateString,
+            nearReHaltCap: this.stressReHaltCount + 1 >= MARKET_STRESS_MAX_DAILY_REHALT,
+        };
+
+        this.events.emit(MARKET_STRESS_RESUMED_EVENT, payload);
     }
 
     // M9 W6.1 — bus-emit on the engage transition for market-stress halt. The
@@ -687,15 +819,31 @@ export class RiskGateService {
 
     // Durable, idempotent halt write (ADR 0004 §6). Upserts today's risk_state row with
     // is_halted=true + the halt reason, preserving the existing PnL/exposure/trade counters.
-    // Idempotent on the UTC-day key so a replay or a re-trigger never double-applies.
+    // Idempotent on the UTC-day key so a replay or a re-trigger never double-applies. For a
+    // market_stress halt the written reason carries the `market_stress:<leg>` suffix (M23, ADR
+    // 0004 §6d); loss-based reasons are written unchanged. Pure command: the per-day breadth
+    // re-halt counters are advanced by the market_stress call site, not here (CQS).
     private async persistHalt(context: IRiskGateContext, state: ILoadedState, reason: RejectReasonEnum): Promise<void> {
         if (state.today !== null && state.today.isHalted) {
             return;
         }
 
         const base = state.today ?? this.emptyDay(context.utcDateString);
+        const haltReason = this.buildPersistedHaltReason(context, reason);
 
-        await context.riskState.upsertDay({ ...base, isHalted: true, haltReason: reason });
+        await context.riskState.upsertDay({ ...base, isHalted: true, haltReason });
+    }
+
+    // The persisted halt_reason string. market_stress carries the classified trigger-leg suffix
+    // (ADR 0004 §6d); every other reason is written as the bare enum value, unchanged.
+    private buildPersistedHaltReason(context: IRiskGateContext, reason: RejectReasonEnum): string {
+        if (reason !== RejectReasonEnum.MARKET_STRESS) {
+            return reason;
+        }
+
+        const leg = this.stress.classifyHaltLeg(context.snapshot, context.params);
+
+        return `${RejectReasonEnum.MARKET_STRESS}:${leg}`;
     }
 
     private emptyDay(dateString: string): IRiskStateDay {

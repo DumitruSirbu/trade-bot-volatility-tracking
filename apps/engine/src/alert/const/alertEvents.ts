@@ -10,6 +10,10 @@
 export const RISK_HALT_TRIGGERED_EVENT = 'risk.halt.triggered';
 export const MODEL_DIVERGENCE_TRIGGERED_EVENT = 'risk.modelDivergence.triggered';
 
+// M23 (ADR 0004 §6d) — symmetric to RISK_HALT_TRIGGERED. Emitted once per breadth
+// auto-resume per UTC day; never on a loss-halt clear or operator resume.
+export const MARKET_STRESS_RESUMED_EVENT = 'risk.marketStress.resumed';
+
 // De-dupe window for back-to-back risk halts on the same source. M4 may emit
 // the same halt twice within a few ms during a recovery / re-check cycle; we
 // coalesce inside the listener BEFORE calling HaltService (which is itself

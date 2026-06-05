@@ -149,6 +149,50 @@ export const STRESS_BTC_5M_SHOCK_PCT = 1.5;
 // full UTC-day halt penalty.
 export const STRESS_ETH_5M_SHOCK_PCT = 2.5;
 
+// --- market-stress halt-leg suffix tokens (M23, §6d) ---
+// Used by StressHaltEvaluator.classifyHaltLeg and the RiskGateService resume branch.
+// These are the canonical values written to risk_state.halt_reason after 'market_stress:'.
+export const HALT_LEG_INVALID = 'invalid';
+export const HALT_LEG_BTC_SHOCK = 'btc_shock';
+export const HALT_LEG_ETH_SHOCK = 'eth_shock';
+export const HALT_LEG_BREADTH = 'breadth';
+export const HALT_LEG_SAME_BAR = 'same_bar';
+export const HALT_LEG_OI = 'oi';
+export const HALT_LEG_FUNDING = 'funding';
+export const HALT_LEG_SPREAD = 'spread';
+export const HALT_LEG_MULTI = 'multi';
+// Only breadth-triggered halts are eligible for M23 auto-resume.
+export const MARKET_STRESS_RESUME_ELIGIBLE_LEG = HALT_LEG_BREADTH;
+
+// --- market-stress adaptive resume (§6d, M23) ---
+
+// Consecutive clean global-breadth decision ticks (breadth in the inner hysteresis band)
+// required before a breadth-triggered market_stress halt auto-resumes. Default 3 — a STARTING
+// POINT pending a proper per-bar consecutive-clean-bar analysis with held-out validation, NOT a
+// validated calibration (the original N=3 was sampled at fixed +5/+10/+15m offsets on a 6-day,
+// single-regime, zero-out-of-sample dataset, not from the full per-bar series). The counter is
+// in-memory on RiskGateService, advances once per gate evaluation (ticks, not minutes — a
+// determinism choice), and resets to 0 on any non-clean tick, NaN fail-closed, recurrence, or
+// restart. Operators tune this against the post-deploy paper soak (ADR 0004 §6d).
+export const MARKET_STRESS_RESUME_CLEAR_TICKS = 3;
+
+// Inner hysteresis band for resume. The halt ENGAGES at |breadth - 50| >= STRESS_BREADTH_DISTANCE_PCT
+// (40, i.e. breadth <= 10 or >= 90). Resume requires breadth to re-enter |breadth - 50| <= 30
+// (breadth in [20, 80]). The 10-point gap on each side is the hysteresis buffer that stops the
+// gate chattering at the engage boundary — a reading in (10, 20) or (80, 90) is below the engage
+// threshold but does NOT count toward resume (it resets the clean-tick counter). The resume
+// predicate uses strict `>` at this distance (still-stressed when |breadth - 50| > 30); engage
+// uses `>=` at 40 (ADR 0004 §6d). Reuses the old M19 engage value pending per-bar autocorrelation
+// validation after a 30-60 day soak (logged as tech-debt).
+export const MARKET_STRESS_RESUME_BREADTH_DISTANCE = 30;
+
+// Per-UTC-day cap on breadth market_stress re-halts. On the 3rd breadth re-halt in one UTC day the
+// gate falls back to the FULL-DAY LOCK (auto-resume disabled for the rest of the day; the halt
+// persists to rollover exactly like a loss halt). Chatter is itself a regime signal — a market
+// oscillating between collapse and surge is exactly when the conservative day-lock should reassert.
+// The counter is in-memory and resets at UTC rollover (same lifecycle as stressEmittedForDate).
+export const MARKET_STRESS_MAX_DAILY_REHALT = 3;
+
 // --- model-divergence kill switch (§14, M9-fed) ---
 
 // Realized-vs-modeled slippage divergence ratio that trips the halt (realized > modeled x

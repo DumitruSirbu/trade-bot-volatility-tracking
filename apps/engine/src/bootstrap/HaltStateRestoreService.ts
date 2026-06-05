@@ -3,8 +3,7 @@ import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 
 import { HaltFlagService } from '../common/service/HaltFlagService';
 import { HaltService } from '../control/HaltService';
-import { ControlAuditRepository } from '../control/repository/ControlAuditRepository';
-import { PROGRAMMATIC_ACTOR_PREFIX } from '../control/repository/ControlAuditRepository';
+import { ControlAuditRepository, PROGRAMMATIC_ACTOR_PREFIX } from '../control/repository/ControlAuditRepository';
 import { RiskStateEntity } from '../risk/entity/RiskStateEntity';
 import { RiskStateRepository } from '../risk/repository/RiskStateRepository';
 
@@ -162,7 +161,7 @@ export class HaltStateRestoreService implements OnApplicationBootstrap {
         const flagHalted = this.haltFlag.isHalted();
 
         if (resolution.desiredHalted && !flagHalted) {
-            this.haltFlag.halt(`${resolution.source}:${resolution.reason ?? 'restored'}`);
+            this.haltFlag.halt(this.buildFlagReason(resolution));
             this.logger.warn(`halt.restored state=halted source=${resolution.source} origin=${resolution.origin} reason=${resolution.reason ?? ''}`);
 
             return;
@@ -184,6 +183,21 @@ export class HaltStateRestoreService implements OnApplicationBootstrap {
         }
 
         this.logger.log(`halt.restored state=running origin=${resolution.origin}`);
+    }
+
+    // M23 (ADR 0004 §6d — no-double-prefix contract). The persisted reason now carries the
+    // source token as its prefix (e.g. `market_stress:breadth`). Re-concatenating
+    // `source:reason` would produce `market_stress:market_stress:breadth`, so when the reason
+    // already begins with `source:` it is passed through as-is for a clean round-trip; otherwise
+    // the historical `source:reason` shape is preserved.
+    private buildFlagReason(resolution: IRestoreResolution): string {
+        const reason = resolution.reason ?? 'restored';
+
+        if (reason.startsWith(`${resolution.source}:`)) {
+            return reason;
+        }
+
+        return `${resolution.source}:${reason}`;
     }
 }
 

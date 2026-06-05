@@ -2,16 +2,24 @@
 #
 # Auto-fixing pre-commit hook (committed, zero new npm deps).
 #
-# Mirrors the CI `lint` and `format` jobs locally on the *staged* files so the
-# Prettier/ESLint failures CI catches become impossible to commit:
+# Mirrors the CI `lint`, `format`, and `typecheck` jobs locally so the failures
+# CI catches become impossible to commit:
 #   - *.ts / *.tsx     -> prettier --write, then eslint --fix
 #   - *.json/.md/.yml  -> prettier --write
-# Fixed files are re-staged with `git add` so the fix lands in this commit.
+#   - whole TS graph   -> tsc --noEmit (only when TS files are staged)
+# Lint/format fixes are re-staged with `git add` so they land in this commit.
 #
 # If `eslint --fix` still exits non-zero (an unfixable rule violation, i.e. a
 # real lint error), the commit is BLOCKED. Prettier auto-fix does not fail.
 #
-# Uses only git + `npx prettier` + `npx eslint` (all already in the repo).
+# The typecheck step is PROJECT-WIDE, not staged-scoped: a contract change in a
+# staged file (e.g. a new interface method or constructor param) breaks consumers
+# in files that are NOT staged, and per-file eslint cannot see cross-file type
+# errors. Only `tsc` over the whole graph catches them — this is exactly the
+# class of break that slipped past the lint-only hook in M23. It is not
+# auto-fixable, so a failure BLOCKS the commit.
+#
+# Uses only git + `npx prettier`/`npx eslint` + `pnpm typecheck` (all in the repo).
 # Bypass with `git commit --no-verify` — CI remains the authoritative gate.
 
 set -eu
@@ -53,6 +61,19 @@ fi
 if [ -n "$has_doc" ]; then
     list_doc | xargs -0 npx prettier --write
     list_doc | xargs -0 git add --
+fi
+
+# --- TypeScript: project-wide typecheck (mirrors the CI `typecheck` job) ---
+# Runs only when TS files are staged. Checks the whole graph so a contract change
+# that breaks a non-staged consumer is caught here, not in CI. Not auto-fixable.
+if [ -n "$has_ts" ]; then
+    if ! pnpm -r --if-present typecheck; then
+        echo ""
+        echo "pre-commit: tsc found type errors (project-wide)."
+        echo "pre-commit: a staged contract change likely broke a non-staged consumer."
+        echo "pre-commit: fix the type errors and re-stage, or bypass with --no-verify."
+        exit 1
+    fi
 fi
 
 exit 0

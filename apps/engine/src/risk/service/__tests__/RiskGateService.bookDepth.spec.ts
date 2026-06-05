@@ -205,6 +205,7 @@ function buildContext(bookDepth: string, nowMs = 1_700_000_000_000): IRiskGateCo
             getDay: jest.fn().mockResolvedValue(safeRiskStateDay),
             sumRealizedPnlBetween: jest.fn().mockResolvedValue(new Money(0)),
             upsertDay: jest.fn().mockResolvedValue(undefined),
+            clearHaltForDate: jest.fn().mockResolvedValue(undefined),
         },
         openPositions: {
             findOpen: jest.fn().mockResolvedValue([]),
@@ -232,7 +233,7 @@ function buildGate(): RiskGateService {
     const riskState = { findByDate: jest.fn().mockResolvedValue(null), upsertDay: jest.fn().mockResolvedValue(undefined) } as any;
     const events = { emit: jest.fn() } as any;
 
-    const gate = new RiskGateService(ledger, slotManager, stress, positions, riskState, events);
+    const gate = new RiskGateService(ledger, slotManager, stress, positions, riskState, events, { marketStressAutoResumeEnabled: false } as any);
     gate.markRecoveryComplete();
 
     return gate;

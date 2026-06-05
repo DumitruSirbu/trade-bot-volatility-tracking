@@ -145,7 +145,15 @@ describe('RiskGateService.evaluate — RECOVERY_IN_PROGRESS guard (ADR 0014 §1,
         const positions = { findById: jest.fn().mockResolvedValue(null) };
         const riskState = { findByDate: jest.fn().mockResolvedValue(null), upsertDay: jest.fn().mockResolvedValue(undefined) };
         const events = { emit: jest.fn() };
-        return new RiskGateService(ledger, new SlotManager(), new StressHaltEvaluator(), positions as never, riskState as never, events as never);
+        return new RiskGateService(
+            ledger,
+            new SlotManager(),
+            new StressHaltEvaluator(),
+            positions as never,
+            riskState as never,
+            events as never,
+            { marketStressAutoResumeEnabled: false } as never,
+        );
     }
 
     it('starts in recovery mode (isRecoveryReady === false on construction)', () => {

@@ -68,6 +68,7 @@ export class AppConfigService {
     private readonly resolvedAuthTokenTtlSec: number;
     private readonly resolvedRevokedJtiPruneAfterSec: number;
     private readonly resolvedRevokedJtiMaxRows: number;
+    private readonly resolvedMarketStressAutoResumeEnabled: boolean;
 
     constructor(private readonly configService: ConfigService<EnvironmentVariables, true>) {
         this.resolvedAuthHmacSecret = this.resolveAuthHmacSecret();
@@ -85,6 +86,7 @@ export class AppConfigService {
         this.resolvedAuthTokenTtlSec = this.parsePositiveIntEnv(AUTH_TOKEN_TTL_SEC_ENV, AUTH_TOKEN_TTL_SEC_DEFAULT);
         this.resolvedRevokedJtiPruneAfterSec = this.resolveRevokedJtiPruneAfterSec(this.resolvedAuthTokenTtlSec);
         this.resolvedRevokedJtiMaxRows = this.parsePositiveIntEnv(REVOKED_JTI_MAX_ROWS_ENV, REVOKED_JTI_MAX_ROWS_DEFAULT);
+        this.resolvedMarketStressAutoResumeEnabled = this.resolveMarketStressAutoResumeEnabled();
     }
 
     get nodeEnv(): NodeEnvEnum {
@@ -123,6 +125,16 @@ export class AppConfigService {
     // throws at boot via the class-validator @IsEnum(EnvironmentVariables).
     get exchangeEnv(): ExchangeEnvironmentEnum {
         return this.configService.get('EXCHANGE_ENV', { infer: true });
+    }
+
+    // M23 (ADR 0004 §6d) — master switch for breadth market-stress auto-resume.
+    // When false, the gate keeps the pre-M23 full-day lock for every stress halt
+    // (M23 inert). Default derives from EXCHANGE_ENV (paper → on, else off) so a
+    // live deploy never inherits the loosening; an explicit env override is the
+    // only way to enable it on live. Read once at boot — constant within a run,
+    // so the gate's determinism invariant is preserved.
+    get marketStressAutoResumeEnabled(): boolean {
+        return this.resolvedMarketStressAutoResumeEnabled;
     }
 
     // M11a W1.1 — two-token live-mode boot inputs. Both optional at schema
@@ -521,6 +533,20 @@ export class AppConfigService {
         }
 
         return parsed;
+    }
+
+    // M23 (ADR 0004 §6d). The schema field is optional with no default, so an
+    // absent key surfaces here as `undefined` — distinguishing "unset" (derive
+    // from EXCHANGE_ENV) from "explicitly set false". Present values are already
+    // coerced to boolean by the @Transform on the schema field.
+    private resolveMarketStressAutoResumeEnabled(): boolean {
+        const configured = this.configService.get('MARKET_STRESS_AUTO_RESUME_ENABLED', { infer: true });
+
+        if (configured !== undefined) {
+            return configured;
+        }
+
+        return this.exchangeEnv === ExchangeEnvironmentEnum.PAPER;
     }
 
     private parsePositiveIntEnv(envName: string, defaultValue: number): number {

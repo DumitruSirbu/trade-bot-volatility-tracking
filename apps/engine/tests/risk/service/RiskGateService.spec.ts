@@ -28,6 +28,7 @@ import { Money } from '../../../src/common/utils/money';
 import {
     COIN_DEPTH_FLOOR_10BPS_USDT,
     DAILY_LOSS_LIMIT_USDT,
+    HALT_LEG_BTC_SHOCK,
     MAX_EXPOSURE_PER_COIN_USDT,
     MAX_SAME_DIRECTION_EXPOSURE_USDT,
     WEEKLY_LOSS_LIMIT_USDT,
@@ -60,7 +61,8 @@ function makeGate(): { gate: RiskGateService; ledger: ReservationLedger } {
     const positions = { findById: jest.fn().mockResolvedValue(null) };
     const riskState = { findByDate: jest.fn().mockResolvedValue(null), upsertDay: jest.fn() };
     const events = { emit: jest.fn() };
-    const gate = new RiskGateService(ledger, slotManager, stress, positions as never, riskState as never, events as never);
+    const appConfig = { marketStressAutoResumeEnabled: false };
+    const gate = new RiskGateService(ledger, slotManager, stress, positions as never, riskState as never, events as never, appConfig as never);
     // M6 W8: gate starts in recovery mode; tests that exercise evaluate() must
     // mark recovery complete to bypass the RECOVERY_IN_PROGRESS guard. The
     // gate's recovery contract is exercised separately in tests/position/W8.spec.ts.
@@ -230,7 +232,11 @@ describe('RiskGateService', () => {
 
             await gate.evaluate(buildPassingIntent(), context);
 
-            expect(riskState.upsertDay).toHaveBeenCalledWith(expect.objectContaining({ isHalted: true, haltReason: RejectReasonEnum.MARKET_STRESS }));
+            // M23 (ADR 0004 §6d): the persisted halt_reason carries the engaged-leg suffix.
+            // A sole BTC-shock engage persists `market_stress:btc_shock`.
+            expect(riskState.upsertDay).toHaveBeenCalledWith(
+                expect.objectContaining({ isHalted: true, haltReason: `${RejectReasonEnum.MARKET_STRESS}:${HALT_LEG_BTC_SHOCK}` }),
+            );
         });
 
         it('does NOT re-upsert halt when risk_state is already halted (idempotent)', async () => {

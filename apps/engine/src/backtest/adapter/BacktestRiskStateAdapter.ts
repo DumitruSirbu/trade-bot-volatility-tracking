@@ -25,4 +25,16 @@ export class BacktestRiskStateAdapter implements IRiskStatePort {
     async upsertDay(day: IRiskStateDay): Promise<void> {
         this.book.riskStateByDay.set(day.date, day);
     }
+
+    // M23 (ADR 0004 §6d). Breadth auto-resume clears the day-halt in place, preserving the
+    // PnL/exposure/trade counters so the backtest replays the live resume path identically.
+    async clearHaltForDate(date: string): Promise<void> {
+        const existing = this.book.riskStateByDay.get(date);
+
+        if (existing === undefined) {
+            return;
+        }
+
+        this.book.riskStateByDay.set(date, { ...existing, isHalted: false, haltReason: null });
+    }
 }

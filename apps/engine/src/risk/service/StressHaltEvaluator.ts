@@ -1,7 +1,17 @@
 import { IMarketSnapshot, IStrategyParams } from '@bot/shared';
 import { Injectable } from '@nestjs/common';
 import {
+    HALT_LEG_BREADTH,
+    HALT_LEG_BTC_SHOCK,
+    HALT_LEG_ETH_SHOCK,
+    HALT_LEG_FUNDING,
+    HALT_LEG_INVALID,
+    HALT_LEG_MULTI,
+    HALT_LEG_OI,
+    HALT_LEG_SAME_BAR,
+    HALT_LEG_SPREAD,
     MARKET_BREADTH_NEUTRAL_PCT,
+    MARKET_STRESS_RESUME_BREADTH_DISTANCE,
     STRESS_BREADTH_DISTANCE_PCT,
     STRESS_BTC_5M_SHOCK_PCT,
     STRESS_ETH_5M_SHOCK_PCT,
@@ -43,6 +53,85 @@ export class StressHaltEvaluator {
         }
 
         return this.isLiquidityShock(snapshot);
+    }
+
+    // Classify the canonical halt_reason leg suffix for a snapshot already known to be stressed
+    // (ADR 0004 §6d). Enumerates every engage path so no engage is silently misclassified, and
+    // applies most-conservative-leg-wins: `breadth` only when breadth is the SOLE engaging global
+    // leg; `multi` when two or more legs engage together. Only `breadth` is resume-eligible —
+    // every other suffix stays full-day locked.
+    classifyHaltLeg(snapshot: IMarketSnapshot, params: IStrategyParams): string {
+        if (this.hasInvalidStressInputs(snapshot)) {
+            return HALT_LEG_INVALID;
+        }
+
+        const legs = this.activeStressLegs(snapshot, params);
+
+        if (legs.length >= 2) {
+            return HALT_LEG_MULTI;
+        }
+
+        if (legs.length === 0) {
+            return HALT_LEG_INVALID;
+        }
+
+        return legs[0];
+    }
+
+    // The global resume predicate (ADR 0004 §6d): evaluates only the breadth leg for the resume
+    // decision, but fail-closes on NaN in any of the three global move fields (btc_5m_move_pct,
+    // eth_5m_move_pct, market_breadth_5m_up_pct). The breadth check runs at the RESUME threshold
+    // (strict `>`, distinct from the engage `>=` at STRESS_BREADTH_DISTANCE_PCT). A non-finite
+    // breadth/BTC/ETH 5m field is treated AS stressed so the clean-tick counter resets. Funding and
+    // per-coin spread play no
+    // role here (they live at the per-entry eligibility gate), so a single coin cannot perpetually
+    // block resume after the global breadth cause has cleared.
+    isGlobalStressed(snapshot: IMarketSnapshot): boolean {
+        const guarded = [snapshot.btc_5m_move_pct, snapshot.eth_5m_move_pct, snapshot.market_breadth_5m_up_pct];
+
+        if (guarded.some((value) => !Number.isFinite(value))) {
+            return true;
+        }
+
+        const distanceFromBalance = Math.abs(snapshot.market_breadth_5m_up_pct - MARKET_BREADTH_NEUTRAL_PCT);
+
+        return distanceFromBalance > MARKET_STRESS_RESUME_BREADTH_DISTANCE;
+    }
+
+    // Every engage leg active on this snapshot, in the §6d enumeration order. Excludes the
+    // invalid-inputs guard (handled by classifyHaltLeg before this runs).
+    private activeStressLegs(snapshot: IMarketSnapshot, params: IStrategyParams): string[] {
+        const legs: string[] = [];
+
+        if (Math.abs(snapshot.btc_5m_move_pct) >= STRESS_BTC_5M_SHOCK_PCT) {
+            legs.push(HALT_LEG_BTC_SHOCK);
+        }
+
+        if (Math.abs(snapshot.eth_5m_move_pct) >= STRESS_ETH_5M_SHOCK_PCT) {
+            legs.push(HALT_LEG_ETH_SHOCK);
+        }
+
+        if (Math.abs(snapshot.market_breadth_5m_up_pct - MARKET_BREADTH_NEUTRAL_PCT) >= STRESS_BREADTH_DISTANCE_PCT) {
+            legs.push(HALT_LEG_BREADTH);
+        }
+
+        if (snapshot.same_bar_trigger_count >= params.stress_same_bar_trigger_count) {
+            legs.push(HALT_LEG_SAME_BAR);
+        }
+
+        if (Math.abs(snapshot.open_interest_change_5m_pct) >= STRESS_OI_CHANGE_5M_PCT) {
+            legs.push(HALT_LEG_OI);
+        }
+
+        if (Math.abs(snapshot.funding_rate_annualized) >= STRESS_FUNDING_ANNUALIZED_PCT) {
+            legs.push(HALT_LEG_FUNDING);
+        }
+
+        if (snapshot.bid_ask_spread_pct >= STRESS_SPREAD_PCT) {
+            legs.push(HALT_LEG_SPREAD);
+        }
+
+        return legs;
     }
 
     // Fail-closed (ADR 0004 §6 safety): a NaN/Infinity in any consumed numeric stress input

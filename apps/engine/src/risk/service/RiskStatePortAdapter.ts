@@ -41,4 +41,8 @@ export class RiskStatePortAdapter implements IRiskStatePort {
             haltReason: day.haltReason,
         });
     }
+
+    async clearHaltForDate(date: string): Promise<void> {
+        await this.riskStates.clearHaltForDate(date);
+    }
 }
