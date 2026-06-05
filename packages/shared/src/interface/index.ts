@@ -26,6 +26,7 @@ export { IHaltAuditEntry } from './IHaltAuditEntry.js';
 export { IHaltChangedEvent } from './IHaltChangedEvent.js';
 export { IRiskHaltEvent } from './IRiskHaltEvent.js';
 export { IModelDivergenceEvent } from './IModelDivergenceEvent.js';
+export { IMarketStressResumedEvent } from './IMarketStressResumedEvent.js';
 export { IOpenPositionView } from './IOpenPositionView.js';
 export { IClosedPositionView } from './IClosedPositionView.js';
 export { IPositionDetailView } from './IPositionDetailView.js';

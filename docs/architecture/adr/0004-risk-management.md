@@ -579,6 +579,192 @@ against that distribution, not another short calm soak. Next BTC adjustment band
 epsilon without longer telemetry). **Do NOT re-tighten ETH toward 2.0%** — that repeats the
 soak failure mode the ETH 2.5% floor exists to fix.
 
+### 6d. Breadth-stress adaptive auto-resume (M23)
+
+**This subsection adds an adaptive auto-resume to the §6 market-stress halt; it does not
+change any engage semantics in §6/§6b/§6c.** Before M23 every `market_stress` trip was a
+full-UTC-day lock (`firstFailingHaltCheck` returns the day-halt early return on every
+subsequent tick until UTC rollover). M23 shortens that lock for **breadth-triggered** stress
+halts only, replacing the day-lock with a consecutive-clean-tick auto-resume gated by
+hysteresis and a per-day re-halt cap. M23 is **code-only and migration-free** — no schema
+change, no new column; `halt_reason` carries a richer string in the existing varchar, and the
+counters are in-memory. An engine restart picks it up.
+
+**Scope (locked).** Auto-resume applies to **breadth-sole** `market_stress` halts and nothing
+else:
+
+- **Eligible:** a halt whose sole engaging global leg is breadth collapse/surge.
+- **Full-day locked (unchanged):** BTC 5m shock, ETH 5m shock, OI shock, funding extreme,
+  market-wide spread blowout, same-bar trigger saturation, NaN fail-closed engage, and any
+  snapshot where two or more global legs engage together.
+- **Out of scope entirely (full-day lock unchanged):** loss-based halts —
+  `consecutive_loss_halt`, `daily_loss_limit`, `weekly_loss_limit`, `model_divergence_halt`.
+  These never auto-resume regardless of clean-tick count; a cooling-off to UTC rollover is the
+  deliberately conservative shape for a persistent-edge problem.
+
+The survival-first rationale: auto-resume *loosens* the penalty, so it applies only when the
+cause is unambiguously the single fast mean-reverting signal (breadth). Breadth
+(`market_breadth_5m_up_pct`) is a count statistic — the fraction of tracked coins up over 5m —
+that can collapse to single digits on a momentary correlated flush and recover within minutes;
+the day-lock is the wrong shape for it. Every other leg is slower or trendier (or had zero
+events in the calibration dataset), so it keeps the day-lock.
+
+**`halt_reason` canonical encoding (locked — single source of truth).** `risk_state.halt_reason`
+is a free-form varchar already written by `persistHalt`. M23 extends the written value to carry
+the trigger leg as a colon-suffix. `persistHalt` writes exactly one of these strings, and the
+resume branch parses exactly these strings — engage writer, resume parser, and alert/telemetry
+vocabulary stay in sync:
+
+| `halt_reason` value | Trigger leg | Resume policy |
+|---------------------|-------------|---------------|
+| `market_stress:breadth` | breadth collapse/surge, **sole** engaging global leg | **resume-eligible** |
+| `market_stress:btc_shock` | BTC 5m index shock (§6c) | full-day lock |
+| `market_stress:eth_shock` | ETH 5m index shock (§6c) | full-day lock |
+| `market_stress:oi` | OI 5m shock | full-day lock |
+| `market_stress:funding` | funding extreme | full-day lock |
+| `market_stress:spread` | market-wide spread blowout | full-day lock |
+| `market_stress:same_bar` | `same_bar_trigger_count` saturation | full-day lock |
+| `market_stress:invalid` | NaN fail-closed engage | full-day lock (conservative) |
+| `market_stress:multi` | **two or more** global legs on the same snapshot | full-day lock |
+| `market_stress` (bare, legacy) | written before M23 | full-day lock (fail-safe) |
+
+**Leg-classifier completeness and multi-leg precedence (locked).** The classifier that produces
+the suffix MUST enumerate **every** engage path in the `isStressed()` disjunction — invalid
+inputs, BTC 5m shock, ETH 5m shock, breadth, `same_bar`, OI, funding, spread — so no engage is
+silently misclassified. It returns a **single canonical suffix** per the
+**most-conservative-leg-wins** rule: tag `:breadth` (resume-eligible) **only when breadth is the
+sole engaging global leg**; if breadth engages alongside any other global leg on the same
+snapshot, tag `:multi` (full-day lock). **Fail-safe parse:** any `market_stress` reason without a
+recognised resume-eligible suffix — `:multi`, `:same_bar`, `:invalid`, every non-breadth leg, and
+the legacy bare `market_stress` — defaults to full-day lock (unknown suffix → no auto-resume).
+This preserves backward compatibility with rows already in the soak DB.
+
+**No-double-prefix contract (locked — restore/flag round-trip).** `risk_state.halt_reason` is the
+single source of truth and stores the full string `market_stress:<leg>`. The in-memory halt flag
+must round-trip that string cleanly:
+
+- **`HaltStateRestoreService` passes the persisted reason as-is** to `haltFlag.halt(...)`. When the
+  reason already begins with the source token (`market_stress:`), restore does **not** re-concatenate
+  `source:reason`. The in-memory flag therefore reads `market_stress:breadth`, identical to the
+  persisted row — never the corrupt `market_stress:market_stress:breadth`.
+- **`resolveProgrammaticSource` keeps splitting on the first colon** (unchanged): prefix
+  `market_stress` → `HaltSourceEnum.MARKET_STRESS`; the suffix is ignored for source resolution.
+- **`HaltFlagService.haltedLeg` holds the bare leg token** (`breadth`), parsed from the suffix —
+  not the full string. `getHaltedLeg()` returns `breadth`, never `market_stress:breadth`. The full
+  reason stays available via the existing reason accessor. `haltedLeg` is set on `halt()` and cleared
+  on `resume()` (Command-Query Separation preserved — `halt`/`resume` stay state-changers; the new
+  `getHaltedLeg()` is a query).
+
+**Resume predicate — `isGlobalStressed()` (breadth-only + NaN fail-closed).** A new method on
+`StressHaltEvaluator`. It checks **only the global breadth leg** at the **resume** threshold
+(`|breadth − 50| > MARKET_STRESS_RESUME_BREADTH_DISTANCE`), distinct from the full `isStressed()`
+disjunction. It preserves NaN fail-closed: a non-finite `market_breadth_5m_up_pct` (or, for safety,
+the BTC/ETH 5m fields the engage path also reads) is treated **as stressed** → counter reset.
+Funding and per-coin spread remain at the per-entry eligibility gate (`FUNDING_SUPPRESSED`,
+`SPREAD_TOO_WIDE`) and play **no** role in auto-resume — reusing the full disjunction would let a
+single coin's funding/spread perpetually reset the counter even though the global breadth cause
+cleared, so the bot would never resume.
+
+**Hysteresis — engage ≠ resume threshold (locked).** Engage and resume thresholds differ so the
+gate does not chatter at the boundary:
+
+- **Engage (unchanged, §6b):** halt when `|breadth − 50| >= STRESS_BREADTH_DISTANCE_PCT (40)` —
+  breadth `<= 10` (collapse) or `>= 90` (surge).
+- **Resume:** require breadth back inside the inner band
+  `|breadth − 50| <= MARKET_STRESS_RESUME_BREADTH_DISTANCE (30)` — breadth in **[20, 80]**.
+- **Hysteresis buffer:** a reading in the gap `(10, 20)` or `(80, 90)` is below the engage
+  threshold but **not** clean enough to count toward resume — it does **not** advance the counter
+  (it resets it). This 10-point gap on each side is the buffer.
+
+**Consecutive-clean-tick confirmation (locked).** An in-memory consecutive counter on
+`RiskGateService`, incremented on a clean global tick (breadth in the inner band) and **reset to 0**
+on any non-clean tick, NaN fail-closed, or stress recurrence mid-window. It is **not** persisted; on
+restart it resets to 0 (conservative — one fresh full confirmation cycle is required before resume).
+The confirmation count is `MARKET_STRESS_RESUME_CLEAR_TICKS = 3`. **N = 3 is a configurable starting
+point, NOT a validated calibration** — the original 3 was sampled at fixed +5/+10/+15m offsets on a
+6-day, single-regime, zero-out-of-sample dataset and does not demonstrate 3 *consecutive* clean
+bars. A proper per-bar consecutive-clean-bars-until-next-breach analysis with a held-out sub-period
+is owed (logged as tech-debt); operators tune N against the post-deploy paper soak.
+
+**Per-day re-halt cap (locked).** `MARKET_STRESS_MAX_DAILY_REHALT = 3`. Chatter is itself a regime
+signal. Track the per-UTC-day breadth re-halt count; on the **3rd** breadth re-halt in one UTC day,
+the gate **falls back to the full-day lock** for the remainder of that day (auto-resume disabled,
+the halt persists to rollover exactly like a loss halt). The counter is in-memory and resets at UTC
+rollover (same lifecycle as the existing `stressEmittedForDate` dedup).
+
+> **Restart quirk (accepted and documented).** The re-halt counter is in-memory only, so a mid-day
+> restart resets it to 0: a process that already hit the cap and fell back to the full-day lock will,
+> after a restart, restore the persisted halt (still locked) but begin counting re-halts afresh —
+> a known **more-permissive** quirk. M23 accepts it rather than persisting the counter, because
+> (1) the persisted day row is still `is_halted=true`, so a capped+restarted process resumes locked
+> and must re-earn a resume through the full clean-tick + hysteresis path before it can re-halt at
+> all; (2) there is no migration-free place to persist a counter (no JSON/metadata column on
+> `risk_state`); (3) restarts are rare operational events, not a tape-driven exploit. Persisting
+> `stress_rehalt_count` is logged as **LOW tech-debt**, to land with the `risk_state.updated_at`/
+> metadata work rather than a varchar hack now. The clean-tick counter resetting to 0 on restart is
+> conservative in the **other** direction — net restart story: locked stays locked, resume requires
+> a fresh confirmation cycle, only the chatter-cap headroom is loosened.
+
+**Branch placement (locked).** The resume evaluation is inserted in `firstFailingHaltCheck`
+**before** the `state.today.isHalted` day-halt early return at line 459. That early return
+short-circuits before `isStressed()` ever runs, so the resume branch cannot live after it. The
+branch reads the persisted `halt_reason`:
+
+- `isHalted && halt_reason starts with 'market_stress' && leg == breadth` → run `isGlobalStressed()`
+  resume evaluation. On a successful resume, clear the persisted day-halt (see below) and **continue
+  to the fresh `isStressed()` engage check** so a same-tick re-stress can immediately re-halt and bump
+  the re-halt counter.
+- `isHalted && halt_reason starts with 'market_stress' && leg != breadth` → keep the existing
+  `GLOBAL_HALT` early return (non-breadth stress stays full-day locked).
+- `isHalted && halt_reason is a loss-based reason` → keep the existing `GLOBAL_HALT` early return.
+  Loss halts never auto-resume.
+
+**Clearing a resumed halt for the day (locked).** On a successful breadth auto-resume the gate marks
+the day **not halted** so subsequent ticks do not re-trip the day-lock early return. This reuses the
+existing `upsertDay` path (the inverse of `persistHalt`): write `is_halted=false, halt_reason=null`
+for the UTC day, **preserving** the PnL/exposure/trade counters (mirror `emptyDay`'s
+field-preservation discipline). Idempotent on the UTC-day key, replay-safe.
+
+**`stressEmittedForDate` dedup interaction (M1, locked).** After a successful auto-resume the gate
+must **reset `stressEmittedForDate` to `null`** so a same-day re-halt after resume still fires a
+fresh `RISK_HALT_TRIGGERED` event. Without this reset the dedup would suppress the re-halt alert
+once `is_halted` was cleared by the resume.
+
+**`MARKET_STRESS_AUTO_RESUME_ENABLED` boot flag (locked — code-level rollout gate).** A boolean env
+config gating the entire resume branch. When `false`, `firstFailingHaltCheck` keeps the pre-M23
+day-lock for **all** stress halts (M23 is inert — identical to pre-M23 behaviour); when `true`, the
+breadth auto-resume branch runs. **Default is derived from `EXCHANGE_ENV`, fail-safe to off:** ON in
+**paper**, OFF in **live**. Live can only enable auto-resume by an **explicit** operator override
+after the live-activation gates below pass — a deliberate second action, never an accidental
+inheritance from a paper deploy. The flag is read **once at boot** (constant within a run), so it
+does not touch the determinism invariant: within a run it is constant, and a backtest sets it
+explicitly.
+
+**In-process tick counting, not cron (determinism note).** The clean-tick counter advances
+in-process on each decision tick that reaches the gate — never a wall-clock timer or scheduler.
+Given the same ordered sequence of snapshots, the resume decision is identical in live and backtest.
+"Tick" means a gate evaluation; N consecutive clean **gate evaluations** in the inner band trigger
+resume. **Operator-facing note:** decision cadence is ~5m-aligned to the breadth field, so
+`N = 3` ≈ ~15 minutes of confirmation — but the mechanism counts **ticks, not minutes**, a
+deliberate determinism choice.
+
+**`MARKET_STRESS_RESUMED` event payload (locked).** On a successful auto-resume the gate emits a
+`MARKET_STRESS_RESUMED` event (symmetric to `RISK_HALT_TRIGGERED`) carrying:
+`{ clearCount, breadthAtResume, triggerLeg, dailyReHaltCount, utcDateString, nearReHaltCap }`. It
+does **NOT** fire on a loss-halt clear or on operator resume — only on breadth auto-resume.
+
+**Paper-first live-activation gates (locked).** In addition to the boot flag being explicitly
+enabled, live activation requires **both**:
+
+1. A `BacktestRunnerService` run over the soak window **with auto-resume enabled**, reporting trade
+   count / win rate / profit factor / max drawdown specifically for trades **opened within 30 minutes
+   of an auto-resume**. Negative expectancy in those windows → M23 does not go live (revert or raise N).
+2. **14-day paper-soak** evidence of non-negative expectancy in the auto-resume windows, with a
+   re-halt-cycle count that stays under the cap on most days.
+
+The M21/M22 14-day slippage telemetry is still running; M23's gate composes with it — neither
+unlocks live alone.
+
 ### 7. Live-vs-backtest contract — ports for time and state, pure decision core
 
 The gate's decision logic is a **pure function of injected inputs**; everything
