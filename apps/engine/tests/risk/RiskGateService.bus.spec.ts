@@ -131,7 +131,9 @@ describe('RiskGateService — M9 W6.1 bus emit (market-stress)', () => {
         const payload = stressEmits[0]!.payload as IRiskHaltEvent;
 
         expect(payload.source).toBe(HaltSourceEnum.MARKET_STRESS);
-        expect(payload.reason).toBe(RejectReasonEnum.MARKET_STRESS);
+        // reason is now the classified leg token (e.g. 'oi'), not the bare enum.
+        // engageProgrammatic builds haltFlag.halt('market_stress:<leg>') — no double-prefix.
+        expect(payload.reason).toBe('oi');
         expect(payload.engagedAt).toBe(new Date(NOW_MS).toISOString());
         expect(typeof payload.metrics).toBe('object');
         // every metric value is a string per the contract

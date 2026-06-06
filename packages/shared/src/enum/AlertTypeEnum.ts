@@ -11,4 +11,5 @@ export enum AlertTypeEnum {
     UNHANDLED_EXCEPTION = 'unhandled_exception',
     DAILY_PNL_SUMMARY = 'daily_pnl_summary',
     BOOT_ENGINE_STARTED = 'boot_engine_started',
+    MARKET_STRESS_RESUMED = 'market_stress_resumed',
 }

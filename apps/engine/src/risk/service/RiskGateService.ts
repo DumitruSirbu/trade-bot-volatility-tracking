@@ -628,7 +628,7 @@ export class RiskGateService {
 
         const payload: IRiskHaltEvent = {
             source: HaltSourceEnum.MARKET_STRESS,
-            reason: RejectReasonEnum.MARKET_STRESS,
+            reason: this.stress.classifyHaltLeg(context.snapshot, context.params),
             engagedAt: new Date(context.nowMs).toISOString(),
             metrics: {
                 oiChange5mPct: String(context.snapshot.open_interest_change_5m_pct),

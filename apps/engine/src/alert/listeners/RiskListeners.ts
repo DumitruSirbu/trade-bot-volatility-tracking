@@ -1,4 +1,4 @@
-import { AlertSeverityEnum, AlertTypeEnum, HaltSourceEnum, IAlertPayload, IModelDivergenceEvent, IRiskHaltEvent } from '@bot/shared';
+import { AlertSeverityEnum, AlertTypeEnum, HaltSourceEnum, IAlertPayload, IMarketStressResumedEvent, IModelDivergenceEvent, IRiskHaltEvent } from '@bot/shared';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 
@@ -8,7 +8,8 @@ import { CLOCK, IClock } from '../../common/clock/Clock';
 import { HaltFlagService } from '../../common/service/HaltFlagService';
 import { HaltService } from '../../control/HaltService';
 import { ALERT_SINK, IAlertSink } from '../sink/AlertSinkModule';
-import { MODEL_DIVERGENCE_TRIGGERED_EVENT, RISK_HALT_DEDUP_WINDOW_MS, RISK_HALT_TRIGGERED_EVENT } from '../const/alertEvents';
+import { MARKET_STRESS_RESUMED_EVENT, MODEL_DIVERGENCE_TRIGGERED_EVENT, RISK_HALT_DEDUP_WINDOW_MS, RISK_HALT_TRIGGERED_EVENT } from '../const/alertEvents';
+import { MARKET_STRESS_RESUME_ELIGIBLE_LEG } from '../../risk/const/riskConsts';
 
 // M9 W6 (ADR 0024 §2.2 + M9 R1 adjudication A — Option β).
 //
@@ -84,6 +85,55 @@ export class RiskListeners {
                 sampleCount: String(event.sampleCount),
             },
         });
+    }
+
+    // M23 (ADR 0004 §6d) — symmetric resume path. Clears the in-memory halt flag and
+    // notates HaltService so GET /v1/control/halt reports 'running'. Mirrors the engage
+    // path in engageProgrammatic: no control_audit row (programmatic SoT is risk_state),
+    // no HaltService.resume() (that writes a control_audit row and is operator-only).
+    @OnEvent(MARKET_STRESS_RESUMED_EVENT)
+    async onMarketStressResumed(event: IMarketStressResumedEvent): Promise<void> {
+        if (event.triggerLeg !== MARKET_STRESS_RESUME_ELIGIBLE_LEG) {
+            this.logger.warn(`marketStress.autoResume.unexpectedLeg leg=${event.triggerLeg} — skipping flag clear`);
+
+            return;
+        }
+
+        const now = this.clock.now();
+
+        // Only clear flag + note when a real HALTED → RUNNING transition occurs. A restart
+        // may deliver this event with the flag already unset (DB cleared, flag never restored);
+        // writing notePragmaticAutoClear in that case would clobber lastSource/lastTransition
+        // on HaltService while the system was already RUNNING — corrupting GET /v1/control/halt.
+        if (this.haltFlag.isHalted()) {
+            try {
+                this.haltFlag.resume();
+            } catch (cause) {
+                this.logger.error(`marketStress.autoResume.flag.failed cause=${describe(cause)}`);
+            }
+
+            try {
+                this.haltService.notePragmaticAutoClear(HaltSourceEnum.MARKET_STRESS, `auto_resume:${event.triggerLeg}`, now.getTime());
+            } catch (cause) {
+                this.logger.error(`marketStress.autoResume.note.failed cause=${describe(cause)}`);
+            }
+        }
+
+        const payload: IAlertPayload = {
+            type: AlertTypeEnum.MARKET_STRESS_RESUMED,
+            severity: AlertSeverityEnum.INFO,
+            occurredAt: now.toISOString(),
+            title: 'Market stress auto-resumed',
+            body: `leg=${event.triggerLeg} breadth=${event.breadthAtResume} clearCount=${event.clearCount} reHalts=${event.dailyReHaltCount}`,
+            data: {
+                triggerLeg: event.triggerLeg,
+                breadthAtResume: String(event.breadthAtResume),
+                dailyReHaltCount: String(event.dailyReHaltCount),
+                nearReHaltCap: String(event.nearReHaltCap),
+            },
+        };
+
+        await this.publishSafe(payload);
     }
 
     @OnEvent(POSITION_OPENED_EVENT)
