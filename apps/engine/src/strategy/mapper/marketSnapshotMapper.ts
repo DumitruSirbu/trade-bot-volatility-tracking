@@ -1,22 +1,27 @@
 import { CoinTierEnum, CorrelationModeEnum, FlowTypeEnum, IMarketSnapshot, IStrategyParams, IVolatilityDetectedEvent, PositionSlotEnum } from '@bot/shared';
 
-import { ACTIVE_POSITIONS_COUNT_DRY_RUN } from '../const';
-
 // Pure mapper: builds the persisted market_snapshot from the trigger event + the
-// orchestrator-stamped flow_type/signal_score. position_slot defaults to A and
-// active_positions_count to the dry-run zero here; the risk gate overwrites position_slot
-// with the real assigned slot before persistence (ADR 0004 §4). Extracted from
-// StrategyService so the orchestrator stays small (conventions: function size).
+// orchestrator-stamped flow_type/signal_score. position_slot defaults to A here; the risk
+// gate overwrites it with the real assigned slot before persistence (ADR 0004 §4).
+// active_positions_count is built from `activePositionsCount` — pre-gate callers omit it
+// (defaults to 0: no gate state loaded yet for a strategy skip, and the shadow/backtest paths
+// run their own ledger so the live open-count is not meaningful there); the live gate path
+// re-stamps the real post-evaluate open-position count in StrategyService (M27, A4). Extracted
+// from StrategyService so the orchestrator stays small (conventions: function size).
+
+const ACTIVE_POSITIONS_COUNT_DEFAULT = 0;
 
 export interface IMarketSnapshotInput {
     readonly event: IVolatilityDetectedEvent;
     readonly params: IStrategyParams;
     readonly flowType: FlowTypeEnum;
     readonly signalScore: number;
+    readonly activePositionsCount?: number;
 }
 
 export function buildMarketSnapshot(input: IMarketSnapshotInput): IMarketSnapshot {
     const { event, flowType, signalScore } = input;
+    const activePositionsCount = input.activePositionsCount ?? ACTIVE_POSITIONS_COUNT_DEFAULT;
 
     return {
         vwap_session: event.vwapSession,
@@ -44,7 +49,7 @@ export function buildMarketSnapshot(input: IMarketSnapshotInput): IMarketSnapsho
         correlation_mode: resolveCorrelationMode(input),
         signal_score: signalScore,
         position_slot: PositionSlotEnum.A,
-        active_positions_count: ACTIVE_POSITIONS_COUNT_DRY_RUN,
+        active_positions_count: activePositionsCount,
         regime_label: event.regimeLabel,
         entry_candle_open_time: event.entryCandleOpenTime,
         open_interest: event.openInterest,

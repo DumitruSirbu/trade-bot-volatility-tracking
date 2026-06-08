@@ -177,6 +177,7 @@ function buildApprovedDecision(overrides: Partial<IApprovedRiskDecision> = {}): 
             timeStopAtMs: 1_700_003_600_000,
         },
         reservationId: 'test-reservation-id',
+        haltReasonDetail: null,
         ...overrides,
     };
 }
@@ -189,6 +190,7 @@ function buildRejectedDecision(): IRiskDecision {
         approvedSizing: null,
         clampedExit: null,
         reservationId: null,
+        haltReasonDetail: null,
     };
 }
 

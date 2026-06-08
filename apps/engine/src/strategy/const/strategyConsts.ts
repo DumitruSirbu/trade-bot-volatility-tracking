@@ -44,10 +44,6 @@ export const OI_RISING_THRESHOLD_PCT = 0.0;
 // --- v2 momentum exit (M3 brief: TP = entry ± atr14 × 2.0, wider than reversion) ---
 export const MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER = 2.0;
 
-// M3 is dry-run only — the orchestrator opens nothing, so the persisted snapshot's
-// active_positions_count is always zero. M4 supplies the real live count.
-export const ACTIVE_POSITIONS_COUNT_DRY_RUN = 0;
-
 // Machine-readable entry-thesis reason codes stamped on an OPEN signal's reason field
 // (skips use the SkipReasonEnum value instead). Queryable in M8 alongside skip reasons.
 export const REASON_MEAN_REVERSION_FADE = 'mean_reversion_exhaustion_fade';
