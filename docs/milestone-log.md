@@ -69,6 +69,46 @@ For the current milestone plan, see `docs/plans/`. For deferred items, see `docs
 
 ---
 
+## M25 — Paper exploration enablement
+
+**Problem:** After M24, gate-approved opens fill, but the 14-day paper soak still produces almost nothing to label. Three binding constraints, all correct for live capital but mis-tuned for paper exploration:
+- **Strategy (P1):** v1 mean-reversion emits `skip` 761× and reaches the gate with only 350 open intents in 14 days. Shadow v2 momentum emits 583 open intents on the same tape.
+- **Gate (P2):** ~78% of those 350 are rejected by day-level stress halts (`global_halt` 66% + `market_stress` 12%). M23 auto-resume only clears breadth — BTC/ETH shock, OI, funding, spread, and multi-leg halts lock the full UTC day.
+- **Concurrency (P3):** Gate ignores `MAX_OPEN_POSITIONS` for slots. Concurrency is hard-coded 3-slot model (`MAX_IDIOSYNCRATIC_SLOTS=2` + slot-C borrow). Adding capital alone changes nothing — binding constraints are slot count and per-coin / same-direction exposure caps.
+
+**Solution (code-only — no migration, no DB write at rest):**
+
+1. **P1 — Activate v2 momentum (config-only).** Set `ACTIVE_STRATEGY_VERSION_ID=3` in paper `.env`. v2 is the open-volume driver (583 shadow open intents vs v1's 0 gate approvals on the same tape). No code change.
+
+2. **P2 — Paper-only stress relaxation (code + config).** New `PAPER_RELAX_MARKET_STRESS=true` (with `EXCHANGE_ENV=paper`) relaxes specific global stress legs via a **single shared helper** consumed by both `isStressed` and `classifyHaltLeg` to prevent verdict/suffix drift. Per-leg behaviour:
+   - `hasInvalidStressInputs` (NaN guard): **never relaxed** (fail-closed always).
+   - Breadth: **never relaxed** — M23 engage/resume untouched.
+   - `same_bar_trigger_count`: **not by this flag** — governed only by raised strategy param `stress_same_bar_trigger_count`.
+   - BTC 5m shock / ETH 5m shock / OI / funding / spread: **skipped** under the paper profile.
+   - `multi`: derived only from still-active legs.
+   Per-coin spread/liquidity gates **separate** — not covered by P2.
+
+3. **P3 — Sizing/exposure headroom within the 3-slot contract.** The 3-slot ceiling (A/B/C) **stays in all envs** — M25 does not raise slot count. `MAX_IDIOSYNCRATIC_SLOTS` stays 2 (3 concurrent via C-borrow). Raise `MAX_EXPOSURE_PER_COIN_USDT`, `MAX_SAME_DIRECTION_EXPOSURE_USDT`, and `ACCOUNT_CAPITAL_USDT` in paper `.env` so neither cap becomes the new ceiling. Set `MAX_OPEN_POSITIONS=3` for rate-limit math (does not govern slots). Keep `PAPER_STARTING_EQUITY_USDT` at $500 default — drawdown % will read ~3× harsher than capital-relative; read absolute-USD drawdown, or restart clean with equity raised to $1,500.
+
+**ADR 0042 written:** locks per-leg relax table, 3-slot ceiling in all envs (true expansion deferred to a follow-on), sizing profile with same-direction cap, paper-gating semantics. Every relaxation `EXCHANGE_ENV=paper`-gated and default-off in code; live/testnet/backtest byte-identical to pre-M25.
+
+**Tests:** 45 new in P2 relax (on/off, non-paper regression), P3 slot (ceiling unchanged), config validation (strict boolean parse, boot guard on `PAPER_MAX_IDIOSYNCRATIC_SLOTS > 2`). Total 3,073 green.
+
+**Review cycle:** 2 rounds — zero blockers, zero highs at close.
+
+**Post-deploy steps:**
+0. Confirm M24 fill path green (unit proof: gate-approved crossing IOC fills with non-zero price, event-time tsMs).
+1. pg_dump before restart (prune to 2-deep retention).
+2. Apply paper `.env` changes + engine restart (no migration).
+3. Evidence-gated `clearHaltForDate` for current UTC day (only if halted + predates M25 / caused by relaxed leg + breadth not stressed + operator confirms).
+4. 10-min live smoke (confirm active version is v2, engine stays running, cleared halt does not immediately re-assert).
+5. 24–48h: confirm `positions`/`transactions` rows appear with wins and losses, up to 3 concurrent.
+6. 48h funnel-mix check: `global_halt`/`market_stress` share falls vs prior 14d; split residual into no-approvals / missed-fills / filled-opens.
+
+**Zero blockers, zero highs at close.**
+
+---
+
 ## M24 — Live/paper open-fill wiring
 
 **Problem:** `StreamingFillAdapter.simulateOrderFill` passed empty `[]` ticks to the shared `isMissedFill` detector. The detector's logic treats empty ticks as a guaranteed miss for any limit policy, so every paper open returned `filled=false` + `fillPrice=0` + no position. M7 backtest worked because `HistoricalFillAdapter` loaded real `tick_aggregates` from storage. Analysis proved this was the **only** blocker for zero paper trades.
