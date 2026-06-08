@@ -4,18 +4,24 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { BaseRepository } from '../../common/repository/BaseRepository';
+import { NodeEnvEnum } from '../../config/enum';
+import { AppConfigService } from '../../config/service';
 import { DecisionEntity } from '../entity';
 
 // Persists strategy decisions with their full market_snapshot. The write path is a
-// Zod-validated guard (ADR 0002 §4): the snapshot is .safeParse'd at write time and a
-// missing/invalid field logs a WARN — it NEVER throws, so a schema drift degrades the
-// dataset visibly without dropping the decision. M3 wires the real writer; M2 ships the
-// schema + repository + this hook only.
+// Zod-validated guard (ADR 0002 §4): the snapshot is .safeParse'd at write time. In
+// test (NODE_ENV=test) a failed parse THROWS so schema drift surfaces immediately in CI;
+// in every other env (development/paper/testnet/live/staging) it logs a WARN and never
+// throws, so a malformed snapshot degrades the dataset visibly without dropping a
+// gate-approved decision.
 @Injectable()
 export class DecisionRepository extends BaseRepository<DecisionEntity> {
     private readonly logger = new Logger(DecisionRepository.name);
 
-    constructor(@InjectRepository(DecisionEntity) repository: Repository<DecisionEntity>) {
+    constructor(
+        @InjectRepository(DecisionEntity) repository: Repository<DecisionEntity>,
+        private readonly appConfig: AppConfigService,
+    ) {
         super(repository);
     }
 
@@ -59,8 +65,9 @@ export class DecisionRepository extends BaseRepository<DecisionEntity> {
         return qb.orderBy('d.ts', 'DESC').addOrderBy('d.decisions_id', 'DESC').take(pageSize).getMany();
     }
 
-    // Write-time guard. safeParse never throws; a failed parse logs a warn naming the
-    // offending paths so dataset degradation is observable but the decision still writes.
+    // Write-time guard. In test, a failed parse throws so schema drift fails CI; in every
+    // other env it logs a warn naming the offending paths so dataset degradation is
+    // observable but the gate-approved decision still writes.
     private validateMarketSnapshot(decision: Partial<DecisionEntity>): void {
         if (decision.marketSnapshot === undefined || decision.marketSnapshot === null) {
             this.logger.warn(`Decision for ${decision.symbol ?? 'unknown'} written without a market_snapshot`);
@@ -70,10 +77,16 @@ export class DecisionRepository extends BaseRepository<DecisionEntity> {
 
         const parsed = marketSnapshotSchema.safeParse(decision.marketSnapshot);
 
-        if (!parsed.success) {
-            const paths = parsed.error.issues.map((issue) => issue.path.join('.')).join(', ');
-
-            this.logger.warn(`market_snapshot for ${decision.symbol ?? 'unknown'} failed validation (degraded): ${paths}`);
+        if (parsed.success) {
+            return;
         }
+
+        if (this.appConfig.nodeEnv === NodeEnvEnum.TEST) {
+            throw parsed.error;
+        }
+
+        const paths = parsed.error.issues.map((issue) => issue.path.join('.')).join(', ');
+
+        this.logger.warn(`market_snapshot for ${decision.symbol ?? 'unknown'} failed validation (degraded): ${paths}`);
     }
 }
