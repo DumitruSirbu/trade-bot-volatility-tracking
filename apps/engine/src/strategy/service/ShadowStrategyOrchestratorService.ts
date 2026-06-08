@@ -6,6 +6,7 @@ import {
     IVirtualGateOutcome,
     IVirtualLedgerSnapshot,
     IVolatilityDetectedEvent,
+    MissedReasonEnum,
     PositionSideEnum,
     SignalActionEnum,
     type ISimulatedFill,
@@ -650,16 +651,16 @@ function isStopSideValid(tradeSide: PositionSideEnum, entryPriceStr: string, sto
 //   - filled (not missed)      → null
 //   - missed with no ticks     → 'missing_tick_data' (no signal-bar tape existed)
 //   - missed with ticks        → 'price_not_touched' (entry price never crossed)
-function deriveMissedReason(ticks: TickAggregateEntity[], missed: boolean): 'missing_tick_data' | 'price_not_touched' | null {
+function deriveMissedReason(ticks: TickAggregateEntity[], missed: boolean): MissedReasonEnum | null {
     if (!missed) {
         return null;
     }
 
     if (ticks.length === 0) {
-        return 'missing_tick_data';
+        return MissedReasonEnum.MISSING_TICK_DATA;
     }
 
-    return 'price_not_touched';
+    return MissedReasonEnum.PRICE_NOT_TOUCHED;
 }
 
 interface IBarExtremes {

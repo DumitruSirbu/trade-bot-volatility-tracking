@@ -9,7 +9,7 @@ export interface ISimulatedFillCore {
     readonly qty: string; // decimal, filled quantity (zero if missed)
     readonly feeUsdt: string; // decimal, fee (zero if missed)
     readonly slippagePct: string; // decimal, the slippage applied (signed, e.g. "0.15" for 15 bps)
-    readonly missedReason: string | null; // e.g. 'timeout', null if filled
+    readonly missedReason: string | null; // internal fill-sim reason (e.g. 'timeout'); shadow uses MissedReasonEnum
     readonly lowFidelity: boolean; // true if filled without tick-level confirmation
     readonly tsMs: number; // timestamp of the fill
 }

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ISimulatedFill } from '../interface/ISimulatedFill.js';
+import { MissedReasonEnum } from '../enum/index.js';
 
 // M11a W0.5: Zod schema for ISimulatedFill (JSONB shape in shadow_decisions.simulated_fill).
 // Validates the output of the M7 BacktestRunnerService fill simulator before storage.
@@ -21,5 +22,5 @@ export const simulatedFillSchema = z.object({
     closeReason: z.enum(['sl', 'tp', 'force_close', 'intra_bar_stop']).nullable(),
     feeUsdtEntry: z.string().trim().min(1).nullable().optional(),
     feeUsdtExit: z.string().trim().min(1).nullable().optional(),
-    missedReason: z.enum(['missing_tick_data', 'price_not_touched']).nullable().optional(),
+    missedReason: z.nativeEnum(MissedReasonEnum).nullable().optional(),
 }) satisfies z.ZodType<ISimulatedFill>;

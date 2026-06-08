@@ -31,10 +31,6 @@ export class DecisionRepository extends BaseRepository<DecisionEntity> {
         return this.repository.save(this.create(decision));
     }
 
-    async findByEventId(eventId: string): Promise<DecisionEntity[]> {
-        return this.repository.find({ where: { eventId }, order: { strategyVersionId: 'ASC' } });
-    }
-
     // M9 W4 — cursor-paginated read of recent decisions for `GET /v1/decisions`.
     // Cursor is the (ts, id) tuple of the previous page's tail row, monotonic descending.
     // Optional symbol / flow_type (signal_type) filters are AND'ed in so the dashboard

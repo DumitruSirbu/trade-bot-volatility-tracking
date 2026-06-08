@@ -32,8 +32,8 @@ export class BookSnapshotEntity {
     @Column({ name: 'event_id', type: 'varchar', nullable: true })
     eventId?: string | null;
 
-    // Top-of-book mid captured around the trigger. Decimal-as-text (string), written
-    // only when bid/ask are available; NULL otherwise.
-    @Column({ name: 'mid_at_trigger', type: 'numeric', precision: 38, scale: 18, nullable: true })
-    midAtTrigger?: string | null;
+    // Top-of-book mid captured around the trigger. Decimal-as-text via the shared money
+    // transformer, written only when bid/ask are available; NULL otherwise.
+    @Column({ name: 'mid_at_trigger', type: 'numeric', precision: 38, scale: 18, nullable: true, transformer: decimalColumnTransformer })
+    midAtTrigger?: MoneyValue | null;
 }

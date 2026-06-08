@@ -312,14 +312,15 @@ export class StrategyService implements OnModuleInit {
         intent: IOrderIntent,
         nowMs: number,
     ): Promise<void> {
-        const context = await this.buildGateContext(event.symbol, snapshot, nowMs);
+        const { context, openPositionsCount } = await this.buildGateContext(event.symbol, snapshot, nowMs);
         const decision = await this.riskGate.evaluate(intent, context);
 
-        // A4 (M27): the real active-position count is sourced POST-evaluate from the same
-        // IOpenPositionsPort the gate read in buildGateContext — it is read-only after the
-        // verdict (never fed back into the gate) and only stamped onto the persisted snapshot.
-        const activePositionsCount = (await this.openPositionsPort.findOpen()).length;
-        const stampedSnapshot = this.stampGateVerdict(snapshot, decision, activePositionsCount);
+        // A4 (M27): the active-position count stamped onto the snapshot is the pre-evaluate
+        // count loaded while building the gate context. On APPROVED the new position is created
+        // later (after emitApproval), so the pre-evaluate count IS the post-evaluate count; on
+        // REJECT/SKIP nothing changes. This reuses the count the gate already loaded rather
+        // than issuing a second findOpen() read. Read-only — never fed back into the gate.
+        const stampedSnapshot = this.stampGateVerdict(snapshot, decision, openPositionsCount);
 
         await this.recordGateDecision(event, stampedSnapshot, signal, intent, decision);
 
@@ -328,11 +329,19 @@ export class StrategyService implements OnModuleInit {
         }
     }
 
-    private async buildGateContext(symbol: string, snapshot: IMarketSnapshot, nowMs: number): Promise<IRiskGateContext> {
+    // Returns the gate context plus the count of currently-open positions loaded while building
+    // it (A4, M27). The count is captured here — the one place open positions are read for this
+    // decision — so the caller can stamp it onto the snapshot without a second findOpen() read.
+    private async buildGateContext(
+        symbol: string,
+        snapshot: IMarketSnapshot,
+        nowMs: number,
+    ): Promise<{ context: IRiskGateContext; openPositionsCount: number }> {
         const utcDateString = new Date(nowMs).toISOString().slice(0, 10);
         const belowUniverseFloor = (await this.universe.findOpenMembership(symbol)) === null;
+        const openPositionsCount = (await this.openPositionsPort.findOpen()).length;
 
-        return {
+        const context: IRiskGateContext = {
             nowMs,
             utcDateString,
             snapshot,
@@ -347,6 +356,8 @@ export class StrategyService implements OnModuleInit {
             // realized-vs-modeled slippage / win-loss divergence verdict (docs/plans/M9-observability-control.md).
             modelDivergenceDetected: false,
         };
+
+        return { context, openPositionsCount };
     }
 
     // The operator control surface (HIGH): the gate reads limits from AppConfigService, not

@@ -151,6 +151,10 @@ export class MarketDataPersistenceListener {
     // (including the idempotent duplicate-key race) is swallowed so a persistence
     // hiccup can never destabilise the trade loop. Only writes when `event_id` is
     // present; idempotency is enforced by the partial UNIQUE index on event_id.
+    // INVARIANT: this handler must NEVER rethrow regardless of emit mode. It is fired
+    // fire-and-forget via `eventEmitter.emit` (not `emitAsync`), so a rejection here would
+    // surface as an unhandledRejection; the book-snapshot write is observability-only and
+    // must never destabilise the trade loop — recordBookSnapshot swallows every error.
     @OnEvent(VOLATILITY_DETECTED_EVENT)
     async onVolatilityDetected(event: IVolatilityDetectedEvent): Promise<void> {
         await this.recordBookSnapshot(event);
