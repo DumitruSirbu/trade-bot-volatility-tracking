@@ -257,4 +257,35 @@ export class EnvironmentVariables {
     @Transform(({ value }) => String(value).toLowerCase().trim() === 'true')
     @IsBoolean()
     MARKET_STRESS_AUTO_RESUME_ENABLED?: boolean;
+
+    // M25 (ADR 0042 §2/§6) — paper-only switch that skips the non-breadth global
+    // stress legs (BTC/ETH 5m shock, OI, funding, spread) so the paper
+    // exploration soak stops locking whole UTC days. NEVER relaxes the
+    // invalid-inputs guard, the breadth leg (M23 engage/resume), or the same-bar
+    // leg (governed by its strategy param). OPTIONAL with a field default of
+    // false; the @Transform fires only when the key is present, so only the exact
+    // string 'true' (case-insensitive, trimmed) enables it — the string 'false',
+    // a typo, or an empty value collapses to off (fail-safe). The effective value
+    // additionally requires EXCHANGE_ENV=paper, enforced in AppConfigService.
+    @IsOptional()
+    @Transform(({ value }) => String(value).toLowerCase().trim() === 'true')
+    @IsBoolean()
+    PAPER_RELAX_MARKET_STRESS: boolean = false;
+
+    // M25 (ADR 0042 §3) — paper-only idiosyncratic-slot override. The slot model
+    // is physically capped at A/B/C = 3 in every env; MAX_IDIOSYNCRATIC_SLOTS=2
+    // plus the slot-C borrow yields 3 concurrent. Raising the idiosyncratic count
+    // above 2 REGRESSES capacity to 2 (the C-borrow never fires with only A/B as
+    // idiosyncratic-named slots), so any value > 2 is REJECTED at boot rather than
+    // silently applied. OPTIONAL with no default — absent means no override.
+    @IsOptional()
+    @Transform(({ value }) => Number.parseInt(String(value), 10))
+    @IsInt()
+    @Min(1)
+    @Max(2, {
+        message:
+            'PAPER_MAX_IDIOSYNCRATIC_SLOTS must be <= 2 — the slot model is physically capped at A/B/C (3 concurrent via the slot-C borrow);' +
+            ' raising the idiosyncratic count above 2 regresses capacity to 2 (ADR 0042 §3). True N-slot expansion is a separate shared-contract follow-on.',
+    })
+    PAPER_MAX_IDIOSYNCRATIC_SLOTS?: number;
 }

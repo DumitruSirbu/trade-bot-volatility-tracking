@@ -497,7 +497,7 @@ export class RiskGateService {
             }
         }
 
-        if (this.stress.isStressed(context.snapshot, context.params)) {
+        if (this.stress.isStressed(context.snapshot, context.params, this.appConfig.paperRelaxMarketStress)) {
             // M9 W6.1 — emit BEFORE persistHalt so the engage transition is
             // gated by the same "not yet halted today" predicate persistHalt
             // uses internally. Re-evaluations later in the day find
@@ -628,7 +628,7 @@ export class RiskGateService {
 
         const payload: IRiskHaltEvent = {
             source: HaltSourceEnum.MARKET_STRESS,
-            reason: this.stress.classifyHaltLeg(context.snapshot, context.params),
+            reason: this.stress.classifyHaltLeg(context.snapshot, context.params, this.appConfig.paperRelaxMarketStress),
             engagedAt: new Date(context.nowMs).toISOString(),
             metrics: {
                 oiChange5mPct: String(context.snapshot.open_interest_change_5m_pct),
@@ -841,7 +841,7 @@ export class RiskGateService {
             return reason;
         }
 
-        const leg = this.stress.classifyHaltLeg(context.snapshot, context.params);
+        const leg = this.stress.classifyHaltLeg(context.snapshot, context.params, this.appConfig.paperRelaxMarketStress);
 
         return `${RejectReasonEnum.MARKET_STRESS}:${leg}`;
     }

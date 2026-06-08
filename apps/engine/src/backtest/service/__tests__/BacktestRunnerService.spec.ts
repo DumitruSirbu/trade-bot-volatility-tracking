@@ -1909,13 +1909,13 @@ describe('BacktestRunnerService — M19 breadth sentinel (marketBreadth5mUpPct=N
             book_depth_10bps_usdt: '50000000',
         } as any;
 
-        expect(evaluator.isStressed(neutralSnapshot, calmParams)).toBe(false);
+        expect(evaluator.isStressed(neutralSnapshot, calmParams, false)).toBe(false);
 
         // The old sentinel (0) would trip the halt: |0-50|=50 >= STRESS_BREADTH_DISTANCE_PCT=40.
         // This assertion documents that 0 IS stressful, proving the fix was necessary.
         const zeroSnapshot = { ...neutralSnapshot, market_breadth_5m_up_pct: 0 };
 
         expect(Math.abs(0 - 50)).toBeGreaterThanOrEqual(STRESS_BREADTH_DISTANCE_PCT);
-        expect(evaluator.isStressed(zeroSnapshot, calmParams)).toBe(true);
+        expect(evaluator.isStressed(zeroSnapshot, calmParams, false)).toBe(true);
     });
 });

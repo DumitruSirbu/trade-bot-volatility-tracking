@@ -69,6 +69,7 @@ export class AppConfigService {
     private readonly resolvedRevokedJtiPruneAfterSec: number;
     private readonly resolvedRevokedJtiMaxRows: number;
     private readonly resolvedMarketStressAutoResumeEnabled: boolean;
+    private readonly resolvedPaperRelaxMarketStress: boolean;
 
     constructor(private readonly configService: ConfigService<EnvironmentVariables, true>) {
         this.resolvedAuthHmacSecret = this.resolveAuthHmacSecret();
@@ -87,6 +88,7 @@ export class AppConfigService {
         this.resolvedRevokedJtiPruneAfterSec = this.resolveRevokedJtiPruneAfterSec(this.resolvedAuthTokenTtlSec);
         this.resolvedRevokedJtiMaxRows = this.parsePositiveIntEnv(REVOKED_JTI_MAX_ROWS_ENV, REVOKED_JTI_MAX_ROWS_DEFAULT);
         this.resolvedMarketStressAutoResumeEnabled = this.resolveMarketStressAutoResumeEnabled();
+        this.resolvedPaperRelaxMarketStress = this.resolvePaperRelaxMarketStress();
     }
 
     get nodeEnv(): NodeEnvEnum {
@@ -135,6 +137,26 @@ export class AppConfigService {
     // so the gate's determinism invariant is preserved.
     get marketStressAutoResumeEnabled(): boolean {
         return this.resolvedMarketStressAutoResumeEnabled;
+    }
+
+    // M25 (ADR 0042 §2/§6) — effective paper-only stress-relax switch consumed by
+    // StressHaltEvaluator (through RiskGateService). True ONLY when both
+    // EXCHANGE_ENV=paper AND PAPER_RELAX_MARKET_STRESS=true (the two-condition
+    // gate of ADR 0042 §1) — a live/testnet boot can never see it on, so a
+    // non-paper boot is byte-identical to pre-M25. Resolved once at boot, constant
+    // within a run, so the gate's determinism invariant holds. Never relaxes the
+    // invalid-inputs guard or the breadth leg (§2).
+    get paperRelaxMarketStress(): boolean {
+        return this.resolvedPaperRelaxMarketStress;
+    }
+
+    // M25 (ADR 0042 §3) — optional paper override for the idiosyncratic-slot
+    // count. Returns the validated value (already capped at <= 2 by the boot
+    // guard in EnvironmentVariables, which rejects > 2) or undefined when no
+    // override is set. The slot ceiling stays at A/B/C = 3 in every env; this
+    // never raises capacity above the 3-slot contract.
+    get paperMaxIdiosyncraticSlots(): number | undefined {
+        return this.configService.get('PAPER_MAX_IDIOSYNCRATIC_SLOTS', { infer: true });
     }
 
     // M11a W1.1 — two-token live-mode boot inputs. Both optional at schema
@@ -547,6 +569,27 @@ export class AppConfigService {
         }
 
         return this.exchangeEnv === ExchangeEnvironmentEnum.PAPER;
+    }
+
+    // M25 (ADR 0042 §1/§2). Two-condition gate: the relax is effective only when
+    // EXCHANGE_ENV=paper AND the flag is true. Unlike the M23 auto-resume flag,
+    // this does NOT derive on-by-default in paper — skipping multiple stress legs
+    // is a sharper loosening that requires an explicit paper opt-in (ADR 0042 §1).
+    // The schema field is already coerced to a strict boolean (exact 'true'),
+    // defaulting to false when absent.
+    private resolvePaperRelaxMarketStress(): boolean {
+        const flagEnabled = this.configService.get('PAPER_RELAX_MARKET_STRESS', { infer: true });
+        const isPaperEnv = this.exchangeEnv === ExchangeEnvironmentEnum.PAPER;
+
+        if (flagEnabled && !isPaperEnv) {
+            this.logger.warn(
+                `PAPER_RELAX_MARKET_STRESS=true but EXCHANGE_ENV=${this.exchangeEnv} (not paper) — the flag has been NEUTRALIZED ` +
+                    '(non-breadth stress legs stay active, identical to pre-M25). If this is intentional (e.g. a copied .env under ' +
+                    'inspection), no action needed; if not, check EXCHANGE_ENV.',
+            );
+        }
+
+        return flagEnabled && isPaperEnv;
     }
 
     private parsePositiveIntEnv(envName: string, defaultValue: number): number {
