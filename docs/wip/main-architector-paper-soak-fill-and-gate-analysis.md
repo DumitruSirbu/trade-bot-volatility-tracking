@@ -2,8 +2,27 @@
 
 **Date:** 2026-06-06
 **Author:** Main session (architect)
-**Status:** WIP — analysis + prioritized change set. No code changed in this doc.
+**Status:** WIP — analysis + prioritized change set. **P0–P4 landed (M24–M26); P5 planned (M27).** See [Milestone coverage](#milestone-coverage) below. Moves to [`docs/wip/done/`](done/) when no OPEN/PLANNED rows remain.
 **Companion:** [docs/wip/paper-soak-zero-trades-and-shadow-fill-gap.md](paper-soak-zero-trades-and-shadow-fill-gap.md)
+
+---
+
+## Milestone coverage
+
+Tracked against [`docs/milestone-log.md`](../milestone-log.md) and plans under `docs/plans/`.
+
+| WIP item | Milestone | Log status | Notes |
+|----------|-----------|------------|-------|
+| **P0** — paper open fill (`StreamingFillAdapter` tick synthesis) | [M24](../plans/M24-paper-open-fill-wiring.md) | **DONE** | Code-only; post-deploy fill-path confirmation still operator-gated |
+| **P1** — activate v2 momentum (`ACTIVE_STRATEGY_VERSION_ID=3`) | [M25](../plans/M25-paper-exploration-enablement.md) | **DONE** | Config-only in M25 |
+| **P2** — paper-only stress relaxation (`PAPER_RELAX_MARKET_STRESS`) | M25 | **DONE** | ADR 0042; breadth + invalid-inputs never relaxed |
+| **P3** — more concurrent positions / slot headroom | M25 | **PARTIAL** | Exposure + capital headroom only; **3-slot ceiling unchanged** (true 5-slot expansion deferred). See [slot-model doc](slot-model-and-correlated-leg-gaps.md) |
+| **P4** — shadow counterfactual fills (bar evidence + `tick_aggregates`) | [M26](../plans/M26-shadow-counterfactual-fill-wiring.md) | **DONE** | M26 shipped: shadow now loads real `tick_aggregates` per event, aligns entry to next-bar open (M7 pattern), produces virtual PnL for counterfactual (ADR 0029); forward-only ledger + close-side proxy + analysis-layer missing-data detection documented. See `docs/milestone-log.md` M26 outcome. |
+| **P5** — decision data-capture completeness | [M27](../plans/M27-decision-data-capture-completeness.md) | **PLANNED** | Requires migrations; not started in milestone-log |
+| Gate / halt context (M19 depth skip, M21 shocks, M23 breadth resume) | M19, M21, M23 | **DONE** | Precedes this WIP; does not fix fill layer |
+| WS connection pressure / escalation cap | — | **OPEN** | Separate WIP: [engine-ws-connection-pressure-and-binance-limits.md](engine-ws-connection-pressure-and-binance-limits.md) |
+
+**Data-fix arc sequencing (from plans):** M24 → M25 → (M26 ∥ M27).
 
 ---
 
@@ -284,7 +303,7 @@ Bottom line: capture is strong for *funnel diagnosis* and *threshold tuning*, bu
 > All items are scoped to `EXCHANGE_ENV=paper`. Live defaults stay untouched to preserve the
 > live/backtest determinism contract (ADR 0029, ADR 0032, trading-safety invariants in `CLAUDE.md`).
 
-### P0 — Fix the paper open fill (the unlock for ANY transaction)
+### P0 — Fix the paper open fill (the unlock for ANY transaction) — **DONE (M24)**
 
 Make a gate-approved open actually fill. In `StreamingFillAdapter.simulateOrderFill`, instead of
 passing `[]`, **synthesize a single tick from the live WS snapshot** at the marketable price, stamped
@@ -300,12 +319,12 @@ quote *is* the touchable price. Keep the historical/backtest path's empty-tick c
 - Result: gate-approved opens produce real `positions` + `transactions`; SL/TP already fill via the
   per-position registry (`applyIntraBarStop`).
 
-### P1 — Switch active strategy to v2 momentum
+### P1 — Switch active strategy to v2 momentum — **DONE (M25, config)**
 
 `ACTIVE_STRATEGY_VERSION_ID=3` (DB id 3 = version 2 momentum). Drives open volume (shadow: 583 vs 0).
 Without P0 this still yields zero positions; with P0 it produces the most trades to analyze.
 
-### P2 — Paper-only stress relaxation (stop the day from locking)
+### P2 — Paper-only stress relaxation (stop the day from locking) — **DONE (M25)**
 
 - Quick lever (no code): raise the strategy param `stress_same_bar_trigger_count` on the active
   version, and ensure `MARKET_STRESS_AUTO_RESUME_ENABLED=true` (paper default).
@@ -314,21 +333,21 @@ Without P0 this still yields zero positions; with P0 it produces the most trades
   non-breadth stress legs. Live path unaffected.
 - Operationally: confirm `risk_state.is_halted=false` for the current UTC day (dashboard Resume).
 
-### P3 — More concurrent positions (the 5-positions ask)
+### P3 — More concurrent positions (the 5-positions ask) — **PARTIAL (M25)**
 
 Paper-gated bump to the slot model: allow N idiosyncratic slots when `EXCHANGE_ENV=paper`
 (`MAX_IDIOSYNCRATIC_SLOTS` becomes an env-overridable value in paper only), plus raise
 `MAX_EXPOSURE_PER_COIN_USDT` and `ACCOUNT_CAPITAL_USDT` so sizing isn't the new ceiling. This is a
 code change to `SlotManager` + config, not an env-only change. Live stays at the 3-slot model.
 
-### P4 — Fix shadow counterfactual fills (separate track)
+### P4 — Fix shadow counterfactual fills (separate track) — **PLANNED (M26)**
 
 For counterfactual v2/v3 PnL, pass real evidence into `simulateShadowFill`: trigger-bar high/low on
 the event plus `tick_aggregates` for the signal bar (same source M7 backtest uses), instead of
 `barHigh=barLow=entryPrice` + `ticks:[]`. Unblocks Layer 2/3 (virtual ledger opens, shadow PnL,
 M11b comparison) under existing `lowFidelity` rules. Independent of P0 (live paper).
 
-### P5 — Data-capture upgrades (so later analysis is possible)
+### P5 — Data-capture upgrades (so later analysis is possible) — **PLANNED (M27)**
 
 - Add `gate_allowed`, trade side, SL/TP, qty/notional to live `decisions` (parity with shadow).
 - Persist the halt **leg** on the decision row (or ship a documented `decisions.ts::date →

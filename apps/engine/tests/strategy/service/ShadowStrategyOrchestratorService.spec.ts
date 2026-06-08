@@ -67,8 +67,25 @@ interface IMocks {
     registry: { resolve: jest.Mock };
     strategyVersions: { findActiveShadows: jest.Mock };
     shadowDecisions: { insertShadowDecision: jest.Mock; findRowsForLedgerRebuild: jest.Mock };
+    tickAggregates: { loadTicksForBar: jest.Mock };
     moduleRef: { resolve: jest.Mock };
     strategyEvaluate: jest.Mock;
+}
+
+// M26: a single signal-bar tick whose close ≈ 30450 (the prior `reconstructReferencePrice`
+// entry the open-path tests document) and whose low touches the LONG IOC limit so the fill
+// is NOT missed. `ts` sits inside the IOC timeout window [barOpen, barOpen + 2000ms].
+function buildSignalBarTick() {
+    const barOpenMs = buildEvent().entryCandleOpenTime;
+
+    return {
+        ts: new Date(barOpenMs + 1_000),
+        open: new Money('30450'),
+        high: new Money('30500'),
+        low: new Money('30400'),
+        close: new Money('30450'),
+        volume: new Money('1'),
+    };
 }
 
 function buildMocks(strategyOutput: ISignal): IMocks {
@@ -91,12 +108,19 @@ function buildMocks(strategyOutput: ISignal): IMocks {
     const moduleRef = {
         resolve: jest.fn().mockImplementation(() => Promise.resolve(new VirtualPositionLedgerService())),
     };
+    // M26: default to one touching signal-bar tick so OPEN-path tests fill (the next-bar
+    // open derives from the tick close; the IOC limit is touched). Missing-data tests
+    // override this with `mockResolvedValue([])`.
+    const tickAggregates = {
+        loadTicksForBar: jest.fn().mockResolvedValue([buildSignalBarTick()]),
+    };
 
     return {
         config: { activeStrategyVersionId: ACTIVE_VERSION_ID, paperStartingEquityUsdt: 500 },
         registry,
         strategyVersions,
         shadowDecisions,
+        tickAggregates,
         moduleRef,
         strategyEvaluate,
     };
@@ -108,6 +132,7 @@ function buildOrchestrator(mocks: IMocks): ShadowStrategyOrchestratorService {
         mocks.registry as never,
         mocks.strategyVersions as never,
         mocks.shadowDecisions as never,
+        mocks.tickAggregates as never,
         mocks.moduleRef as never,
     );
 }

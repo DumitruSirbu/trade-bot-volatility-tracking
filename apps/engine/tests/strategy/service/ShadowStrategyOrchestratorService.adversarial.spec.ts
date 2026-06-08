@@ -16,6 +16,7 @@ import { PositionSideEnum, SignalActionEnum, SignalTypeEnum, StrategyStatusEnum 
 import { ShadowStrategyOrchestratorService } from '../../../src/strategy/service/ShadowStrategyOrchestratorService';
 import { VirtualPositionLedgerService } from '../../../src/strategy/service/VirtualPositionLedgerService';
 import { ISignal } from '../../../src/strategy/interface';
+import { Money } from '../../../src/common/utils/money';
 import { buildEvent, buildParams } from '../support/fixtures';
 import { buildProposedExit } from '../../risk/support/fixtures';
 
@@ -75,8 +76,26 @@ interface IMocks {
     registry: { resolve: jest.Mock };
     strategyVersions: { findActiveShadows: jest.Mock };
     shadowDecisions: { insertShadowDecision: jest.Mock; findRowsForLedgerRebuild: jest.Mock };
+    tickAggregates: { loadTicksForBar: jest.Mock };
     moduleRef: { resolve: jest.Mock };
     strategyEvaluate: jest.Mock;
+}
+
+// M26: one signal-bar tick (close = entry proxy, low touches the LONG limit) so any
+// OPEN that reaches the fill simulator fills instead of being forced to a missed empty-
+// tick path. Adversarial OPEN cases here exercise persistence/rebuild idempotency, not
+// the fill verdict, but a non-empty default keeps the next-bar-entry path live.
+function buildSignalBarTick() {
+    const barOpenMs = buildEvent().entryCandleOpenTime;
+
+    return {
+        ts: new Date(barOpenMs + 1_000),
+        open: new Money('30450'),
+        high: new Money('30500'),
+        low: new Money('30400'),
+        close: new Money('30450'),
+        volume: new Money('1'),
+    };
 }
 
 function buildMocks(strategyOutput: ISignal): IMocks {
@@ -97,12 +116,16 @@ function buildMocks(strategyOutput: ISignal): IMocks {
     const moduleRef = {
         resolve: jest.fn().mockImplementation(() => Promise.resolve(new VirtualPositionLedgerService())),
     };
+    const tickAggregates = {
+        loadTicksForBar: jest.fn().mockResolvedValue([buildSignalBarTick()]),
+    };
 
     return {
         config: { activeStrategyVersionId: ACTIVE_VERSION_ID, paperStartingEquityUsdt: 500 },
         registry,
         strategyVersions,
         shadowDecisions,
+        tickAggregates,
         moduleRef,
         strategyEvaluate,
     };
@@ -114,6 +137,7 @@ function buildOrchestrator(mocks: IMocks): ShadowStrategyOrchestratorService {
         mocks.registry as never,
         mocks.strategyVersions as never,
         mocks.shadowDecisions as never,
+        mocks.tickAggregates as never,
         mocks.moduleRef as never,
     );
 }
@@ -449,10 +473,12 @@ describe('ShadowStrategyOrchestratorService — no order.intent.approved emitted
         // BUILD + OPERATE: reflect the constructor signature.
         const constructorParamCount = ShadowStrategyOrchestratorService.length;
 
-        // CHECK: exactly 5 constructor parameters (config, registry, strategyVersions,
-        // shadowDecisions, moduleRef) — no EventEmitter, no RiskGateService.
-        // If an EventEmitter were injected the architectural boundary would be breached.
-        expect(constructorParamCount).toBe(5);
+        // CHECK: exactly 6 constructor parameters (config, registry, strategyVersions,
+        // shadowDecisions, tickAggregates, moduleRef) — no EventEmitter, no RiskGateService.
+        // `tickAggregates` (M26) is a read-only MarketDataModule repository for replaying
+        // signal-bar ticks; it does NOT route orders. If an EventEmitter or RiskGateService
+        // were injected the architectural boundary to the live order flow would be breached.
+        expect(constructorParamCount).toBe(6);
     });
 
     it('runShadows does not call RiskGateService (shadow path bypasses the live risk gate)', async () => {

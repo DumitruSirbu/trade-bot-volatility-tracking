@@ -15,10 +15,12 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import Decimal from 'decimal.js';
 
-import { Money } from '../../common/utils/money';
+import { Money, MoneyValue } from '../../common/utils/money';
 import { AppConfigService } from '../../config/service';
 import { RISK_PER_TRADE_PCT } from '../../risk/const';
 import { HistoricalFillAdapter, IFillRequest } from '../../backtest/fill/HistoricalFillAdapter';
+import { TickAggregateEntity } from '../../market-data/entity';
+import { TickAggregateRepository } from '../../market-data/repository/TickAggregateRepository';
 import {
     SHADOW_FILL_DEFAULT_POLICY,
     SHADOW_FILL_LATENCY_MS,
@@ -60,6 +62,20 @@ interface IShadowOpenData {
     readonly stopLoss: string;
     readonly takeProfit: string;
     readonly simulatedFill: ISimulatedFill;
+}
+
+// M26 (ADR 0029): the per-event signal-bar evidence loaded ONCE in `runShadows`
+// and threaded immutably into every `runOneShadow` (A2 — one DB read per event,
+// not per shadow version, so all versions see an identical verdict). `ticks` are
+// the signal-bar `tick_aggregates` over the half-open window `[barOpen, barOpen+5m)`;
+// `nextBarOpenPrice` is the M7-aligned entry reference (last signal-bar tick close,
+// the bar-close ≈ next-bar open proxy on a continuous tape). Both collapse to the
+// "no evidence" state when the tick set is empty: `ticks.length === 0` ⇒
+// `nextBarOpenPrice === null` ⇒ the shadow open is declined as a conservative miss
+// (A3/A4) — mirroring `BacktestOrchestrator` returning `null` when no next bar exists.
+interface ISignalBarEvidence {
+    readonly ticks: TickAggregateEntity[];
+    readonly nextBarOpenPrice: string | null;
 }
 
 // FIX 7: persist-call input grouped into a single structured argument so the
@@ -111,6 +127,11 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
         private readonly registry: StrategyRegistry,
         private readonly strategyVersions: StrategyVersionRepository,
         private readonly shadowDecisions: ShadowDecisionRepository,
+        // M26 (A1): TickAggregateRepository is exported by MarketDataModule, which
+        // StrategyModule already imports. Injecting it here loads signal-bar ticks
+        // WITHOUT pulling BacktestModule (CandleLoader lives there and would form the
+        // cycle StrategyModule → BacktestModule → StrategyModule).
+        private readonly tickAggregates: TickAggregateRepository,
         private readonly moduleRef: ModuleRef,
     ) {}
 
@@ -140,9 +161,15 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
     // flowType/signalScore are NOT inputs here — only the raw event + clock.
     // All failures are contained internally so the live path is never affected.
     async runShadows(event: IVolatilityDetectedEvent, nowMs: number): Promise<void> {
+        // M26 (A2): load the signal-bar evidence ONCE per event and thread it into
+        // every shadow. Loading inside `runOneShadow` would issue N identical SELECTs
+        // (one per shadow version) and open a determinism gap if ticks land between
+        // versions — all shadows must judge the same tape.
+        const evidence = await this.loadSignalBarEvidence(event);
+
         for (const shadow of this.shadows) {
             try {
-                await this.runOneShadow(shadow, event, nowMs);
+                await this.runOneShadow(shadow, event, nowMs, evidence);
             } catch (cause) {
                 const message = cause instanceof Error ? cause.message : String(cause);
                 this.logger.error(`shadow run failed ${shadow.discriminator} eventId=${event.eventId}: ${message}`);
@@ -150,7 +177,32 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
         }
     }
 
-    private async runOneShadow(shadow: IResolvedShadow, event: IVolatilityDetectedEvent, nowMs: number): Promise<void> {
+    // M26 (A1/A2/A3/A4/A6): loads the signal-bar `tick_aggregates` over the half-open
+    // window `[barOpen, barOpen+5m)` and derives the M7-aligned next-bar open entry
+    // reference. The next-bar open price is approximated by the signal bar's last tick
+    // close (bar-close ≈ next-bar open on a continuous tape) so it stays consistent with
+    // the same tick set that drives the miss-detector (A6 — never mix a separate candle
+    // read). When no ticks exist there is no next-bar evidence: `nextBarOpenPrice` is null,
+    // the open is later declined as a conservative miss (A3), and a `debug` log makes the
+    // missing-data case join/log-detectable (durable `missedReason` field deferred to M27).
+    private async loadSignalBarEvidence(event: IVolatilityDetectedEvent): Promise<ISignalBarEvidence> {
+        const ticks = await this.tickAggregates.loadTicksForBar(event.symbol, event.entryCandleOpenTime);
+
+        if (ticks.length === 0) {
+            this.logger.debug(
+                { eventId: event.eventId, symbol: event.symbol, barOpenMs: event.entryCandleOpenTime },
+                'Shadow: no tick_aggregates for signal bar — conservative missing-data miss',
+            );
+
+            return { ticks, nextBarOpenPrice: null };
+        }
+
+        const nextBarOpenPrice = ticks[ticks.length - 1].close.toFixed();
+
+        return { ticks, nextBarOpenPrice };
+    }
+
+    private async runOneShadow(shadow: IResolvedShadow, event: IVolatilityDetectedEvent, nowMs: number, evidence: ISignalBarEvidence): Promise<void> {
         // Re-classify per shadow params so each version sees the flow_type +
         // signal_score it would have stamped live (v0/v2/v3 may have different
         // signal_score weights than v1).
@@ -224,10 +276,28 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
 
         let openData: IShadowOpenData | null = null;
 
-        if (shouldSimulateFill && signal.tradeSide !== null && signal.proposedExit !== null) {
+        // M26 (A4): mirror M7 — shadow entry fills at the NEXT-bar open, not the
+        // signal-bar reference. When no next bar exists (the signal bar produced no
+        // tick_aggregates, so there is no next-bar open evidence), decline the open and
+        // leave it as a conservative missing-data miss — mirroring `BacktestOrchestrator`
+        // returning `null`. The missing-data case is already debug-logged in
+        // `loadSignalBarEvidence`; the row still persists with `openData: null`.
+        const hasNextBarEntry = evidence.nextBarOpenPrice !== null;
+
+        if (shouldSimulateFill && !hasNextBarEntry) {
+            this.logger.debug(
+                { eventId: event.eventId, symbol: event.symbol, shadowVersion: shadow.discriminator },
+                'Shadow: no next-bar open (no signal-bar ticks) — declining open as conservative miss',
+            );
+        }
+
+        if (shouldSimulateFill && evidence.nextBarOpenPrice !== null && signal.tradeSide !== null && signal.proposedExit !== null) {
             const stopLossStr = signal.proposedExit.stopLossPrice.toFixed();
             const takeProfitStr = signal.proposedExit.takeProfitPrice.toFixed();
-            const entryPriceStr = reconstructReferencePrice(stampedEvent).toFixed();
+            // M26 (A4): the inline `nextBarOpenPrice !== null` check narrows the type, so
+            // `nextBarOpenPrice` is non-null here — the next-bar open is the entry, sizing,
+            // and limit reference.
+            const entryPriceStr = evidence.nextBarOpenPrice;
 
             // W5c FIX 4: validate stop-loss side against the trade direction.
             // A malformed strategy that emits `stopLoss > entry` for a LONG
@@ -244,7 +314,7 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
                 );
             } else {
                 const qtyForLedger = this.deriveShadowQty(shadow, entryPriceStr, stopLossStr);
-                const simulatedFill = this.simulateShadowFill(shadow, stampedEvent, signal.tradeSide, entryPriceStr, qtyForLedger);
+                const simulatedFill = this.simulateShadowFill(shadow, stampedEvent, signal.tradeSide, entryPriceStr, qtyForLedger, evidence);
 
                 openData = {
                     qty: qtyForLedger,
@@ -302,8 +372,10 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
         side: PositionSideEnum,
         entryPriceStr: string,
         qtyStr: string,
+        evidence: ISignalBarEvidence,
     ): ISimulatedFill {
         const entryPrice = new Money(entryPriceStr);
+        const barExtremes = deriveBarExtremes(evidence.ticks, entryPrice);
 
         const fillRequest: IFillRequest = {
             eventId: event.eventId,
@@ -315,13 +387,18 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
             qty: new Money(qtyStr),
             coinTier: event.coinTier,
             signalBarOpenMs: event.entryCandleOpenTime,
-            barHigh: entryPrice,
-            barLow: entryPrice,
-            // Shadow path has no historical tick replay or live book snapshot —
-            // empty inputs force the simulator's bar-extreme fallback (lowFidelity
-            // = true), matching ADR 0029 §2.4 "every shadow trade is lowFidelity
-            // until the depth-aware extension lands".
-            ticks: [],
+            barHigh: barExtremes.high,
+            barLow: barExtremes.low,
+            // M26 (A1/A6, ADR 0029): the shadow path now replays the signal bar's
+            // `tick_aggregates` — the SAME rows M7 backtest loads — so `isMissedFill`
+            // judges the real intra-bar tape instead of an empty array (which always
+            // missed). `barHigh`/`barLow` come from the same tick set for snapshot
+            // consistency (they do not drive the open miss-detector; ticks do). The
+            // fill stays `lowFidelity: true` with `bookSnapshot: null` until the
+            // depth-aware extension (ADR 0029 §2.4). Residual gaps stay honest: the
+            // close-side still uses the reference-price proxy (A8) and the virtual
+            // ledger populates forward-only (A7) — this is NOT byte-identical to backtest.
+            ticks: evidence.ticks,
             bookSnapshot: null,
             tierSlippageParams: this.toTierSlippageParams(shadow.params),
             config: {
@@ -558,4 +635,39 @@ function isStopSideValid(tradeSide: PositionSideEnum, entryPriceStr: string, sto
     }
 
     return stop.gt(entry);
+}
+
+interface IBarExtremes {
+    readonly high: MoneyValue;
+    readonly low: MoneyValue;
+}
+
+// M26 (A6): derive the signal bar's high/low from the loaded tick set (max of tick
+// highs, min of tick lows) so the fill snapshot draws from a single source of truth.
+// When the tick set is empty the fill never reaches this path through an OPEN (the
+// open is declined upstream), but a defensive `entryPrice` fallback keeps the request
+// well-formed for any direct caller. These extremes do NOT drive `isMissedFill` for
+// opens — the ticks do — so the fallback cannot turn a real miss into a fill.
+function deriveBarExtremes(ticks: TickAggregateEntity[], entryPrice: MoneyValue): IBarExtremes {
+    if (ticks.length === 0) {
+        return { high: entryPrice, low: entryPrice };
+    }
+
+    let high = new Decimal(ticks[0].high.toFixed());
+    let low = new Decimal(ticks[0].low.toFixed());
+
+    for (const tick of ticks.slice(1)) {
+        const tickHigh = new Decimal(tick.high.toFixed());
+        const tickLow = new Decimal(tick.low.toFixed());
+
+        if (tickHigh.gt(high)) {
+            high = tickHigh;
+        }
+
+        if (tickLow.lt(low)) {
+            low = tickLow;
+        }
+    }
+
+    return { high: new Money(high.toFixed()), low: new Money(low.toFixed()) };
 }
