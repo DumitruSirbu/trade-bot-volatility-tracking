@@ -20,6 +20,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { BootstrapSubkeyDeriver } from '../../boot-mode-history/service/BootstrapSubkeyDeriver';
 import { PAPER_FILL_LATENCY_MS } from '../const';
 import { PaperSimulatorIdempotencyRepository } from '../repository/PaperSimulatorIdempotencyRepository';
+import { isPositiveDecimalString } from '../utils/priceUtils';
 import { StreamingFillAdapter } from './StreamingFillAdapter';
 
 // HKDF info string for the per-soak seed-master. Distinct from
@@ -262,13 +263,13 @@ export class PaperFillSimulator {
         const candidates: ReadonlyArray<string> = [primary, snapshot.mark, snapshot.last, opposite];
 
         for (const candidate of candidates) {
-            if (this.isPositiveDecimal(candidate)) {
+            if (isPositiveDecimalString(candidate)) {
                 return candidate;
             }
         }
 
         // All single fields unusable; try midpoint of bid+ask if both parsable.
-        if (this.isPositiveDecimal(snapshot.bid) && this.isPositiveDecimal(snapshot.ask)) {
+        if (isPositiveDecimalString(snapshot.bid) && isPositiveDecimalString(snapshot.ask)) {
             const mid = new Decimal(snapshot.bid).plus(snapshot.ask).dividedBy(2);
 
             return mid.toFixed();
@@ -278,14 +279,6 @@ export class PaperFillSimulator {
         // check above — the shared core's missed-fill path will see `0` and
         // mark the fill as missed rather than fabricating a price.
         return snapshot.mark;
-    }
-
-    private isPositiveDecimal(value: string): boolean {
-        try {
-            return new Decimal(value).isPositive() && !new Decimal(value).isZero();
-        } catch {
-            return false;
-        }
     }
 
     private translateAction(intentAction: OrderIntentActionEnum): 'open' | 'reduce' | 'close' {

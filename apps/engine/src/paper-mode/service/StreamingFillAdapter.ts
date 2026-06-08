@@ -9,12 +9,15 @@ import {
     applyFill as sharedApplyFill,
     applyIntraBarStop as sharedApplyIntraBarStop,
     type ITickAggregateSnapshot,
+    type ITickSnapshot,
     type ITierSlippageParams,
 } from '@bot/shared';
 import { Injectable, Logger } from '@nestjs/common';
 
 import { ORDER_TIMEOUT_MS } from '../../execution/const/executionConsts';
+import { STREAMING_FILL_STALE_TICK_MS } from '../const';
 import { StreamingFillAdapterException } from '../exception';
+import { isPositiveDecimalString } from '../utils/priceUtils';
 
 // StreamingFillAdapter — engine-side adapter wrapping the shared `FillSimulatorCore`
 // for PAPER live event-time execution (ADR 0032 §3 D15).
@@ -62,12 +65,6 @@ interface IRegisteredPosition {
     readonly seed: IFillSeed;
     readonly onTrigger: (fill: ISimulatedFillCore) => void;
 }
-
-// Stale-tick threshold: a tick older than this is considered too cold for the
-// next order intent. Mirrors M5's submit-network-timeout horizon; a tick we
-// haven't seen for 5s is suspicious enough that the adapter declines to fill
-// rather than fill on stale data.
-export const STREAMING_FILL_STALE_TICK_MS = 5_000;
 
 @Injectable()
 export class StreamingFillAdapter {
@@ -220,15 +217,73 @@ export class StreamingFillAdapter {
             return null;
         }
 
-        // For PAPER live event-time, intra-bar tick history is empty — the
-        // shared core's missed-fill detector falls back to the limit-vs-mark
-        // test (M5 IOC semantics) instead of replaying a recorded tick path.
+        // Live streaming adapter: synthesize one snapshot-derived executable-price
+        // tick for MARKETABLE_LIMIT_IOC opens — a spread-crossing IOC fills at the
+        // current quote; the shared detector confirms the touch. Fill tsMs is then
+        // overridden to snapshot.ts + latencyMs (event-time); historical replay
+        // (M7) still passes recorded tick_aggregates and keeps next-bar timestamps.
         const orderTimeoutMs = this.resolveOrderTimeoutMs(intent.policy);
-        // Signal-bar open is effectively "now" for live event-time; the
-        // shared core's `computeFillTimestamp` advances by `latencyMs` only.
         const signalBarOpenMs = snapshot.ts;
 
-        return sharedApplyFill(snapshot, intent, coinTier, tierSlippageParams, seed, [], signalBarOpenMs, orderTimeoutMs, latencyMs);
+        const intraBarTicks = this.buildIntraBarTicks(intent, snapshot);
+
+        const result = sharedApplyFill(snapshot, intent, coinTier, tierSlippageParams, seed, intraBarTicks, signalBarOpenMs, orderTimeoutMs, latencyMs);
+
+        if (intent.policy === OrderPolicyEnum.MARKETABLE_LIMIT_IOC && result.filled) {
+            return { ...result, tsMs: snapshot.ts + latencyMs };
+        }
+
+        return result;
+    }
+
+    // Synthesize the intra-bar tick path the shared missed-fill detector
+    // consults. For MARKETABLE_LIMIT_IOC opens we emit a single side-aware
+    // executable-price point derived from the live snapshot (ask for LONG,
+    // bid for SHORT, same fallback chain as deriveReferencePrice). The detector
+    // tests `tick.low` for LONG and `tick.high` for SHORT (inclusive), so a
+    // spread-crossing IOC fills while a non-crossing inside-spread limit misses.
+    // Any other policy keeps the empty path (no synthetic confirmation).
+    private buildIntraBarTicks(intent: IFillIntent, snapshot: IFillSnapshot): ITickSnapshot[] {
+        if (intent.policy !== OrderPolicyEnum.MARKETABLE_LIMIT_IOC) {
+            return [];
+        }
+
+        const executablePrice = this.resolveExecutablePrice(intent.side, snapshot);
+
+        // On the live paper path limitPrice ≡ executablePrice (same snapshot candidate),
+        // so a gate-approved IOC always crosses; the non-crossing guard is defense-in-depth
+        // against a future change that decouples the two derivations.
+        if (executablePrice === null) {
+            return [];
+        }
+
+        const syntheticTick: ITickSnapshot = {
+            high: executablePrice,
+            low: executablePrice,
+            ts: new Date(snapshot.ts),
+        };
+
+        return [syntheticTick];
+    }
+
+    // Derive the actual executable market price from the live snapshot, mirroring
+    // `PaperFillSimulator.deriveReferencePrice`'s quote-field fallback chain.
+    // Open LONG = taker buy → ask; open SHORT = taker sell → bid. Only quote
+    // fields are eligible (never bar-level high/low). Returns null when every
+    // candidate is missing or non-positive — the caller then emits no synthetic
+    // tick, so the fill misses rather than fabricating a price.
+    private resolveExecutablePrice(side: 'long' | 'short', snapshot: IFillSnapshot): string | null {
+        const primary = side === 'long' ? snapshot.ask : snapshot.bid;
+        const opposite = side === 'long' ? snapshot.bid : snapshot.ask;
+        const candidates: ReadonlyArray<string> = [primary, snapshot.mark, snapshot.last, opposite];
+
+        for (const candidate of candidates) {
+            if (isPositiveDecimalString(candidate)) {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     // ----- Per-tick SL/TP evaluation (event-driven) -----

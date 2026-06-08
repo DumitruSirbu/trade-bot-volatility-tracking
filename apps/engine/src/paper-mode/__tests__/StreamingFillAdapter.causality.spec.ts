@@ -23,7 +23,8 @@
 
 import { CoinTierEnum, IFillSeed, IFillSnapshot, OrderPolicyEnum, type ITierSlippageParams } from '@bot/shared';
 
-import { StreamingFillAdapter, STREAMING_FILL_STALE_TICK_MS } from '../service/StreamingFillAdapter';
+import { STREAMING_FILL_STALE_TICK_MS } from '../const';
+import { StreamingFillAdapter } from '../service/StreamingFillAdapter';
 
 const TIER_PARAMS: ITierSlippageParams = {
     slippage_tier1_pct: 0.15,
