@@ -159,6 +159,8 @@ FillSimulator.simulate(intent, context):
                         enforces this — entry references next-bar open, not signal-bar close).
 ```
 
+**§4.6 Live-streaming adapter exception (M24):** `StreamingFillAdapter` synthesizes one side-aware executable-price tick for `MARKETABLE_LIMIT_IOC` opens before calling `applyFill` on the live IOC-open path (`{high=execPrice, low=execPrice, ts=snapshot.ts}`, where `execPrice = ask` for LONG, `bid` for SHORT, same fallback chain as `deriveReferencePrice`). This is correct IOC fill semantics — a spread-crossing taker order fills at the live quote. The empty-tick conservative miss is preserved for: (a) historical/backtest replay (next-bar timestamps via `HistoricalFillAdapter`), (b) non-crossing inside-spread limits, (c) POST_ONLY_MAKER, (d) all paths through `HistoricalFillAdapter`. Fill `tsMs` is overridden to `snapshot.ts + latencyMs` (event-time) for live opens; `computeFillTimestamp`'s next-bar semantics remain for backtest replay.
+
 `IntrabarStopSimulator` handles exit-side fills. Given an open position, it iterates `tick_aggregates` between `openedAtMs` and the next 5-min bar close (or until SL/TP/time-stop fires, whichever first):
 - Hits SL when intrabar path crosses `stopLoss` (mark-price proxy = trade price; consistent with M6 mark-vs-last gating because real L2 mark isn't available historically).
 - Hits TP when path crosses `takeProfit`.

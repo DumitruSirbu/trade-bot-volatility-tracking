@@ -751,6 +751,8 @@ load, producing non-deterministic intra-bar timing. SL evaluation
 fires within one tick of the triggering price (not within one wall-
 clock interval).
 
+**D15 footnote (M24):** Live-streaming adapter now synthesizes one executable-price tick for MARKETABLE_LIMIT_IOC opens (a spread-crossing IOC fills at the current quote; the shared detector confirms the touch) and overrides `tsMs` to `snapshot.ts + latencyMs` so paper fill timestamps are event-time rather than next-bar. Backtest replay path (HistoricalFillAdapter) is unchanged. Determinism preserved — the tick derives entirely from `snapshot` fields, so two identical snapshots produce identical fills and identical `tsMs`.
+
 **Causality test (mandatory):** at time `t`, the streaming adapter
 cannot read tick / book-snapshot data with timestamp `> t`. R3.1
 asserts this by giving the adapter a clock-skewed market snapshot

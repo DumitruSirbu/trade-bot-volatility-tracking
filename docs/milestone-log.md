@@ -36,12 +36,14 @@ For the current milestone plan, see `docs/plans/`. For deferred items, see `docs
 
 **M23 — Market-stress adaptive auto-resume:** DONE (code-only; no migration, no DB write at rest). Breadth-triggered `market_stress` halts now auto-resume after `MARKET_STRESS_RESUME_CLEAR_TICKS=3` consecutive clean global-breadth ticks in the inner hysteresis band ([20,80] at distance ≤30). Engage threshold unchanged (|breadth−50| ≥ 40). Per-day re-halt cap: 3rd breadth halt → full-day lock reasserts. `halt_reason` now carries `market_stress:<leg>` suffix (`:breadth` is the only resume-eligible leg; all others and loss halts stay full-day locked). New `MARKET_STRESS_AUTO_RESUME_ENABLED` boot flag: paper-default-on, live-default-off. 116 new tests green. Review: 2 rounds — zero blockers, zero highs at close. **Post-deploy:** pg_dump before restart; stale-halt inspection (`halt_reason LIKE 'market_stress%'`); 10-min smoke; backtest over soak window (report stats for trades within 30 min of auto-resume); 14-day paper soak before live activation.
 
+**M24 → M25:** Next milestone gates on fill-route completion (M25 P1/P2 needed to route trade intents through the paper/live stack; M24 supplies only the open-fill tick synthesis).
+
 **M15 gates:** (a) PAPER soak passing per `docs/plans/M11a-local-soak.md` soak-exit criteria AND (b) TESTNET pre-M15 drill green (order-lifecycle + reconciliation + rate-limit under burst load).
 **Branch protection NOT YET APPLIED** — see `docs/runbooks/ci-gates.md` payload; must apply before any live merge.
 
 **Deferred items:** see `docs/tech-debt.md` — HIGH-priority go-live blockers listed there.
 
-**Next:** **M15 — Cloud go-live** (gates: M11a soak exit + TESTNET drill green; proof-of-edge tradeable by M8 walk-forward; deployed to Binance live $500 tier-1 symbols isolated, zero crashes 7d, ready for scaling post-validation).
+**Next:** **M25 — Paper/live trade intent routing** (gates: M24 open-fill wiring verified by paper transactions; M25 P1/P2 wire trade-intent approval through PaperExecutionClient; M26 shadow counterfactual opens).
 
 ---
 
@@ -62,6 +64,28 @@ For the current milestone plan, see `docs/plans/`. For deferred items, see `docs
 **Files modified:** `apps/engine/src/risk/const/riskConsts.ts` (3 new resume constants + 10 halt-leg suffix token constants with rationale comments), engine config (MARKET_STRESS_AUTO_RESUME_ENABLED boolean, paper-on/live-off default), `StressHaltEvaluator.ts` (isGlobalStressed method + classifyHaltLeg leg-classifier), `RiskGateService.ts` (resume branch before day-lock early return, clean-tick counter, per-day re-halt counter, persistHalt with `market_stress:<leg>` suffix, autoResumeMarketStress method, resolveDayHalt branch), `HaltFlagService.ts` (marketStressLeg field + getHaltedLeg()), `HaltStateRestoreService.ts` (double-prefix fix, clean-tick counter reset to 0 on restore), `packages/shared/` (IMarketStressResumedEvent interface + MARKET_STRESS_RESUMED_EVENT constant), event-bus wiring (emit with clear-count, breadth at resume, leg, re-halt count, utcDateString, nearReHaltCap boolean).
 
 **Post-deploy gates:** (1) pg_dump before restart (same pattern as M21/M22); prune to 2 most recent. (2) Stale-halt inspection: `halt_reason LIKE 'market_stress%'` (covers both bare legacy + new suffixed rows); clear via `clearHaltForDate` on user confirm or wait for UTC rollover. (3) 10-min live smoke (per feedback-milestone-app-smoke). (4) BacktestRunnerService run over soak window with auto-resume enabled: report trade count / win rate / profit factor / max drawdown **for trades opened within 30 min of auto-resume** (primary live-activation gate). (5) 14-day paper soak: non-negative expectancy in unlock windows + re-halt cycle count under cap on most days (before live flag flip). (6) Daily monitoring: watch `MARKET_STRESS_RESUMED` events + per-day re-halt count; escalate surge-cooldown to HIGH if soak shows squeeze risk. (7) Backtest + soak telemetry read-only; no code changes triggered unless gates fail.
+
+**Zero blockers, zero highs at close.**
+
+---
+
+## M24 — Live/paper open-fill wiring
+
+**Problem:** `StreamingFillAdapter.simulateOrderFill` passed empty `[]` ticks to the shared `isMissedFill` detector. The detector's logic treats empty ticks as a guaranteed miss for any limit policy, so every paper open returned `filled=false` + `fillPrice=0` + no position. M7 backtest worked because `HistoricalFillAdapter` loaded real `tick_aggregates` from storage. Analysis proved this was the **only** blocker for zero paper trades.
+
+**Fix (code-only — no migration, no DB write):**
+
+1. **A1 — Side-aware executable-price tick synthesis.** New private `buildIntraBarTicks(intent, snapshot)` synthesizes a one-element `ITickSnapshot` for `MARKETABLE_LIMIT_IOC` opens: `{high=execPrice, low=execPrice, ts=new Date(snapshot.ts)}`, where `execPrice = ask` for LONG, `bid` for SHORT (same fallback chain as `deriveReferencePrice`). Returns `[]` for all other policies. Spread-crossing IOC now fills; non-crossing inside-spread limits still miss (detector remains the arbiter).
+2. **A2 — Event-time tsMs override.** After `sharedApplyFill`, a filled `MARKETABLE_LIMIT_IOC` result has `tsMs` overridden to `snapshot.ts + latencyMs` (event-time), not next-bar timestamp (`snapshot.ts + 5m + latencyMs`). The shared core remains unchanged; M7 backtest path preserves next-bar semantics for replay.
+3. **A3 / stale comment replaced.** Accurate description of the tick synthesis, event-time re-stamp, and M7 contrast.
+
+**Also fixed (review findings):** `STREAMING_FILL_STALE_TICK_MS` moved to `paperFillSimulatorConsts.ts` (was exported const in service file). New `apps/engine/src/paper-mode/utils/priceUtils.ts` with `isPositiveDecimalString` (includes `isFinite()` guard); both `StreamingFillAdapter` and `PaperFillSimulator` now import from there.
+
+**Tests:** 20 new in `StreamingFillAdapter.m24.spec.ts`: crossing/non-crossing semantics (both sides), fallback chain, event-time timestamp, POST_ONLY_MAKER boundary, historical conservatism regression guard, determinism, exit-unaffected. Total 212 passed / 4 skipped / 216 (paper-mode suites).
+
+**Review cycle:** R1 (3 clean-code HIGHs: const placement, double-cast, magic number; 2 clean-code MEDIUMs: isPositiveDecimalString duplication, parseFloat) → Fix wave 1 (all resolved) → R2 (security CLEAN, logic CLEAN, zero blockers, zero highs at close). Tech-debt: one LOW nit — `utils/priceUtils.ts` not re-exported from a `utils/index.ts` barrel; deferred.
+
+**Post-deploy gates:** (1) pg_dump before restart (prune to 2-deep); (2) engine restart only — no migration; (3) 10-min smoke; (4) fill-path confirmation: M24 alone produces no visible live volume (day may still be locked, v1 still skips); live acceptance = test evidence + first filled opens after M25 lands. Three live outcomes: no gate approvals → no positions (M24 not exercised); approvals with missed fills → M24 failed; approvals with filled opens → M24 verified.
 
 **Zero blockers, zero highs at close.**
 

@@ -74,6 +74,7 @@ risk gate.
 - **PositionModule** — authoritative position state; reconciles against exchange; unrealized/realized PnL.
 - **PersistenceModule** — Cross-cutting infra: NUMERIC↔decimal.js transformer, migration timeline. Domain modules own their entities/repositories (see ADR 0002).
 - **BacktestModule** — replays stored candles through a strategy version with simulated fills/fees/slippage; same strategy code as live.
+- **PaperModeModule** *(M11a)*— engine-local paper trading: live market data, locally simulated fills via `StreamingFillAdapter`, locally simulated account state. M24: `StreamingFillAdapter` now synthesizes one side-aware executable-price tick for `MARKETABLE_LIMIT_IOC` opens (spread-crossing IOC fills at the current quote, event-time) and overrides fill `tsMs` to `snapshot.ts + latencyMs`. The historical/backtest path (M7) remains unchanged (next-bar timestamps via `HistoricalFillAdapter`).
 - **NotificationModule** — Telegram alerts + kill switch (global halt flag + endpoint).
 - **CommonModule** — config, decimal helpers, logging, event bus (`@nestjs/event-emitter`), scheduler (`@nestjs/schedule`).
 - *(phase 2)* **AnalysisModule** — read-only MCP server + weekly reports.

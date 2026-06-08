@@ -79,7 +79,9 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 
 ## Status
 
-**Current status:** M23 done, M15 next — full milestone history, test counts, and go-live gates in `docs/milestone-log.md`.
+**Current status:** M24 done, M25 next — full milestone history, test counts, and go-live gates in `docs/milestone-log.md`.
+
+**M24 — Live/paper open-fill wiring (DONE):** Code-only fix (no migration, no DB write). Paper opens now fill: synthesized one side-aware executable-price tick per MARKETABLE_LIMIT_IOC open in StreamingFillAdapter (A1), overrode tsMs to event-time (A2), replaced stale comment. Extracted isPositiveDecimalString utility. 20 new tests green, 212 total. Review: 2 rounds — zero blockers, zero highs at close. **Post-deploy:** pg_dump before restart; fill-path confirmation (no live trades expected from M24 alone — M25 P1/P2 needed; first visible paper transactions appear after M25 lands). Three live outcomes: no gate approvals → no positions (M24 not exercised); approvals with missed fills → M24 failed; approvals with filled opens → M24 verified.
 
 **M23 — Market-stress adaptive auto-resume (DONE):** Code-only fix (no migration, no DB write at rest). Breadth-triggered `market_stress` halts now auto-resume after `MARKET_STRESS_RESUME_CLEAR_TICKS=3` consecutive clean global-breadth ticks in the inner hysteresis band ([20,80] at distance ≤30). Engage threshold unchanged (|breadth−50| ≥ 40). Per-day re-halt cap: 3rd breadth halt → full-day lock reasserts. `halt_reason` now carries `market_stress:<leg>` suffix (`:breadth` is the only resume-eligible leg; all others and loss halts stay full-day locked). New `MARKET_STRESS_AUTO_RESUME_ENABLED` boot flag: paper-default-on, live-default-off. 116 new tests green. Review: 2 rounds — zero blockers, zero highs at close. **Post-deploy:** pg_dump before restart; stale-halt inspection (`halt_reason LIKE 'market_stress%'`); 10-min smoke; backtest over soak window (report stats for trades within 30 min of auto-resume); 14-day paper soak before live activation.
 

@@ -22,3 +22,7 @@ export const PAPER_DEFAULT_COIN_TIER_LABEL = 'TIER_1';
 //
 // M11a R4 Item 5: relocated from PaperExecutionClient.ts.
 export const PAPER_EXCHANGE_ORDER_ID_PREFIX = 'paper-fill:';
+
+// Stale-tick threshold for StreamingFillAdapter: a tick older than this is
+// considered too cold to fill against. Mirrors M5's submit-network-timeout.
+export const STREAMING_FILL_STALE_TICK_MS = 5_000;
