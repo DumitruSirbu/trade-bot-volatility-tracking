@@ -275,7 +275,7 @@ function buildGate(autoResumeEnabled = true): { gate: RiskGateService; events: j
     const riskState = { findByDate: jest.fn().mockResolvedValue(null), upsertDay: jest.fn().mockResolvedValue(undefined) } as any;
     const emitMock = jest.fn();
     const events = { emit: emitMock } as any;
-    const appConfig = { marketStressAutoResumeEnabled: autoResumeEnabled } as any;
+    const appConfig = { marketStressAutoResumeEnabled: autoResumeEnabled, paperRelaxMarketStress: false } as any;
 
     const gate = new RiskGateService(ledger, slotManager, stress, positions, riskState, events, appConfig);
     gate.markRecoveryComplete();

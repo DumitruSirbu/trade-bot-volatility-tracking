@@ -137,7 +137,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL1: single-leg sole engage re
         const snapshot = buildCalmSnapshot({ market_breadth_5m_up_pct: 8 });
         const params = buildParams();
 
-        const result = evaluator.classifyHaltLeg(snapshot, params);
+        const result = evaluator.classifyHaltLeg(snapshot, params, false);
 
         expect(result).toBe(MARKET_STRESS_RESUME_ELIGIBLE_LEG);
         expect(result).toBe('breadth');
@@ -148,7 +148,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL1: single-leg sole engage re
         const snapshot = buildCalmSnapshot({ btc_5m_move_pct: 2.0 });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('btc_shock');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('btc_shock');
     });
 
     it('ETH shock sole-engage (eth_5m=3.0%, >= STRESS_ETH_5M_SHOCK_PCT=2.5) → returns "eth_shock"', () => {
@@ -156,7 +156,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL1: single-leg sole engage re
         const snapshot = buildCalmSnapshot({ eth_5m_move_pct: 3.0 });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('eth_shock');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('eth_shock');
     });
 
     it('OI sole-engage (oi_change_5m=6%, >= STRESS_OI_CHANGE_5M_PCT=5) → returns "oi"', () => {
@@ -164,7 +164,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL1: single-leg sole engage re
         const snapshot = buildCalmSnapshot({ open_interest_change_5m_pct: 6 });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('oi');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('oi');
     });
 
     it('funding sole-engage (funding_rate_annualized=60%, >= STRESS_FUNDING_ANNUALIZED_PCT=50) → returns "funding"', () => {
@@ -172,7 +172,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL1: single-leg sole engage re
         const snapshot = buildCalmSnapshot({ funding_rate_annualized: 60 });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('funding');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('funding');
     });
 
     it('spread sole-engage (bid_ask_spread_pct=0.7%, >= STRESS_SPREAD_PCT=0.6) → returns "spread"', () => {
@@ -180,7 +180,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL1: single-leg sole engage re
         const snapshot = buildCalmSnapshot({ bid_ask_spread_pct: 0.7 });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('spread');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('spread');
     });
 
     it('same_bar sole-engage (same_bar_trigger_count=5, threshold=5) → returns "same_bar"', () => {
@@ -188,7 +188,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL1: single-leg sole engage re
         const snapshot = buildCalmSnapshot({ same_bar_trigger_count: 5 });
         const params = buildParams({ stress_same_bar_trigger_count: 5 });
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('same_bar');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('same_bar');
     });
 });
 
@@ -200,7 +200,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL2: NaN in any stress input r
         const snapshot = buildCalmSnapshot({ btc_5m_move_pct: NaN });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('invalid');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('invalid');
     });
 
     it('NaN eth_5m_move_pct → "invalid"', () => {
@@ -208,7 +208,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL2: NaN in any stress input r
         const snapshot = buildCalmSnapshot({ eth_5m_move_pct: NaN });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('invalid');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('invalid');
     });
 
     it('NaN market_breadth_5m_up_pct → "invalid"', () => {
@@ -216,7 +216,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL2: NaN in any stress input r
         const snapshot = buildCalmSnapshot({ market_breadth_5m_up_pct: NaN });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('invalid');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('invalid');
     });
 
     it('NaN funding_rate_annualized → "invalid"', () => {
@@ -224,7 +224,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL2: NaN in any stress input r
         const snapshot = buildCalmSnapshot({ funding_rate_annualized: NaN });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('invalid');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('invalid');
     });
 
     it('Infinity bid_ask_spread_pct → "invalid"', () => {
@@ -232,7 +232,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL2: NaN in any stress input r
         const snapshot = buildCalmSnapshot({ bid_ask_spread_pct: Infinity });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('invalid');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('invalid');
     });
 });
 
@@ -247,7 +247,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL3: two or more legs engage �
         });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('multi');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('multi');
     });
 
     it('breadth + OI both engage → "multi"', () => {
@@ -258,7 +258,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL3: two or more legs engage �
         });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('multi');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('multi');
     });
 
     it('BTC shock + ETH shock both engage → "multi"', () => {
@@ -269,7 +269,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL3: two or more legs engage �
         });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('multi');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('multi');
     });
 
     it('OI + funding both engage → "multi"', () => {
@@ -280,7 +280,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL3: two or more legs engage �
         });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(snapshot, params)).toBe('multi');
+        expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('multi');
     });
 });
 
@@ -300,7 +300,7 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL4: all legs engage simultane
         });
         const params = buildParams({ stress_same_bar_trigger_count: 5 });
 
-        const result = evaluator.classifyHaltLeg(snapshot, params);
+        const result = evaluator.classifyHaltLeg(snapshot, params, false);
 
         // All inputs are finite (NaN check passes), but 7 legs fire → multi, not invalid
         expect(result).toBe('multi');
@@ -454,7 +454,7 @@ describe('MARKET_STRESS_RESUME_ELIGIBLE_LEG — exported constant matches the br
         const calmSnapshot = buildCalmSnapshot({ market_breadth_5m_up_pct: 45 });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(breadthOnlyStressed, params)).toBe(MARKET_STRESS_RESUME_ELIGIBLE_LEG);
+        expect(evaluator.classifyHaltLeg(breadthOnlyStressed, params, false)).toBe(MARKET_STRESS_RESUME_ELIGIBLE_LEG);
         expect(evaluator.isGlobalStressed(calmSnapshot)).toBe(false);
     });
 });

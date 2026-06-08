@@ -263,4 +263,66 @@ describe('validateEnv', () => {
             expect(invoke).toThrow(/DB_HOST/);
         });
     });
+
+    // ─── M25 env vars ──────────────────────────────────────────────────────────
+
+    describe('M25 — PAPER_RELAX_MARKET_STRESS parsing', () => {
+        it('coerces "true" string to boolean true', () => {
+            const result = validateEnv(buildEnv({ PAPER_RELAX_MARKET_STRESS: 'true' }));
+
+            expect(result.PAPER_RELAX_MARKET_STRESS).toBe(true);
+        });
+
+        it('coerces "false" string to boolean false (strict parse: not truthy)', () => {
+            // The @Transform accepts only exact 'true'; the string 'false' is NOT truthy
+            // and collapses to false — fail-safe to off (ADR 0042 §6).
+            const result = validateEnv(buildEnv({ PAPER_RELAX_MARKET_STRESS: 'false' }));
+
+            expect(result.PAPER_RELAX_MARKET_STRESS).toBe(false);
+        });
+
+        it('defaults to false when absent (field default — never opt-in without explicit set)', () => {
+            const env = buildEnv();
+            delete env['PAPER_RELAX_MARKET_STRESS'];
+
+            const result = validateEnv(env);
+
+            expect(result.PAPER_RELAX_MARKET_STRESS).toBe(false);
+        });
+
+        it('collapses a typo ("treu") to false — fail-safe to off', () => {
+            const result = validateEnv(buildEnv({ PAPER_RELAX_MARKET_STRESS: 'treu' }));
+
+            expect(result.PAPER_RELAX_MARKET_STRESS).toBe(false);
+        });
+    });
+
+    describe('M25 — PAPER_MAX_IDIOSYNCRATIC_SLOTS validation', () => {
+        it('accepts value 1 (minimum allowed)', () => {
+            const result = validateEnv(buildEnv({ PAPER_MAX_IDIOSYNCRATIC_SLOTS: '1' }));
+
+            expect(result.PAPER_MAX_IDIOSYNCRATIC_SLOTS).toBe(1);
+        });
+
+        it('accepts value 2 (maximum allowed — slot model ceiling)', () => {
+            const result = validateEnv(buildEnv({ PAPER_MAX_IDIOSYNCRATIC_SLOTS: '2' }));
+
+            expect(result.PAPER_MAX_IDIOSYNCRATIC_SLOTS).toBe(2);
+        });
+
+        it('rejects value 3 at boot with an error mentioning "2" or slot ceiling (ADR 0042 §3)', () => {
+            // A value > 2 regresses capacity because the slot-C borrow never fires with only
+            // A/B as idiosyncratic-named slots. The validator rejects it at boot.
+            expect(() => validateEnv(buildEnv({ PAPER_MAX_IDIOSYNCRATIC_SLOTS: '3' }))).toThrow(/PAPER_MAX_IDIOSYNCRATIC_SLOTS/);
+        });
+
+        it('is absent (undefined) when not set — no slot override', () => {
+            const env = buildEnv();
+            delete env['PAPER_MAX_IDIOSYNCRATIC_SLOTS'];
+
+            const result = validateEnv(env);
+
+            expect(result.PAPER_MAX_IDIOSYNCRATIC_SLOTS).toBeUndefined();
+        });
+    });
 });
