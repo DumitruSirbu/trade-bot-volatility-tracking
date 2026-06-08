@@ -1,7 +1,23 @@
 # Slot Model Analysis & Correlated Leg Gaps
 
 **Date:** 2026-06-05  
-**Status:** WIP — open questions, no implementation decision yet
+**Status:** WIP — open questions. **M25 addressed exposure headroom only (PARTIAL); slot C / 5-slot expansion still OPEN.** See [Milestone coverage](#milestone-coverage). Moves to [`docs/wip/done/`](done/) when no OPEN/PLANNED rows remain.
+
+---
+
+## Milestone coverage
+
+Tracked against [`docs/milestone-log.md`](../milestone-log.md).
+
+| WIP topic | Milestone | Log status | Notes |
+|-----------|-----------|------------|-------|
+| 3-slot model (A/B idiosyncratic + C borrow) | **M4** | **DONE** | Original risk-gate slot design |
+| Raise exposure / capital without more slots | **M25** (P3) | **PARTIAL** | ADR 0042: `MAX_EXPOSURE_PER_COIN_USDT`, same-direction cap, `ACCOUNT_CAPITAL_USDT`; **not** `MAX_IDIOSYNCRATIC_SLOTS > 2` |
+| True 5-slot / `MAX_OPEN_POSITIONS` expansion | — | **OPEN** | Explicitly deferred in M25 plan + milestone-log |
+| Slot C correlated leg (BTC-direction hedge) | — | **OPEN** | No milestone plan; § structural gap below still accurate |
+| Separate BTC-only bot (alternative) | — | **OPEN** | Design option only |
+
+Related: [main-architector P3](main-architector-paper-soak-fill-and-gate-analysis.md#p3--more-concurrent-positions-the-5-positions-ask--partial-m25), [M25 plan](../plans/M25-paper-exploration-enablement.md).
 
 ---
 

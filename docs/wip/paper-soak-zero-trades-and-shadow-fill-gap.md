@@ -1,8 +1,28 @@
 # Paper Soak: Zero Live Trades & Shadow Fill Gap
 
 **Date:** 2026-06-06  
-**Status:** WIP — analysis + recommendations; no implementation decision yet  
+**Status:** WIP — analysis + recommendations. **Tier A/B partially landed (M25); Tier C → M26; Tier D unchanged.** See [Milestone coverage](#milestone-coverage). Moves to [`docs/wip/done/`](done/) when no OPEN/PLANNED rows remain.  
 **Trigger:** Operator wants simulated paper transactions (losses acceptable) but soak shows only skips/rejects, no `positions` or `transactions` rows.
+
+---
+
+## Milestone coverage
+
+Tracked against [`docs/milestone-log.md`](../milestone-log.md). Parent prioritized set: [main-architector-paper-soak-fill-and-gate-analysis.md](main-architector-paper-soak-fill-and-gate-analysis.md) (P0–P5).
+
+| WIP recommendation | Maps to | Milestone | Log status | Notes |
+|--------------------|---------|-----------|------------|-------|
+| Paper open fill (empty ticks → missed opens) | P0 | [M24](../plans/M24-paper-open-fill-wiring.md) | **DONE** | Prerequisite for any paper `positions` row |
+| Activate v2 momentum (`ACTIVE_STRATEGY_VERSION_ID=3`) | P1 / Tier A | M25 | **DONE** | Config + restart |
+| Param SQL / strategy tuning (Tier A) | P1 | M25 | **DONE** | Operator `.env` / DB, not engine code |
+| `PAPER_RELAX_MARKET_STRESS` (Tier B) | P2 | M25 | **DONE** | ADR 0042; paper-gated |
+| Raise slots / capital (Tier A/B) | P3 | M25 | **PARTIAL** | Exposure headroom only; **3-slot ceiling kept** |
+| Shadow bar high/low + `tick_aggregates` (Tier C) | P4 | [M26](../plans/M26-shadow-counterfactual-fill-wiring.md) | **PLANNED** | Supersedes minimal bar-only fix in this doc |
+| Decision capture gaps (not in Tier table) | P5 | [M27](../plans/M27-decision-data-capture-completeness.md) | **PLANNED** | Migrations required |
+| M23 breadth auto-resume (context) | — | M23 | **DONE** | Referenced in operator config table |
+| Tier D — avoid (live keys, v3 hybrid, etc.) | — | — | **N/A** | Still valid guidance |
+
+**Suggested next actions (§ below):** items 1–3 largely **superseded by M24/M25 deploy checklist**; item 4 (shadow PnL) still blocked on **M26**.
 
 ---
 
@@ -240,7 +260,7 @@ Lowering trigger sensitivity requires code change in `resolveTriggerParams.ts` /
 
 ## Recommendations
 
-### Tier A — Config + DB only (no code; restart engine)
+### Tier A — Config + DB only (no code; restart engine) — **DONE (M25 P1 + partial P3)**
 
 **1. Switch active strategy to v2 momentum**
 
@@ -290,7 +310,7 @@ Use dashboard Resume; confirm `risk_state.is_halted=false` for current UTC day.
 
 ---
 
-### Tier B — Small code changes (paper exploration)
+### Tier B — Small code changes (paper exploration) — **DONE (M25 P2)**
 
 | Change | Location | Effect |
 |--------|----------|--------|
@@ -302,7 +322,7 @@ Use dashboard Resume; confirm `risk_state.is_halted=false` for current UTC day.
 
 ---
 
-### Tier C — Fix shadow fills (counterfactual PnL)
+### Tier C — Fix shadow fills (counterfactual PnL) — **PLANNED (M26)**
 
 **Minimal fix:** pass trigger bar **high/low** from `IVolatilityDetectedEvent` into `simulateShadowFill` instead of `barHigh = barLow = entryPrice`.
 
@@ -319,7 +339,7 @@ After fix:
 
 ---
 
-### Tier D — Avoid for now
+### Tier D — Avoid for now — **N/A (guidance still valid)**
 
 - Disabling live risk gate entirely — breaks live/backtest contract
 - Further depth-floor cuts without 14-day slippage telemetry (M22 ADR condition)
