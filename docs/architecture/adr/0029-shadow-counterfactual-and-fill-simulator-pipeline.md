@@ -491,3 +491,33 @@ exported from `MarketDataModule`). No `BacktestModule` import is added to
 path makes this safe (a race resolves to a miss, never a fabricated fill), but
 **post-deploy must monitor the shadow miss rate** — a sustained spike would
 indicate the race, not genuine sparsity.
+
+## M27 Amendment (2026-06-08) — durable `ISimulatedFill.missedReason`
+
+**Milestone:** M27 (decision data-capture completeness). **Status:** Accepted.
+**See:** ADR 0043.
+
+M26 (above) shipped missing-data detection as **analysis-layer only** — the
+missing-tick case kept `missed: true` and a `debug` log, with no durable field on
+the row, deferring the durable tag to M27. M27 (carry-in A0) makes the tag durable.
+
+The `ISimulatedFill` output contract (§2.3.2) gains one **additive, nullable** field:
+
+```ts
+missedReason?: 'missing_tick_data' | 'price_not_touched' | null;
+```
+
+added to `ISimulatedFill` + `simulatedFillSchema` in `packages/shared/` (the only
+shared-package change in M27 — routed through `bot-shared-maintainer`; **no geometry
+keys are added to `marketSnapshotSchema`**, ADR 0043 §1/§6). The shadow orchestrator
+populates it:
+
+- `'missing_tick_data'` when no `tick_aggregates` rows exist for `(symbol, bar)`
+  (the M26 conservative-miss path).
+- `'price_not_touched'` when ticks exist but the simulated entry/exit price was never
+  reached (an honest no-fill, not a data gap).
+- `null` / absent when not applicable.
+
+This converts the M26 "identified analytically (`missed=true AND no tick_aggregates`)"
+heuristic into a self-describing column, preventing survivorship bias when analyzing
+shadow misses. It does not change any fill outcome — only the recorded reason.

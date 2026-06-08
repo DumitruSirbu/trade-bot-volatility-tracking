@@ -354,9 +354,39 @@ field has a source field on that payload. Schema drift between the two is a name
 - **Per-domain migration folders.** Rejected: one schema has one history; a single ordered
   `src/database/migrations/` timeline is simpler to reason about and reverts cleanly.
 
+## M27 Amendment (2026-06-08) — additive capture columns (see ADR 0043)
+
+**Milestone:** M27 (decision data-capture completeness). **Status:** Accepted.
+
+M27 extends two tables this ADR created, **additive/nullable only** (no `NOT NULL` backfill,
+no drop, no type change; `down` drops only the new columns/indexes). Full rationale and the
+observability-only invariant are in ADR 0043.
+
+- **`decisions`** gains top-level trade-geometry columns mirroring `shadow_decisions`:
+  `gate_allowed` (boolean), `trade_side`, `stop_loss`, `take_profit`, `qty`, `notional`,
+  `leverage` (money/price via `decimalColumnTransformer`, §2), plus `halt_reason_detail`
+  (gate-owned leg string, read verbatim — not date-joined, not re-derived). **Trade geometry is
+  NOT added to `marketSnapshotSchema`** (§5) — that strict 40-field market-*context* contract is
+  unchanged. The only `market_snapshot` change is the runtime value of `active_positions_count`
+  (the hard-coded dry-run `0` is replaced by the real post-evaluate open count; the field/schema
+  itself is unchanged).
+- **`book_snapshots`** (non-partitioned, §1) gains a nullable `event_id` column, a **nullable
+  UNIQUE index on `event_id`** (idempotency — one book row per trigger), and an optional
+  `mid_at_trigger` numeric column. A best-effort writer (mirrors the §4 swallow pattern; never on
+  the order path) persists trigger-time **spread/depth aggregates** keyed by `event_id`, exactly
+  rejoinable to the decision row. **Raw L2 is out of scope** (aggregates only). **Retention is
+  deferred** to a separate follow-up ADR with its own DB-safety plan — M27 adds the column +
+  writer only; no partition conversion, no retention job.
+
+Decision-row Zod validation (§4) becomes hard-fail in `NODE_ENV=test`/local-dev only and stays
+warn-only in paper/testnet/live (a prod throw would block a gate-approved open — `gateAndPersist`
+persists before emitting). `SchemaValidationService` (ADR 0025) is updated for the new
+`book_snapshots` required columns.
+
 ## See also
 
 - `docs/plans/M2-persistence.md`, `docs/plans/00-overview.md` ("Data model" section)
+- `docs/architecture/adr/0043-m27-decision-data-capture-completeness.md` (M27 additive capture columns)
 - `docs/architecture/adr/0001-exchange-and-market-data.md` (the `IVolatilityDetectedEvent`
   payload the `market_snapshot` schema mirrors; the MarketData boundary)
 - `docs/best-practices/code-conventions.md` (Entity/Repository/Migration/Constants rules)

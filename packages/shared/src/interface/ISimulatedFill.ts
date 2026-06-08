@@ -19,4 +19,5 @@ export interface ISimulatedFill {
     readonly closeReason: 'sl' | 'tp' | 'force_close' | 'intra_bar_stop' | null;
     readonly feeUsdtEntry?: string | null; // Entry-leg taker fee in USDT (decimal string). Null until depth-aware fill simulator populates it.
     readonly feeUsdtExit?: string | null; // Exit-leg taker fee in USDT (decimal string). Null until the close-side simulator is wired.
+    readonly missedReason?: 'missing_tick_data' | 'price_not_touched' | null; // M27: Reason for missed fill; populated by analysis layer
 }
