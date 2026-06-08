@@ -439,3 +439,55 @@ operative one.
   comparable. The exact mechanism (read v1's account equity at the event, or
   hold a per-shadow virtual equity?) is a W0 implementation question; this
   ADR locks "same scale, same `risk_per_trade_pct`," not the bookkeeping.
+
+## M26 Amendment (2026-06-08)
+
+**Milestone:** M26 (shadow fill wiring). **Status:** Accepted.
+
+`ShadowStrategyOrchestratorService.simulateShadowFill` previously passed
+`ticks: []` and `barHigh/barLow = entryPrice`, forcing every shadow decision to
+`missed: true`. The old "no historical tick replay" comment is now obsolete.
+M26 wires the shadow path so entry-side fills become computable:
+
+- **Tick replay.** The shadow path replays `tick_aggregates` for the signal bar
+  via `TickAggregateRepository.loadTicksForBar(symbol, barOpenMs)` — half-open
+  window `[barOpen, barOpen + 5m)`, mirroring `CandleLoader.loadTicksForBar`.
+  Ticks are loaded **once per event** in `runShadows` and threaded as an
+  immutable evidence object into each `runOneShadow` (no per-version re-query).
+- **Entry alignment.** Shadow entry now uses the **next-bar open**, matching M7
+  `BacktestOrchestrator.buildOrderIntent` (`ctx.nextBarOpen`) and ADR 0015 §6's
+  forward-look fix. When no next bar exists, the shadow open is **explicitly
+  declined and tagged missing-data** (mirrors backtest returning `null`) — never
+  filled at a same-bar price.
+- **Bar extremes.** `barHigh`/`barLow` are derived from the loaded tick set
+  min/max, feeding the intra-bar SL/TP simulation honestly.
+- **Fidelity preserved.** `lowFidelity: true` and `bookSnapshot: null` are kept
+  until the depth-aware extension (§2.4 deferred). M26 does not change fidelity
+  semantics — it only stops the structural all-miss.
+
+**Missing-data detection is analysis-layer only (M26).** The missing-tick case
+keeps the conservative `missed: true` outcome and emits a `debug` log carrying
+`eventId/symbol/barOpenMs`. There is **no durable `ISimulatedFill.missedReason`
+field** — it is deferred to M27. Until then, missing-tick misses are identified
+analytically: `missed=true AND no tick_aggregates rows for (symbol, bar)`.
+
+**Forward-only ledger.** The virtual ledger is forward-only. Pre-M26
+`shadow_decisions` rows stay `missed: true` and are not retroactively rescored;
+a full-window M11b comparison needs a **separate replay job** over the historical
+tape. M26 changes only newly written rows.
+
+**Close-side proxy limitation.** Close fills still resolve at
+`reconstructReferencePrice`, which remains a known low-fidelity proxy.
+Acceptance language for M26: *entry-side shadow PnL becomes computable, with
+close-side reference-price proxy a known low-fidelity limitation.*
+
+**Module boundary.** Ticks are loaded via `TickAggregateRepository` (already
+exported from `MarketDataModule`). No `BacktestModule` import is added to
+`StrategyModule`, deliberately avoiding the
+`StrategyModule → BacktestModule → StrategyModule` cycle.
+
+**Write-read race watch (A9).** The signal bar's tick data may not be flushed to
+`tick_aggregates` when the orchestrator queries it. The conservative missing-tick
+path makes this safe (a race resolves to a miss, never a fabricated fill), but
+**post-deploy must monitor the shadow miss rate** — a sustained spike would
+indicate the race, not genuine sparsity.

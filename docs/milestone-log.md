@@ -69,6 +69,47 @@ For the current milestone plan, see `docs/plans/`. For deferred items, see `docs
 
 ---
 
+## M26 — Shadow counterfactual fill wiring
+
+**Problem:** `ShadowStrategyOrchestratorService.simulateShadowFill` passed `ticks: []` into the shared fill simulator, which treats empty ticks on a limit policy as a guaranteed miss. Every shadow fill returned `missed: true`, leaving `VirtualPositionLedgerService` empty — no virtual PnL, no counterfactual comparison of dormant versions (v2 momentum, v3 hybrid) against the active v1 on the same tape (blocker for M11b ADR 0018 bootstrap CI).
+
+**Root cause:** The orchestrator had the bar's symbol + timestamp keys but never loaded the real `tick_aggregates` rows for the signal bar. M7 backtest worked because `BacktestOrchestrator` loaded `tick_aggregates` for the signal bar and passed them to the fill simulator; shadow never did.
+
+**Fix (code-only — no migration, no shared-package change):**
+
+1. **Load `tick_aggregates` once per event** (not per shadow version) via a new `loadTicksForBar(symbol, barOpenMs)` half-open query on `TickAggregateRepository` (A1/A2/A5). Mirror M7 `CandleLoader`'s half-open window `[barOpen, barOpen+5m)`. Inject the repo into the shadow orchestrator (no module cycle; the repo is already exported by `MarketDataModule` which `StrategyModule` imports). Load in `runShadows` and thread an immutable evidence object into each `runOneShadow`.
+
+2. **Mirror M7 next-bar entry alignment** (A4). Replace the signal-bar `reconstructReferencePrice` entry with a load/derive of the next-bar open, using it for `entryPrice`, sizing, `limitPrice`, and fill timestamp. When no next bar exists (signal bar is the symbol's last bar), **decline the shadow open and tag missing-data** — mirroring `BacktestOrchestrator` returning `null`. This is a deliberate entry-pricing change (beyond "just load ticks") to achieve same-tape parity with backtest.
+
+3. **Bar high/low from the loaded tick set** (A6): derive from ticks' min/max (not a separate candle read) for snapshot consistency. Note that for open fills, ticks (not bar extremes) drive the miss-detector; bar extremes are snapshot-only.
+
+4. **Handle missing-data explicitly** (A3): if no `tick_aggregates` exist for the bar or no next bar exists, keep the **conservative miss** (`ticks: []` → `missed: true`) and emit a `debug` log carrying `eventId`, `symbol`, `barOpenMs`. Make it distinguishable from a price-not-touched miss via SQL pattern (`missed=true AND no tick_aggregates for (symbol, bar)`). **Do not fabricate a tick.** The durable `ISimulatedFill.missedReason` field is **deferred to M27** (data-capture milestone).
+
+5. **Preserve `lowFidelity: true` and `bookSnapshot: null`** (ADR 0029 §2.4) — shadow stays low-fidelity until the depth-aware extension (deferred). M26 unblocks the *fill*, not the depth model.
+
+**Residual limitations (recorded accurately):**
+- **Close-side fill** still uses `reconstructReferencePrice` proxy (A8). Shadow closes reverse signals at the reference price, not via a simulated `intent:'close'` fill. Accepted as a known low-fidelity limitation; acceptance is "entry-side counterfactual PnL computable" with close-side proxy a separate follow-up.
+- **Virtual ledger is forward-only** (A7). `rebuildLedger` replays persisted `simulated_fill` rows; pre-M26 `shadow_decisions` with `missed: true` stay `missed: true` after restart. Full 14-day M11b comparison needs a separate backfill/replay job (out of scope; noted in post-deploy).
+- **Missing-data detection is analysis-layer only** (A3). SQL pattern + debug log detectable; durable `ISimulatedFill.missedReason` field deferred to M27.
+
+**ADR 0029 amended (M26 section):** shadow path now loads real `tick_aggregates` for the signal bar (no longer "no historical tick replay") and aligns entry to the next bar open like M7 (ADR 0015 §6 forward-look rationale), while `lowFidelity`/`bookSnapshot: null` stay until the depth-aware extension. Analysis-layer missing-data detection, forward-only ledger, and close-side proxy limitation all recorded.
+
+**Tests:** 37 new, all green. Covers: shadow fills with ticks present + a next bar (crossing → `missed=false`, non-zero next-bar `entryPrice`, virtual positions recorded); one load per event regardless of shadow count; no-next-bar declines + tagged; missing-tick conservative (join/log-detectable, not faked); half-open boundary (`barOpen + 5m` excluded); bar geometry from tick set; `lowFidelity`/`bookSnapshot: null` preserved; determinism (same event + ticks → identical fill); same-tape parity (shadow loads same ticks + uses same next-bar entry M7 would); forward-only ledger behavior documented.
+
+**Review:** 1 round — zero blockers, zero highs, zero mediums at close (2 MUST-FIX formatting issues + 1 HIGH dead-test fixed intra-round).
+
+**Post-deploy steps:**
+1. `pg_dump` before engine restart (prune to 2-deep retention).
+2. Engine restart only (no migration).
+3. 10-min live smoke — confirm shadow orchestrator boots with `TickAggregateRepository` injected (no module cycle).
+4. 24–48h: confirm new `shadow_decisions` OPEN rows now show a **mix** of `missed=false` (ticks present + crossing) and `missed=true` (no touch or no ticks) — **not** 100% missed. Confirm `VirtualPositionLedgerService` records virtual positions. Absent-tick bars are join/log-detectable.
+5. Spot-check: a shadow `event_id` uses the same `tick_aggregates` rows and same next-bar entry the backtest would use for that bar (same-tape parity, A4).
+6. Watch tick-coverage (A9): if many signal bars return `[]`, investigate market-data persistence lag / write-read race (WS gaps, missing partitions) — not shadow logic. Confirm `(symbol, ts)` index on `tick_aggregates` is present.
+
+**Zero blockers, zero highs at close.**
+
+---
+
 ## M25 — Paper exploration enablement
 
 **Problem:** After M24, gate-approved opens fill, but the 14-day paper soak still produces almost nothing to label. Three binding constraints, all correct for live capital but mis-tuned for paper exploration:
