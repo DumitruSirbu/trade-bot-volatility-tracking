@@ -17,10 +17,12 @@
 import { IMarketSnapshot, IStrategyParams } from '@bot/shared';
 
 import {
+    HALT_LEG_BREADTH,
     MARKET_BREADTH_NEUTRAL_PCT,
     MARKET_STRESS_RESUME_BREADTH_DISTANCE,
-    MARKET_STRESS_RESUME_ELIGIBLE_LEG,
+    MARKET_STRESS_RESUME_ELIGIBLE_LEGS,
     STRESS_BREADTH_DISTANCE_PCT,
+    STRESS_SAME_BAR_HALT_COUNT,
 } from '../../const/riskConsts';
 import { StressHaltEvaluator } from '../StressHaltEvaluator';
 
@@ -139,7 +141,8 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL1: single-leg sole engage re
 
         const result = evaluator.classifyHaltLeg(snapshot, params, false);
 
-        expect(result).toBe(MARKET_STRESS_RESUME_ELIGIBLE_LEG);
+        expect(result).toBe(HALT_LEG_BREADTH);
+        expect(MARKET_STRESS_RESUME_ELIGIBLE_LEGS.has(result)).toBe(true);
         expect(result).toBe('breadth');
     });
 
@@ -183,10 +186,10 @@ describe('StressHaltEvaluator.classifyHaltLeg — CL1: single-leg sole engage re
         expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('spread');
     });
 
-    it('same_bar sole-engage (same_bar_trigger_count=5, threshold=5) → returns "same_bar"', () => {
+    it('same_bar sole-engage (same_bar_trigger_count=STRESS_SAME_BAR_HALT_COUNT, M28 const-governed) → returns "same_bar"', () => {
         const evaluator = buildEvaluator();
-        const snapshot = buildCalmSnapshot({ same_bar_trigger_count: 5 });
-        const params = buildParams({ stress_same_bar_trigger_count: 5 });
+        const snapshot = buildCalmSnapshot({ same_bar_trigger_count: STRESS_SAME_BAR_HALT_COUNT });
+        const params = buildParams({ stress_same_bar_trigger_count: 5 }); // param stays 5 for classifyFlowType; halt uses const
 
         expect(evaluator.classifyHaltLeg(snapshot, params, false)).toBe('same_bar');
     });
@@ -443,18 +446,19 @@ describe('StressHaltEvaluator.isGlobalStressed — GS3: NaN or Infinity in any g
 
 // ─── Verify exported constant ─────────────────────────────────────────────────
 
-describe('MARKET_STRESS_RESUME_ELIGIBLE_LEG — exported constant matches the breadth suffix', () => {
-    it('MARKET_STRESS_RESUME_ELIGIBLE_LEG equals "breadth"', () => {
-        expect(MARKET_STRESS_RESUME_ELIGIBLE_LEG).toBe('breadth');
+describe('MARKET_STRESS_RESUME_ELIGIBLE_LEGS — exported set contains the breadth suffix', () => {
+    it('the resume-eligible set contains "breadth"', () => {
+        expect(MARKET_STRESS_RESUME_ELIGIBLE_LEGS.has(HALT_LEG_BREADTH)).toBe(true);
+        expect(MARKET_STRESS_RESUME_ELIGIBLE_LEGS.has('breadth')).toBe(true);
     });
 
-    it('isGlobalStressed(clean snapshot) + classifyHaltLeg(sole breadth) = resume-eligible leg matches exported constant', () => {
+    it('isGlobalStressed(clean snapshot) + classifyHaltLeg(sole breadth) = resume-eligible leg is in the exported set', () => {
         const evaluator = buildEvaluator();
         const breadthOnlyStressed = buildCalmSnapshot({ market_breadth_5m_up_pct: 8 });
         const calmSnapshot = buildCalmSnapshot({ market_breadth_5m_up_pct: 45 });
         const params = buildParams();
 
-        expect(evaluator.classifyHaltLeg(breadthOnlyStressed, params, false)).toBe(MARKET_STRESS_RESUME_ELIGIBLE_LEG);
+        expect(MARKET_STRESS_RESUME_ELIGIBLE_LEGS.has(evaluator.classifyHaltLeg(breadthOnlyStressed, params, false))).toBe(true);
         expect(evaluator.isGlobalStressed(calmSnapshot)).toBe(false);
     });
 });

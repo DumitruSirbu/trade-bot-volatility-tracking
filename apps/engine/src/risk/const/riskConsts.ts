@@ -117,6 +117,28 @@ export const STRESS_OI_CHANGE_5M_PCT = 5;
 export const STRESS_FUNDING_ANNUALIZED_PCT = 50;
 export const STRESS_SPREAD_PCT = 0.6;
 
+// Same-bar co-trigger halt count (engine-side, M28, ADR 0004 §6e). The halt ENGAGES when
+// snapshot.same_bar_trigger_count >= STRESS_SAME_BAR_HALT_COUNT. INTENTIONALLY DECOUPLED from
+// the `stress_same_bar_trigger_count` strategy param (=5) that `classifyFlowType` consumes to
+// route MARKET_BETA flow — do NOT re-couple them: the param stays at 5 for flow classification
+// while the halt threshold lives here. At the old param value of 5, a 5% co-trigger rate across
+// ~100 symbols halted the entire UTC day — routine crypto-session behaviour, not a cascade.
+// Calibrated to soak evidence: routine ceiling 12 (Jun 6), cascade peak 52 (Jun 7).
+export const STRESS_SAME_BAR_HALT_COUNT = 20;
+
+// Same-bar resume inner-band ceiling (M28, ADR 0004 §6e). A clean resume tick is
+// same_bar_trigger_count < STRESS_SAME_BAR_RESUME_COUNT. Intentionally below the engage count
+// (20) so the gap (12 → 20) is the hysteresis buffer that stops the gate chattering at the
+// engage boundary, mirroring the breadth resume band.
+export const STRESS_SAME_BAR_RESUME_COUNT = 12;
+
+// Consecutive clean same-bar ticks required before a same_bar market_stress halt auto-resumes
+// (M28, ADR 0004 §6e). 2 (vs breadth's 3) — a same-bar co-trigger spike is a single-bar
+// transient, so a shorter clean window is appropriate. Same in-memory tick-counter lifecycle
+// as MARKET_STRESS_RESUME_CLEAR_TICKS (resets on any non-clean tick, NaN fail-closed, recurrence,
+// or restart; resets at UTC rollover).
+export const SAME_BAR_RESUME_CLEAR_TICKS = 2;
+
 // market_breadth_5m_up_pct neutral midpoint: 50% up = balanced breadth. The breadth halt trips
 // when the distance from this midpoint reaches STRESS_BREADTH_DISTANCE_PCT (collapse OR surge).
 export const MARKET_BREADTH_NEUTRAL_PCT = 50;
@@ -161,8 +183,11 @@ export const HALT_LEG_OI = 'oi';
 export const HALT_LEG_FUNDING = 'funding';
 export const HALT_LEG_SPREAD = 'spread';
 export const HALT_LEG_MULTI = 'multi';
-// Only breadth-triggered halts are eligible for M23 auto-resume.
-export const MARKET_STRESS_RESUME_ELIGIBLE_LEG = HALT_LEG_BREADTH;
+// Market-stress halt legs eligible for adaptive auto-resume (M23 breadth + M28 same_bar). Every
+// other leg (BTC/ETH shock, OI, funding, spread, multi, invalid) and every loss-based reason
+// stays full-day locked. Consumed by RiskGateService.isStressLegAutoResumeEligible and the
+// RiskListeners leg check.
+export const MARKET_STRESS_RESUME_ELIGIBLE_LEGS: ReadonlySet<string> = new Set([HALT_LEG_BREADTH, HALT_LEG_SAME_BAR]);
 
 // --- market-stress adaptive resume (§6d, M23) ---
 

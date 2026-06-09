@@ -9,7 +9,7 @@ import { HaltFlagService } from '../../common/service/HaltFlagService';
 import { HaltService } from '../../control/HaltService';
 import { ALERT_SINK, IAlertSink } from '../sink/AlertSinkModule';
 import { MARKET_STRESS_RESUMED_EVENT, MODEL_DIVERGENCE_TRIGGERED_EVENT, RISK_HALT_DEDUP_WINDOW_MS, RISK_HALT_TRIGGERED_EVENT } from '../const/alertEvents';
-import { MARKET_STRESS_RESUME_ELIGIBLE_LEG } from '../../risk/const/riskConsts';
+import { MARKET_STRESS_RESUME_ELIGIBLE_LEGS } from '../../risk/const/riskConsts';
 
 // M9 W6 (ADR 0024 §2.2 + M9 R1 adjudication A — Option β).
 //
@@ -93,8 +93,8 @@ export class RiskListeners {
     // no HaltService.resume() (that writes a control_audit row and is operator-only).
     @OnEvent(MARKET_STRESS_RESUMED_EVENT)
     async onMarketStressResumed(event: IMarketStressResumedEvent): Promise<void> {
-        if (event.triggerLeg !== MARKET_STRESS_RESUME_ELIGIBLE_LEG) {
-            this.logger.warn(`marketStress.autoResume.unexpectedLeg leg=${event.triggerLeg} — skipping flag clear`);
+        if (!MARKET_STRESS_RESUME_ELIGIBLE_LEGS.has(event.triggerLeg)) {
+            this.logger.warn(`marketStress.autoResume.unexpectedLeg triggerLeg=${event.triggerLeg} — skipping flag clear`);
 
             return;
         }

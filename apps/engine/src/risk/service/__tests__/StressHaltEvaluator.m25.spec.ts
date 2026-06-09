@@ -41,7 +41,7 @@ import {
     STRESS_FUNDING_ANNUALIZED_PCT,
     STRESS_SPREAD_PCT,
     MARKET_BREADTH_NEUTRAL_PCT,
-    MARKET_STRESS_RESUME_ELIGIBLE_LEG,
+    STRESS_SAME_BAR_HALT_COUNT,
 } from '../../const';
 import { StressHaltEvaluator } from '../StressHaltEvaluator';
 
@@ -218,20 +218,21 @@ describe('StressHaltEvaluator M25 — PR6: breadth engage is NEVER relaxed by pa
 
 // ─── PR7: P2 relax ON — same_bar governed by strategy param only ──────────────
 
-describe('StressHaltEvaluator M25 — PR7: same_bar_trigger_count governed by strategy param, not paperRelax flag', () => {
-    it('same_bar_trigger_count at strategy param threshold → STILL stressed when paperRelax=true', () => {
-        // The flag does NOT relax same_bar — it is relaxed via the strategy param alone.
+describe('StressHaltEvaluator M25 — PR7: same_bar_trigger_count governed by engine const (M28), not paperRelax flag', () => {
+    it('same_bar_trigger_count at STRESS_SAME_BAR_HALT_COUNT → STILL stressed when paperRelax=true (paperRelax never relaxes same_bar)', () => {
+        // M28: halt threshold is STRESS_SAME_BAR_HALT_COUNT (20), not the strategy param.
+        // paperRelax=true still does NOT relax same_bar — it is not in PAPER_RELAXABLE_LEGS.
         const evaluator = buildEvaluator();
-        const params = buildParams({ stress_same_bar_trigger_count: 5 });
-        const snapshot = buildCalmSnapshot({ same_bar_trigger_count: 5 }); // at threshold
+        const params = buildParams({ stress_same_bar_trigger_count: 5 }); // param stays 5 for classifyFlowType only
+        const snapshot = buildCalmSnapshot({ same_bar_trigger_count: STRESS_SAME_BAR_HALT_COUNT });
 
         expect(evaluator.isStressed(snapshot, params, true)).toBe(true);
     });
 
-    it('same_bar_trigger_count below threshold → not stressed (normal behavior preserved)', () => {
+    it('same_bar_trigger_count below STRESS_SAME_BAR_HALT_COUNT → not stressed (threshold correctly raised from 5 to 20)', () => {
         const evaluator = buildEvaluator();
         const params = buildParams({ stress_same_bar_trigger_count: 5 });
-        const snapshot = buildCalmSnapshot({ same_bar_trigger_count: 4 });
+        const snapshot = buildCalmSnapshot({ same_bar_trigger_count: STRESS_SAME_BAR_HALT_COUNT - 1 });
 
         expect(evaluator.isStressed(snapshot, params, true)).toBe(false);
     });
@@ -310,7 +311,6 @@ describe('StressHaltEvaluator M25 — VC1: breadth+BTC with paperRelax=true → 
         const leg = evaluator.classifyHaltLeg(snapshot, buildParams(), true);
 
         expect(leg).toBe(HALT_LEG_BREADTH);
-        expect(leg).toBe(MARKET_STRESS_RESUME_ELIGIBLE_LEG);
         expect(leg).not.toBe(HALT_LEG_MULTI);
     });
 });
@@ -402,9 +402,9 @@ describe('StressHaltEvaluator M25 — RG1: paperRelax=false produces identical r
         expect(buildEvaluator().classifyHaltLeg(snapshot, buildParams(), false)).toBe(HALT_LEG_SPREAD);
     });
 
-    it('same_bar at strategy param threshold alone → stressed', () => {
-        const params = buildParams({ stress_same_bar_trigger_count: 5 });
-        const snapshot = buildCalmSnapshot({ same_bar_trigger_count: 5 });
+    it('same_bar at STRESS_SAME_BAR_HALT_COUNT alone → stressed (M28: const-governed)', () => {
+        const params = buildParams({ stress_same_bar_trigger_count: 5 }); // param no longer governs halt
+        const snapshot = buildCalmSnapshot({ same_bar_trigger_count: STRESS_SAME_BAR_HALT_COUNT });
 
         expect(buildEvaluator().isStressed(snapshot, params, false)).toBe(true);
         expect(buildEvaluator().classifyHaltLeg(snapshot, params, false)).toBe(HALT_LEG_SAME_BAR);
@@ -444,11 +444,12 @@ describe('StressHaltEvaluator M25 — MD1: multi derivation under paper relax', 
     it('two legs still active with paperRelax=true (breadth + same_bar) → "multi"', () => {
         // breadth and same_bar are both NOT in the relaxable set.
         // When both engage simultaneously, the result is "multi".
+        // M28: same_bar engage threshold is STRESS_SAME_BAR_HALT_COUNT (20), not the param.
         const evaluator = buildEvaluator();
-        const params = buildParams({ stress_same_bar_trigger_count: 5 });
+        const params = buildParams({ stress_same_bar_trigger_count: 5 }); // param stays 5 (classifyFlowType only)
         const snapshot = buildCalmSnapshot({
             market_breadth_5m_up_pct: 8, // breadth engage
-            same_bar_trigger_count: 5, // same_bar engage
+            same_bar_trigger_count: STRESS_SAME_BAR_HALT_COUNT, // same_bar engage at const (20)
         });
 
         expect(evaluator.isStressed(snapshot, params, true)).toBe(true);

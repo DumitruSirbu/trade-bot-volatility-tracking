@@ -8,6 +8,12 @@ build/
 .tsbuildinfo
 *.tsbuildinfo
 
+# Compiled TypeScript test artifacts (jest --outDir or ts-jest transpile output)
+apps/engine/tests/**/*.js
+apps/engine/tests/**/*.js.map
+apps/engine/src/**/*.js
+apps/engine/src/**/*.js.map
+
 # Vite / frontend
 .vite/
 .next/

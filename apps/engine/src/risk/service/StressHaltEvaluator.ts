@@ -17,14 +17,17 @@ import {
     STRESS_ETH_5M_SHOCK_PCT,
     STRESS_FUNDING_ANNUALIZED_PCT,
     STRESS_OI_CHANGE_5M_PCT,
+    STRESS_SAME_BAR_HALT_COUNT,
+    STRESS_SAME_BAR_RESUME_COUNT,
     STRESS_SPREAD_PCT,
 } from '../const';
 
 // M25 (ADR 0042 §2) — the global stress legs that the paper exploration profile SKIPS when
 // PAPER_RELAX_MARKET_STRESS is effective. Breadth and same_bar are intentionally absent: breadth
-// keeps M23 engage + auto-resume, same_bar is relaxed only via its strategy param. The
-// invalid-inputs guard is not a leg here — it is evaluated before, and independent of, the relax
-// helper (never relaxed in any env, under any flag).
+// keeps M23 engage + auto-resume, and same_bar (M28, ADR 0004 §6e) engages on the engine const
+// STRESS_SAME_BAR_HALT_COUNT and is never relaxed by any paper flag. The invalid-inputs guard is
+// not a leg here — it is evaluated before, and independent of, the relax helper (never relaxed in
+// any env, under any flag).
 const PAPER_RELAXABLE_LEGS: ReadonlySet<string> = new Set([HALT_LEG_BTC_SHOCK, HALT_LEG_ETH_SHOCK, HALT_LEG_OI, HALT_LEG_FUNDING, HALT_LEG_SPREAD]);
 
 // Global market-stress detector (ADR 0004 §6). Reads ONLY fields already on the market
@@ -94,12 +97,29 @@ export class StressHaltEvaluator {
         return distanceFromBalance > MARKET_STRESS_RESUME_BREADTH_DISTANCE;
     }
 
+    // The same_bar resume predicate (M28, ADR 0004 §6e), mirroring isGlobalStressed. Fail-closes on
+    // a NaN/Infinity in ANY consumed stress scalar (reuses the shared hasInvalidStressInputs guard,
+    // never a duplicated list) so a malformed snapshot resets the clean-tick counter. The resume
+    // threshold (STRESS_SAME_BAR_RESUME_COUNT = 12) is intentionally lower than the engage count
+    // (STRESS_SAME_BAR_HALT_COUNT = 20) — the 12→20 gap is the hysteresis band. Plays no role in the
+    // breadth resume path; never relaxed by the paper profile (so it takes no paper flag).
+    isSameBarStillStressed(snapshot: IMarketSnapshot): boolean {
+        if (this.hasInvalidStressInputs(snapshot)) {
+            return true; // multi-scalar NaN fail-closed
+        }
+
+        return snapshot.same_bar_trigger_count >= STRESS_SAME_BAR_RESUME_COUNT;
+    }
+
     // Every engage leg active on this snapshot, in the §6d enumeration order. Excludes the
     // invalid-inputs guard (handled before this runs). The single source of truth for "is this leg
     // active under the current config" (ADR 0042 §2, A2): a leg engages only when it crosses its
     // threshold AND it is active under the paper profile. Both isStressed and classifyHaltLeg
     // consume this list, so a relaxed leg disappears from both surfaces atomically.
-    private activeStressLegs(snapshot: IMarketSnapshot, params: IStrategyParams, isPaperRelaxActive: boolean): string[] {
+    // `_params` is retained in the signature (callers still thread the strategy params through the
+    // public isStressed/classifyHaltLeg API) but no longer read here: as of M28 every global stress
+    // leg engages on an engine-side const, so no leg consumes the strategy params (ADR 0004 §6e).
+    private activeStressLegs(snapshot: IMarketSnapshot, _params: IStrategyParams, isPaperRelaxActive: boolean): string[] {
         const legs: string[] = [];
 
         if (this.isLegActive(HALT_LEG_BTC_SHOCK, isPaperRelaxActive) && Math.abs(snapshot.btc_5m_move_pct) >= STRESS_BTC_5M_SHOCK_PCT) {
@@ -118,7 +138,10 @@ export class StressHaltEvaluator {
             legs.push(HALT_LEG_BREADTH);
         }
 
-        if (this.isLegActive(HALT_LEG_SAME_BAR, isPaperRelaxActive) && snapshot.same_bar_trigger_count >= params.stress_same_bar_trigger_count) {
+        // M28 (ADR 0004 §6e): same_bar engages on the engine-side STRESS_SAME_BAR_HALT_COUNT, NOT
+        // the strategy param. The param (=5) stays consumed ONLY by classifyFlowType for MARKET_BETA
+        // routing — re-coupling it to the halt would silently change flow classification.
+        if (this.isLegActive(HALT_LEG_SAME_BAR, isPaperRelaxActive) && snapshot.same_bar_trigger_count >= STRESS_SAME_BAR_HALT_COUNT) {
             legs.push(HALT_LEG_SAME_BAR);
         }
 
