@@ -6,6 +6,7 @@ import {
     IVirtualGateOutcome,
     IVirtualLedgerSnapshot,
     IVolatilityDetectedEvent,
+    MissedReasonEnum,
     PositionSideEnum,
     SignalActionEnum,
     type ISimulatedFill,
@@ -411,6 +412,14 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
         const adapter = new HistoricalFillAdapter();
         const fill = adapter.simulateFill(fillRequest);
 
+        // M27 (A0, carry-in from M26): tag every missed outcome with a durable
+        // `missedReason` so the soak can distinguish a no-tape miss from a
+        // price-not-touched miss (the M26 debug-log-only signal is now persisted).
+        // An empty tick set means there was no signal-bar tape to judge against
+        // (`missing_tick_data`); otherwise a miss means the next-bar entry price
+        // was never crossed (`price_not_touched`). A filled outcome carries null.
+        const missedReason = deriveMissedReason(evidence.ticks, fill.missed);
+
         // HistoricalFillAdapter / IBacktestFill exposes only a unified
         // `slippagePct` (no per-component decomposition). Stamping tierBase =
         // total slippage, latency/crossingSpread = 0 keeps the JSONB shape
@@ -428,6 +437,7 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
                 crossingSpread: '0',
             },
             missed: fill.missed,
+            missedReason,
             forceClose: false,
             // Every shadow open is treated as lowFidelity until the depth-
             // aware extension lands (ADR 0029 §2.4 + ADR 0019 criterion 12).
@@ -635,6 +645,22 @@ function isStopSideValid(tradeSide: PositionSideEnum, entryPriceStr: string, sto
     }
 
     return stop.gt(entry);
+}
+
+// M27 (A0): map a fill outcome to the durable `missedReason` tag.
+//   - filled (not missed)      → null
+//   - missed with no ticks     → 'missing_tick_data' (no signal-bar tape existed)
+//   - missed with ticks        → 'price_not_touched' (entry price never crossed)
+function deriveMissedReason(ticks: TickAggregateEntity[], missed: boolean): MissedReasonEnum | null {
+    if (!missed) {
+        return null;
+    }
+
+    if (ticks.length === 0) {
+        return MissedReasonEnum.MISSING_TICK_DATA;
+    }
+
+    return MissedReasonEnum.PRICE_NOT_TOUCHED;
 }
 
 interface IBarExtremes {

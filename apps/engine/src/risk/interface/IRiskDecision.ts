@@ -13,6 +13,12 @@ export interface IRiskDecision {
     readonly approvedSizing: IIntentSizing | null; // post-clamp sizing (funding 50% cut etc.)
     readonly clampedExit: IProposedExit | null; // SL possibly tightened to sit inside liquidation
     readonly reservationId: string | null; // ledger handle (§3), non-null IFF approved
+    // The classified market_stress halt leg (verbatim copy of the string the gate persists
+    // to risk_state.halt_reason) on a stress reject — fresh or already-halted-day. null for
+    // every non-stress outcome (approval, strategy skip, and all other reject reasons). The
+    // orchestrator stamps decisions.halt_reason_detail from this field directly — it never
+    // re-derives the leg.
+    readonly haltReasonDetail: string | null;
 }
 
 // The same decision narrowed to its approved shape: the four nullable fields are guaranteed

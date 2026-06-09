@@ -1,3 +1,4 @@
+import { IVolatilityDetectedEvent } from '@bot/shared';
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 
@@ -10,8 +11,9 @@ import {
     UNIVERSE_SYMBOL_ENTERED_EVENT,
     UNIVERSE_SYMBOL_LEFT_EVENT,
     UNIVERSE_SYMBOL_TIER_CHANGED_EVENT,
+    VOLATILITY_DETECTED_EVENT,
 } from '../../common/const';
-import { describeError } from '../../common/utils';
+import { describeError, parseMoney } from '../../common/utils';
 import { DUPLICATE_KEY_ERROR_FRAGMENTS } from '../const';
 import {
     ICandleClosedEvent,
@@ -21,6 +23,7 @@ import {
     ITickAggregateEvent,
     IUniverseTransition,
 } from '../interface';
+import { BookSnapshotRepository } from '../repository/BookSnapshotRepository';
 import { CandleRepository } from '../repository/CandleRepository';
 import { FundingRateRepository } from '../repository/FundingRateRepository';
 import { InstrumentRepository } from '../repository/InstrumentRepository';
@@ -44,6 +47,7 @@ export class MarketDataPersistenceListener {
         private readonly fundingRates: FundingRateRepository,
         private readonly instruments: InstrumentRepository,
         private readonly membership: UniverseMembershipRepository,
+        private readonly bookSnapshots: BookSnapshotRepository,
     ) {}
 
     @OnEvent(CANDLE_CLOSED_EVENT)
@@ -139,6 +143,54 @@ export class MarketDataPersistenceListener {
             // can never leave the symbol with zero open rows (a survivorship-biasing gap).
             await this.membership.changeTier(event.symbol, event.tier, new Date());
         });
+    }
+
+    // M27 Dispatch C — observability-only. Best-effort capture of the trigger-time
+    // book snapshot keyed by the stable per-trigger `event_id` so depth/spread can be
+    // joined back to the decision/shadow record. NEVER in the order path: every error
+    // (including the idempotent duplicate-key race) is swallowed so a persistence
+    // hiccup can never destabilise the trade loop. Only writes when `event_id` is
+    // present; idempotency is enforced by the partial UNIQUE index on event_id.
+    // INVARIANT: this handler must NEVER rethrow regardless of emit mode. It is fired
+    // fire-and-forget via `eventEmitter.emit` (not `emitAsync`), so a rejection here would
+    // surface as an unhandledRejection; the book-snapshot write is observability-only and
+    // must never destabilise the trade loop — recordBookSnapshot swallows every error.
+    @OnEvent(VOLATILITY_DETECTED_EVENT)
+    async onVolatilityDetected(event: IVolatilityDetectedEvent): Promise<void> {
+        await this.recordBookSnapshot(event);
+    }
+
+    private async recordBookSnapshot(event: IVolatilityDetectedEvent): Promise<void> {
+        const eventId = event.eventId?.trim();
+
+        if (!eventId) {
+            return;
+        }
+
+        try {
+            await this.bookSnapshots.record({
+                eventId,
+                symbol: event.symbol,
+                ts: new Date(event.entryCandleOpenTime),
+                spread: parseMoney(event.bidAskSpreadPct.toString()),
+                depth10bps: parseMoney(event.bookDepth10bpsUsdt),
+                depth50bps: parseMoney(event.bookDepth50bpsUsdt),
+                // No bid/ask on the event → mid cannot be derived; left NULL by design.
+                midAtTrigger: null,
+            });
+        } catch (cause) {
+            const message = describeError(cause).toLowerCase();
+
+            if (DUPLICATE_KEY_ERROR_FRAGMENTS.some((fragment) => message.includes(fragment))) {
+                // Idempotent happy path: same event_id already captured (re-emit /
+                // restart). Debug, not warn — this is expected and benign.
+                this.logger.debug(`book_snapshots row for event ${eventId} already present (idempotent)`);
+
+                return;
+            }
+
+            this.logger.warn(`Failed to persist book_snapshots for event ${eventId}: ${describeError(cause)}`);
+        }
     }
 
     // Single try/catch wrapper so error handling is one thing. A duplicate-key collision

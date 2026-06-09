@@ -8,6 +8,7 @@ import {
     OrderIntentActionEnum,
     PositionSideEnum,
     RejectReasonEnum,
+    RiskOutcomeEnum,
     SignalActionEnum,
     SkipReasonEnum,
 } from '@bot/shared';
@@ -54,6 +55,21 @@ interface IBufferedCandidate {
 interface IOpenSignal extends ISignal {
     readonly tradeSide: PositionSideEnum;
     readonly proposedExit: IProposedExit;
+}
+
+// M27 observability-only (A8). The trade geometry + halt-leg detail persisted on a gate-row
+// decision. Money fields are decimal-as-text (decimal.js .toFixed()); null where the gate
+// produced no value (most reject geometry is null). haltReasonDetail rides verbatim off the
+// decision — StrategyService never re-classifies the halt leg.
+interface IDecisionGeometry {
+    readonly gateAllowed: boolean;
+    readonly tradeSide: PositionSideEnum;
+    readonly stopLoss: string | null;
+    readonly takeProfit: string | null;
+    readonly qty: string | null;
+    readonly notional: string | null;
+    readonly leverage: string | null;
+    readonly haltReasonDetail: string | null;
 }
 
 // The orchestrator (ADR 0003 §6/§7 + ADR 0004 §1/§4). Per trigger it classifies
@@ -115,7 +131,9 @@ export class StrategyService implements OnModuleInit {
         const flowType = classifyFlowType(event, this.activeParams);
         const signalScore = computeSignalScore(event, this.activeParams, flowType);
         const stampedEvent: IVolatilityDetectedEvent = { ...event, flowType };
-        const snapshot = buildMarketSnapshot({ event: stampedEvent, params: this.activeParams, flowType, signalScore });
+        // active_positions_count starts at the pre-gate placeholder 0 (no gate state loaded yet);
+        // gate rows re-stamp the real post-evaluate open count in stampGateVerdict (M27, A4).
+        const snapshot = buildMarketSnapshot({ event: stampedEvent, params: this.activeParams, flowType, signalScore, activePositionsCount: 0 });
         const openPosition = await this.loadOpenPositionState(event.symbol);
 
         const signal = this.activeStrategy.evaluate({ event: stampedEvent, snapshot, openPosition, params: this.activeParams, nowMs });
@@ -294,9 +312,15 @@ export class StrategyService implements OnModuleInit {
         intent: IOrderIntent,
         nowMs: number,
     ): Promise<void> {
-        const context = await this.buildGateContext(event.symbol, snapshot, nowMs);
+        const { context, openPositionsCount } = await this.buildGateContext(event.symbol, snapshot, nowMs);
         const decision = await this.riskGate.evaluate(intent, context);
-        const stampedSnapshot = this.stampGateVerdict(snapshot, decision);
+
+        // A4 (M27): the active-position count stamped onto the snapshot is the pre-evaluate
+        // count loaded while building the gate context. On APPROVED the new position is created
+        // later (after emitApproval), so the pre-evaluate count IS the post-evaluate count; on
+        // REJECT/SKIP nothing changes. This reuses the count the gate already loaded rather
+        // than issuing a second findOpen() read. Read-only — never fed back into the gate.
+        const stampedSnapshot = this.stampGateVerdict(snapshot, decision, openPositionsCount);
 
         await this.recordGateDecision(event, stampedSnapshot, signal, intent, decision);
 
@@ -305,11 +329,19 @@ export class StrategyService implements OnModuleInit {
         }
     }
 
-    private async buildGateContext(symbol: string, snapshot: IMarketSnapshot, nowMs: number): Promise<IRiskGateContext> {
+    // Returns the gate context plus the count of currently-open positions loaded while building
+    // it (A4, M27). The count is captured here — the one place open positions are read for this
+    // decision — so the caller can stamp it onto the snapshot without a second findOpen() read.
+    private async buildGateContext(
+        symbol: string,
+        snapshot: IMarketSnapshot,
+        nowMs: number,
+    ): Promise<{ context: IRiskGateContext; openPositionsCount: number }> {
         const utcDateString = new Date(nowMs).toISOString().slice(0, 10);
         const belowUniverseFloor = (await this.universe.findOpenMembership(symbol)) === null;
+        const openPositionsCount = (await this.openPositionsPort.findOpen()).length;
 
-        return {
+        const context: IRiskGateContext = {
             nowMs,
             utcDateString,
             snapshot,
@@ -324,6 +356,8 @@ export class StrategyService implements OnModuleInit {
             // realized-vs-modeled slippage / win-loss divergence verdict (docs/plans/M9-observability-control.md).
             modelDivergenceDetected: false,
         };
+
+        return { context, openPositionsCount };
     }
 
     // The operator control surface (HIGH): the gate reads limits from AppConfigService, not
@@ -338,13 +372,17 @@ export class StrategyService implements OnModuleInit {
         };
     }
 
-    // Overwrite the M3 snapshot placeholder slot with the gate's real verdict (ADR 0004 §4).
-    private stampGateVerdict(snapshot: IMarketSnapshot, decision: IRiskDecision): IMarketSnapshot {
+    // Overwrite the M3 snapshot placeholders with the gate's real verdict (ADR 0004 §4): the
+    // assigned slot on approval, and ALWAYS the real post-evaluate active-position count (M27,
+    // A4) — read-only, never fed back into the gate.
+    private stampGateVerdict(snapshot: IMarketSnapshot, decision: IRiskDecision, activePositionsCount: number): IMarketSnapshot {
+        const withCount: IMarketSnapshot = { ...snapshot, active_positions_count: activePositionsCount };
+
         if (decision.approvedSlot === null) {
-            return snapshot;
+            return withCount;
         }
 
-        return { ...snapshot, position_slot: decision.approvedSlot };
+        return { ...withCount, position_slot: decision.approvedSlot };
     }
 
     private emitApproval(intent: IOrderIntent, decision: IApprovedRiskDecision): void {
@@ -369,12 +407,29 @@ export class StrategyService implements OnModuleInit {
     ): Promise<void> {
         const reason = decision.rejectReason !== null ? decision.rejectReason : signal.reason;
 
-        await this.persistDecision(event, snapshot, signal, intent.intentAction, reason);
+        await this.persistDecision(event, snapshot, signal, intent.intentAction, reason, this.buildGateGeometry(intent, decision));
 
         this.logger.log(
             `gate ${event.symbol} v=${this.activeStrategyVersionId} action=${intent.intentAction} outcome=${decision.outcome} ` +
                 `slot=${decision.approvedSlot ?? '-'} reason=${reason}`,
         );
+    }
+
+    // M27 observability-only (A8). Trade geometry for a gate row: approval → gate_allowed=true
+    // with clamped SL/TP + approved sizing; reject → gate_allowed=false, trade_side from intent,
+    // SL/TP/sizing populated only if the gate produced a clamped exit / approved sizing (both
+    // null on most rejects). halt_reason_detail rides verbatim off the decision — never re-derived.
+    private buildGateGeometry(intent: IOrderIntent, decision: IRiskDecision): IDecisionGeometry {
+        return {
+            gateAllowed: decision.outcome === RiskOutcomeEnum.APPROVED,
+            tradeSide: intent.tradeSide,
+            stopLoss: decision.clampedExit?.stopLossPrice.toFixed() ?? null,
+            takeProfit: decision.clampedExit?.takeProfitPrice.toFixed() ?? null,
+            qty: decision.approvedSizing?.qty.toFixed() ?? null,
+            notional: decision.approvedSizing?.notional.toFixed() ?? null,
+            leverage: decision.approvedSizing?.leverage.toFixed() ?? null,
+            haltReasonDetail: decision.haltReasonDetail,
+        };
     }
 
     private async recordSkip(event: IVolatilityDetectedEvent, snapshot: IMarketSnapshot, signal: ISignal): Promise<void> {
@@ -398,7 +453,17 @@ export class StrategyService implements OnModuleInit {
         this.logger.log(`gate ${event.symbol} v=${this.activeStrategyVersionId} action=open outcome=rejected reason=${reason}`);
     }
 
-    private async persistDecision(event: IVolatilityDetectedEvent, snapshot: IMarketSnapshot, signal: ISignal, action: string, reason: string): Promise<void> {
+    // `geometry` is non-null only for a gate row (approval/reject). Strategy-skip and
+    // not-best-candidate rows pass nothing → gate_allowed and all geometry persist as null
+    // (no intent reached / no gate verdict produced the geometry) — M27, A8.
+    private async persistDecision(
+        event: IVolatilityDetectedEvent,
+        snapshot: IMarketSnapshot,
+        signal: ISignal,
+        action: string,
+        reason: string,
+        geometry: IDecisionGeometry | null = null,
+    ): Promise<void> {
         await this.decisions.record({
             symbol: event.symbol,
             strategyVersionId: this.activeStrategyVersionId,
@@ -406,6 +471,14 @@ export class StrategyService implements OnModuleInit {
             eventId: event.eventId,
             signalType: signal.signalType,
             marketSnapshot: snapshot,
+            gateAllowed: geometry?.gateAllowed ?? null,
+            tradeSide: geometry?.tradeSide ?? null,
+            stopLoss: geometry?.stopLoss ?? null,
+            takeProfit: geometry?.takeProfit ?? null,
+            qty: geometry?.qty ?? null,
+            notional: geometry?.notional ?? null,
+            leverage: geometry?.leverage ?? null,
+            haltReasonDetail: geometry?.haltReasonDetail ?? null,
             action,
             reason,
         });

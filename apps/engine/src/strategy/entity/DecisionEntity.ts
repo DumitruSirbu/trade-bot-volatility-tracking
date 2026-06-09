@@ -49,4 +49,34 @@ export class DecisionEntity {
     @ManyToOne(() => PositionEntity, { onDelete: 'SET NULL', onUpdate: 'CASCADE' })
     @JoinColumn({ name: 'position_id', referencedColumnName: 'id' })
     position?: PositionEntity | null;
+
+    // M27 observability-only (additive, nullable). Captures the trade geometry
+    // and halt-leg detail behind each decision so live decisions can be audited
+    // and compared against shadow geometry without re-deriving. No gate
+    // behaviour change. Money fields are decimal-as-text, mirroring the
+    // ShadowDecisionEntity money-column convention. Nullable for skip / rejected
+    // / halted rows and for rows persisted before this migration.
+    @Column({ name: 'gate_allowed', type: 'boolean', nullable: true })
+    gateAllowed?: boolean | null;
+
+    @Column({ name: 'trade_side', type: 'varchar', nullable: true })
+    tradeSide?: string | null;
+
+    @Column({ name: 'stop_loss', type: 'text', nullable: true })
+    stopLoss?: string | null;
+
+    @Column({ name: 'take_profit', type: 'text', nullable: true })
+    takeProfit?: string | null;
+
+    @Column({ name: 'qty', type: 'text', nullable: true })
+    qty?: string | null;
+
+    @Column({ name: 'notional', type: 'text', nullable: true })
+    notional?: string | null;
+
+    @Column({ name: 'leverage', type: 'text', nullable: true })
+    leverage?: string | null;
+
+    @Column({ name: 'halt_reason_detail', type: 'varchar', nullable: true })
+    haltReasonDetail?: string | null;
 }

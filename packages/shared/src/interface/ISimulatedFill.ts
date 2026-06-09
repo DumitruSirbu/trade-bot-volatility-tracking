@@ -1,3 +1,5 @@
+import { MissedReasonEnum } from '../enum/index.js';
+
 // M11a W0.5: Shadow fill simulator output contract.
 // Pinned inline in M11a §W0.5 and ADR 0029 §2.3.2 for queryability from the read API.
 // Produced by the M7 BacktestRunnerService fill simulator and stored in shadow_decisions.simulated_fill (jsonb).
@@ -19,4 +21,5 @@ export interface ISimulatedFill {
     readonly closeReason: 'sl' | 'tp' | 'force_close' | 'intra_bar_stop' | null;
     readonly feeUsdtEntry?: string | null; // Entry-leg taker fee in USDT (decimal string). Null until depth-aware fill simulator populates it.
     readonly feeUsdtExit?: string | null; // Exit-leg taker fee in USDT (decimal string). Null until the close-side simulator is wired.
+    readonly missedReason?: MissedReasonEnum | null; // M27: Reason for missed fill; populated by analysis layer
 }

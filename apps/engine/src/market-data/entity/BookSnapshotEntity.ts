@@ -25,4 +25,15 @@ export class BookSnapshotEntity {
 
     @Column({ name: 'depth_50bps', type: 'numeric', precision: 38, scale: 8, nullable: true, transformer: decimalColumnTransformer })
     depth50bps?: MoneyValue | null;
+
+    // M27 Dispatch C — stable per-trigger id linking this snapshot to its volatility
+    // event/decision. Partial UNIQUE index (event_id IS NOT NULL) lives in the
+    // migration — TypeORM cannot express a partial index via decorator.
+    @Column({ name: 'event_id', type: 'varchar', nullable: true })
+    eventId?: string | null;
+
+    // Top-of-book mid captured around the trigger. Decimal-as-text via the shared money
+    // transformer, written only when bid/ask are available; NULL otherwise.
+    @Column({ name: 'mid_at_trigger', type: 'numeric', precision: 38, scale: 18, nullable: true, transformer: decimalColumnTransformer })
+    midAtTrigger?: MoneyValue | null;
 }

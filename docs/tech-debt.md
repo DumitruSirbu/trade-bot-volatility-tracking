@@ -82,6 +82,7 @@ Items resolved or no longer applicable should be removed. New items added at the
 | `void param;` suppressions cleanup (3 in `runWeeklyLoop` + `main`) | `apps/agent/` | M13 | |
 | ESLint disable noise (5 pragmas in agent) — eliminable via scoped override | `eslint.config.js` | M13 | |
 | pino logger redact paths may need broadening as sub-objects appear | `apps/engine/` | M13 | |
+| **[M27] Intentional asymmetry: `ISimulatedFillCore.missedReason: string | null` vs `ISimulatedFill.missedReason: MissedReasonEnum | null`** | `packages/shared/src/interface/`, `apps/engine/` | M27 | Core adapter layer (`HistoricalFillAdapter`, `StreamingFillAdapter`) preserve internal implementation values ('timeout', 'no_tick_cached') as strings; only the public `ISimulatedFill` contract (engine-output, DB persistence, analysis) uses the typed enum (`MISSING_TICK_DATA`, `PRICE_NOT_TOUCHED`). Asymmetry is intentional — allows future adapter additions without modifying the public enum. Low-priority future cleanup: consolidate to single typed enum on both interfaces if adapter diversity proves unnecessary. (Added M27) |
 | `notePragmaticTransition` clamps + try-block order + `startOfRiskDayMs` init + `lastTransitionAuditId` JSDoc (W2.6) | `HaltService.ts` | M11 | |
 | AUTH token TTL comment (W2.8) | `apps/engine/src/auth/` | M11 | |
 | Cache-Control on halt/history endpoints (W2.7) | `HaltController.ts` | M11 | |

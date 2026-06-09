@@ -61,6 +61,14 @@ interface ILoadedState {
 // per-evaluate working copy whose halt fields the auto-resume branch clears in place.
 type IMutableRiskStateDay = { -readonly [Key in keyof IRiskStateDay]: IRiskStateDay[Key] };
 
+// M27 observability-only. A failing-check verdict that carries the reject reason plus, for a
+// market_stress halt, the classified halt leg (`haltReasonDetail`). Non-stress checks set
+// `haltReasonDetail: null`. The orchestrator stamps decisions.halt_reason_detail from this.
+interface IRejectVerdict {
+    readonly reason: RejectReasonEnum;
+    readonly haltReasonDetail: string | null;
+}
+
 // The central risk gate (ADR 0004 §1/§2). The single chokepoint: nothing reaches execution
 // without passing it, and NO order action bypasses it. open/add run the full ordered check
 // pipeline; reduce/close/flatten always approve but still route through (record decision,
@@ -396,6 +404,7 @@ export class RiskGateService {
             approvedSizing: intent.sizing,
             clampedExit: intent.proposedExit,
             reservationId: null,
+            haltReasonDetail: null,
         };
     }
 
@@ -407,7 +416,7 @@ export class RiskGateService {
         const reject = await this.firstFailingCheck(intent, context, state, ledger);
 
         if (reject !== null) {
-            return this.rejected(intent, reject);
+            return this.rejected(intent, reject.reason, reject.haltReasonDetail);
         }
 
         const slot = this.assignSlot(intent, context, state, ledger);
@@ -439,28 +448,35 @@ export class RiskGateService {
         context: IRiskGateContext,
         state: ILoadedState,
         ledger: ReservationLedger,
-    ): Promise<RejectReasonEnum | null> {
-        const haltReason = await this.firstFailingHaltCheck(context, state);
+    ): Promise<IRejectVerdict | null> {
+        const haltVerdict = await this.firstFailingHaltCheck(context, state);
 
-        if (haltReason !== null) {
-            return haltReason;
+        if (haltVerdict !== null) {
+            return haltVerdict;
         }
 
         const tierReason = this.firstFailingTierFilter(intent, context);
 
         if (tierReason !== null) {
-            return tierReason;
+            return this.withoutHaltDetail(tierReason);
         }
 
-        return this.checkStatefulLimits(intent, context, state, ledger);
+        const statefulReason = await this.checkStatefulLimits(intent, context, state, ledger);
+
+        return statefulReason === null ? null : this.withoutHaltDetail(statefulReason);
+    }
+
+    // M27 observability-only. Wrap a non-halt reject reason as a verdict with no halt-leg detail.
+    private withoutHaltDetail(reason: RejectReasonEnum): IRejectVerdict {
+        return { reason, haltReasonDetail: null };
     }
 
     // Global-halt + stress filters. A fresh stress verdict is recorded DURABLY on risk_state
     // (is_halted=true, halt_reason='market_stress') so the GLOBAL_HALT re-entry block and M9
     // (Telegram) both see it; the upsert is idempotent on the UTC-day key (replay-safe).
-    private async firstFailingHaltCheck(context: IRiskGateContext, state: ILoadedState): Promise<RejectReasonEnum | null> {
+    private async firstFailingHaltCheck(context: IRiskGateContext, state: ILoadedState): Promise<IRejectVerdict | null> {
         if (!Number.isFinite(context.nowMs)) {
-            return RejectReasonEnum.GLOBAL_HALT;
+            return this.withoutHaltDetail(RejectReasonEnum.GLOBAL_HALT);
         }
 
         // M9 R2 — UTC-day rollover reset for the stress dedup flag. Mirrors
@@ -482,7 +498,7 @@ export class RiskGateService {
         if (context.modelDivergenceDetected) {
             this.emitModelDivergenceOnce(context);
 
-            return RejectReasonEnum.MODEL_DIVERGENCE_HALT;
+            return this.withoutHaltDetail(RejectReasonEnum.MODEL_DIVERGENCE_HALT);
         }
 
         // M9 W6.1 — context signal cleared; reset the transition flag so the
@@ -490,10 +506,10 @@ export class RiskGateService {
         this.divergenceEmitted = false;
 
         if (state.today !== null && state.today.isHalted) {
-            const dayHaltReason = await this.resolveDayHalt(context, state);
+            const dayHaltVerdict = await this.resolveDayHalt(context, state);
 
-            if (dayHaltReason !== null) {
-                return dayHaltReason;
+            if (dayHaltVerdict !== null) {
+                return dayHaltVerdict;
             }
         }
 
@@ -516,7 +532,9 @@ export class RiskGateService {
                 this.stressClearCount = 0;
             }
 
-            return RejectReasonEnum.MARKET_STRESS;
+            // M27 — the detail is the SAME string persistHalt wrote to risk_state.halt_reason
+            // (market_stress:<leg>), so the decision row and the day-row agree verbatim.
+            return { reason: RejectReasonEnum.MARKET_STRESS, haltReasonDetail: this.buildPersistedHaltReason(context, RejectReasonEnum.MARKET_STRESS) };
         }
 
         return null;
@@ -527,31 +545,35 @@ export class RiskGateService {
     // through to the fresh isStressed() engage check so a same-tick re-stress can re-halt). The
     // branch runs BEFORE the legacy day-lock early return: every non-breadth stress leg, every
     // loss-based reason, a hit re-halt cap, or a disabled flag all keep the full-day lock.
-    private async resolveDayHalt(context: IRiskGateContext, state: ILoadedState): Promise<RejectReasonEnum | null> {
+    private async resolveDayHalt(context: IRiskGateContext, state: ILoadedState): Promise<IRejectVerdict | null> {
         const day = state.today;
 
         if (day === null) {
             return null;
         }
 
+        // M27 — an already-halted-day reject carries the persisted halt_reason verbatim
+        // (the day-row is the source of truth here; the gate does NOT re-classify the leg).
+        const dayHaltVerdict: IRejectVerdict = { reason: RejectReasonEnum.GLOBAL_HALT, haltReasonDetail: day.haltReason };
+
         if (!this.isBreadthAutoResumeEligible(day.haltReason)) {
-            return RejectReasonEnum.GLOBAL_HALT;
+            return dayHaltVerdict;
         }
 
         if (this.stressReHaltCount >= MARKET_STRESS_MAX_DAILY_REHALT) {
-            return RejectReasonEnum.GLOBAL_HALT;
+            return dayHaltVerdict;
         }
 
         if (this.stress.isGlobalStressed(context.snapshot)) {
             this.stressClearCount = 0;
 
-            return RejectReasonEnum.GLOBAL_HALT;
+            return dayHaltVerdict;
         }
 
         this.stressClearCount++;
 
         if (this.stressClearCount < MARKET_STRESS_RESUME_CLEAR_TICKS) {
-            return RejectReasonEnum.GLOBAL_HALT;
+            return dayHaltVerdict;
         }
 
         await this.autoResumeMarketStress(context, day);
@@ -1062,6 +1084,7 @@ export class RiskGateService {
             approvedSizing: intent.sizing,
             clampedExit,
             reservationId: reservation.reservationId,
+            haltReasonDetail: null,
         };
     }
 
@@ -1127,7 +1150,11 @@ export class RiskGateService {
         };
     }
 
-    private rejected(intent: IOrderIntent, reason: RejectReasonEnum): IRiskDecision {
+    // M27 observability-only. `haltReasonDetail` is the classified market_stress leg string
+    // (verbatim copy of what the gate persists / read back from risk_state); null for every
+    // non-stress reject. It rides on the verdict so the orchestrator stamps the decision row
+    // without re-deriving the leg. The accept/reject decision is unchanged.
+    private rejected(intent: IOrderIntent, reason: RejectReasonEnum, haltReasonDetail: string | null = null): IRiskDecision {
         this.logger.log(`REJECTED ${intent.intentAction} ${intent.symbol} reason=${reason}`);
 
         return {
@@ -1137,6 +1164,7 @@ export class RiskGateService {
             approvedSizing: null,
             clampedExit: null,
             reservationId: null,
+            haltReasonDetail,
         };
     }
 

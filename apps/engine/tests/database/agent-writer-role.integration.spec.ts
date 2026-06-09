@@ -229,12 +229,15 @@ describe('agent_writer migration — reversibility (ADR 0036)', () => {
         if (skipIfNotReachable()) return;
 
         // draft_strategy_version is created by the first M13 migration
-        // (20260620000000). Later M13 migrations (agent_run_history table, the
-        // record_agent_run_history SDF, the revoked_jti grant) were stacked on
-        // top, so undoing a fixed count rots whenever a migration is added.
-        // Undo migrations one at a time until the function is gone (bounded so a
-        // genuinely irreversible down() surfaces as a clear failure, not a hang).
-        const MAX_UNDO = 8;
+        // (20260620000000). Later migrations (agent_run_history table, the
+        // record_agent_run_history SDF, the revoked_jti grant, shadow/strategy
+        // additions, the M27 trade-geometry + book_snapshots columns) were
+        // stacked on top, so undoing a fixed count rots whenever a migration is
+        // added. Undo migrations one at a time until the function is gone; the
+        // bound is only a hang-guard so a genuinely irreversible down() surfaces
+        // as a clear failure rather than looping forever. Keep generous headroom
+        // above the current migration depth on top of 20260620000000.
+        const MAX_UNDO = 24;
         let undone = 0;
         for (; undone < MAX_UNDO; undone += 1) {
             const stillPresent = await adminClient!.query<{ proname: string }>(`SELECT proname FROM pg_proc WHERE proname = 'draft_strategy_version'`);
