@@ -596,7 +596,8 @@ else:
 - **Eligible:** a halt whose sole engaging global leg is breadth collapse/surge.
 - **Full-day locked (unchanged):** BTC 5m shock, ETH 5m shock, OI shock, funding extreme,
   market-wide spread blowout, same-bar trigger saturation, NaN fail-closed engage, and any
-  snapshot where two or more global legs engage together.
+  snapshot where two or more global legs engage together. **(M28 supersedes the `same_bar` entry —
+  same-bar saturation became resume-eligible; see §6e.)**
 - **Out of scope entirely (full-day lock unchanged):** loss-based halts —
   `consecutive_loss_halt`, `daily_loss_limit`, `weekly_loss_limit`, `model_divergence_halt`.
   These never auto-resume regardless of clean-tick count; a cooling-off to UTC rollover is the
@@ -623,7 +624,7 @@ vocabulary stay in sync:
 | `market_stress:oi` | OI 5m shock | full-day lock |
 | `market_stress:funding` | funding extreme | full-day lock |
 | `market_stress:spread` | market-wide spread blowout | full-day lock |
-| `market_stress:same_bar` | `same_bar_trigger_count` saturation | full-day lock |
+| `market_stress:same_bar` | `same_bar_trigger_count` saturation | **resume-eligible (M28 — see §6e)** |
 | `market_stress:invalid` | NaN fail-closed engage | full-day lock (conservative) |
 | `market_stress:multi` | **two or more** global legs on the same snapshot | full-day lock |
 | `market_stress` (bare, legacy) | written before M23 | full-day lock (fail-safe) |
@@ -632,12 +633,14 @@ vocabulary stay in sync:
 the suffix MUST enumerate **every** engage path in the `isStressed()` disjunction — invalid
 inputs, BTC 5m shock, ETH 5m shock, breadth, `same_bar`, OI, funding, spread — so no engage is
 silently misclassified. It returns a **single canonical suffix** per the
-**most-conservative-leg-wins** rule: tag `:breadth` (resume-eligible) **only when breadth is the
-sole engaging global leg**; if breadth engages alongside any other global leg on the same
-snapshot, tag `:multi` (full-day lock). **Fail-safe parse:** any `market_stress` reason without a
-recognised resume-eligible suffix — `:multi`, `:same_bar`, `:invalid`, every non-breadth leg, and
-the legacy bare `market_stress` — defaults to full-day lock (unknown suffix → no auto-resume).
-This preserves backward compatibility with rows already in the soak DB.
+**most-conservative-leg-wins** rule: tag `:breadth` **or** `:same_bar` (both resume-eligible since
+M28 — see §6e) **only when that leg is the sole engaging global leg**; if it engages alongside any
+other global leg on the same snapshot, tag `:multi` (full-day lock). **Fail-safe parse (M28
+update):** the recognised **resume-eligible** suffixes are `{ :breadth, :same_bar }`. Any
+`market_stress` reason whose suffix is not in that set — `:multi`, `:invalid`, every other
+single leg (`:btc_shock`, `:eth_shock`, `:oi`, `:funding`, `:spread`), and the legacy bare
+`market_stress` — defaults to full-day lock (unknown/non-eligible suffix → no auto-resume). This
+preserves backward compatibility with rows already in the soak DB.
 
 **No-double-prefix contract (locked — restore/flag round-trip).** `risk_state.halt_reason` is the
 single source of truth and stores the full string `market_stress:<leg>`. The in-memory halt flag
@@ -764,6 +767,139 @@ enabled, live activation requires **both**:
 
 The M21/M22 14-day slippage telemetry is still running; M23's gate composes with it — neither
 unlocks live alone.
+
+### 6e. Same-bar stress recalibration + auto-resume wiring (M28)
+
+**This subsection (1) raises the `same_bar` engage threshold and moves it engine-side, and (2)
+extends the §6d auto-resume mechanism to the `same_bar` leg. It does not change the breadth resume
+path, the engage semantics of any other leg, or the §6d re-halt cap.** Like M21/M22/M23 it is
+**code-only and migration-free** — no schema change, no shared-package change, no DB write at rest;
+an engine restart picks it up.
+
+**Why (calibration failure).** Before M28 the engage check was
+`same_bar_trigger_count >= params.stress_same_bar_trigger_count` with the param seeded at **5**.
+With a ~100-symbol universe, threshold=5 means a **5% co-trigger rate halts the whole UTC day** —
+routine correlated behaviour in crypto, not a cascade. A 14-day soak makes the separation explicit:
+routine days peak at 10–12 same-bar (Jun 6 ran 118 decisions, max 12, no harm), elevated correlated
+sessions peak 26–30 (Jun 4/5), and the genuine cascade (Jun 7) peaked at **52** with avg 17.3 and
+50% of bars hot. Threshold=5 cannot tell a 5% drift from a 52-symbol cascade.
+
+**Engage threshold — move engine-side, raise to 20 (locked).** A new risk-only engine const
+`STRESS_SAME_BAR_HALT_COUNT = 20` replaces the strategy-param comparison in `activeStressLegs`.
+
+- **Decoupling (the key structural decision).** `stress_same_bar_trigger_count` is **also** read by
+  `classifyFlowType` to route `MARKET_BETA` flow
+  (`marketBreadth5mUpPct > stress_breadth_pct && sameBarTriggerCount >= stress_same_bar_trigger_count`).
+  This is the identical coupling §6b called out for breadth and resolved by moving the halt
+  threshold engine-side. **The halt reads the const; flow classification reads the param; neither
+  sees the other.** The param **stays at 5** and remains consumed **only** by `classifyFlowType` —
+  re-seeding it to fix the halt would silently change flow routing. Do not re-couple them.
+- **Value = 20 (distribution-separated).** Above the routine ceiling (12) with an 8-count buffer;
+  engages on the genuine cascade days (Jun 4/5/7 all peak > 20); ~20% co-trigger on ~100 symbols =
+  a real market-wide pile-on. 15 rejected (only a 3-count buffer over Jun 6's calm max=12 — would
+  mis-fire on a no-harm day). 25+ rejected (would miss the elevated Jun 4/5 sessions that *should*
+  halt-then-resume). **Starting point, NOT a validated calibration** — same caveat as the breadth N;
+  the 14-day post-deploy soak re-confirms or re-tunes it (tech-debt, alongside the breadth-N item).
+
+**Auto-resume eligibility — `same_bar` joins `breadth` (locked).** §6d's
+`MARKET_STRESS_RESUME_ELIGIBLE_LEG` (single `breadth`) becomes a set
+`MARKET_STRESS_RESUME_ELIGIBLE_LEGS = { breadth, same_bar }`. The §6d `halt_reason` table row for
+`market_stress:same_bar` flips from **full-day lock** to **resume-eligible**. Every other suffix —
+`:multi`, `:invalid`, every other leg, bare legacy `market_stress`, and all loss-based reasons —
+stays full-day locked (unchanged). Most-conservative-leg-wins is intact: a `same_bar`+anything
+snapshot still classifies `:multi` and locks.
+
+**Resume predicate — `isSameBarStillStressed()` (same_bar-only + multi-scalar NaN fail-closed,
+locked).** A new method on `StressHaltEvaluator`, mirroring `isGlobalStressed`. It checks **only**
+the `same_bar` leg at a **resume** threshold distinct from engage. **Malformed-snapshot precheck
+(locked).** Before evaluating the leg count it fails closed on **any** non-finite consumed stress
+scalar — not just `same_bar_trigger_count` — reusing the engage-side `hasInvalidStressInputs` scalar
+set (`btc_5m_move_pct`, `eth_5m_move_pct`, `market_breadth_5m_up_pct`, `same_bar_trigger_count`,
+`open_interest_change_5m_pct`, `funding_rate_annualized`, `bid_ask_spread_pct`). A snapshot with a
+clean `same_bar_trigger_count` but a NaN elsewhere is treated **as stressed** (counter reset, no
+resume, no event). Without this, the gate would clear a `:same_bar` halt on malformed data, emit a
+spurious `triggerLeg='same_bar'` resume, advance the shared re-halt counter, then immediately
+re-halt as `market_stress:invalid` — a misleading transition that also corrupts postmortem
+attribution. `isGlobalStressed` already applies this multi-scalar guard; the two are now symmetric.
+The predicate plays no role in the breadth resume path (and breadth's `isGlobalStressed` plays no
+role in same_bar resume) — each leg's resume is judged only by its own leg signal, both behind the
+shared malformed-input fail-closed gate. This keeps the M25 invariant intact: invalid inputs are
+never relaxed and never counted clean.
+
+**Hysteresis — engage ≠ resume threshold (locked).** Mirrors §6d's breadth 40→30 inner band:
+
+- **Engage (M28):** halt when `same_bar_trigger_count >= STRESS_SAME_BAR_HALT_COUNT (20)`.
+- **Resume:** require `same_bar_trigger_count < STRESS_SAME_BAR_RESUME_COUNT (12)` — back inside the
+  routine band the soak showed is harmless.
+- **Hysteresis buffer:** a reading in `[12, 20)` is below the engage threshold but **not** clean
+  enough to count toward resume (it resets the counter). The 8-count gap is the buffer.
+
+**Consecutive-clean-tick confirmation — N=2 for same_bar (locked, distinct from breadth's 3).**
+`SAME_BAR_RESUME_CLEAR_TICKS = 2`. A same-bar pile-on is overwhelmingly a **single transient bar**
+(soak: Jun 9 avg 4.1 vs max 10; Jun 6 avg 2.6 vs max 12) — the spike bar appears, the next bar
+resolves. One confirming clean bar after the spike is sufficient; requiring 3 (breadth's count)
+would burn two extra bars for a leg that is structurally less persistent than breadth. The clean-tick
+counter is the **same** in-memory counter §6d uses; only the required count is leg-parameterised.
+Same starting-point caveat as the threshold (tech-debt).
+
+**Per-day re-halt cap — shared, unchanged (locked).** `MARKET_STRESS_MAX_DAILY_REHALT = 3` is reused
+as a **combined** cascade-chatter budget across breadth + same_bar (the existing in-memory counter
+already counts every `market_stress` re-halt, not a per-leg count). On the 3rd `market_stress`
+re-halt in one UTC day — any mix of legs — the gate falls back to the full-day lock for the rest of
+the day. M28 does **not** split the cap per leg (out of scope; a future refinement if 3/day proves
+too tight). The §6d restart quirk carries forward unchanged.
+
+**Branch placement + resume profile selection (locked).** The §6d resume branch in
+`resolveDayHalt` is unchanged in shape; M28 parameterises it by the persisted leg. A small pure
+helper `resumeProfileFor(leg)` returns `{ isStillStressed, requiredTicks }`:
+
+- leg `breadth` → `isGlobalStressed`, `MARKET_STRESS_RESUME_CLEAR_TICKS (3)` — unchanged.
+- leg `same_bar` → `isSameBarStillStressed`, `SAME_BAR_RESUME_CLEAR_TICKS (2)`.
+
+The clean-tick counter advance/reset, the re-halt cap check, the `autoResumeMarketStress`
+clear-day + `stressEmittedForDate` reset, and the in-memory day-row flip are **unchanged** — only
+the predicate and required-tick count are leg-selected. The resume log line and the
+`IMarketStressResumedEvent` payload now carry the **actual** resumed leg and the **leg-selected**
+clean-tick count (`triggerLeg='same_bar'`, `clearCount=2` on a same_bar resume), not the hard-coded
+`breadth`/`3`. `breadthAtResume` stays in the payload but is leg-irrelevant for a same_bar resume;
+M28 does not add a same-bar-count field (that would be a shared-package change — out of scope; the
+same_bar count is surfaced in the WARN log instead).
+
+**Resume-event dedup — per-transition, not per-UTC-day (M28, locked — fixes a pre-existing bug).**
+Before M28 `autoResumeMarketStress` deduped the `MARKET_STRESS_RESUMED` emit on
+`autoResumeEmittedForDate === utcDateString` — **at most one resume event per UTC day**. With breadth
+the only eligible leg this was tolerable; M28 makes a second same-day resume reachable (a breadth
+resume then a same_bar resume, or same_bar → re-halt → same_bar before the cap), and the day-only
+dedup would silently drop the second event — breaking the §6e monitoring criterion that every
+same_bar resume emits a `triggerLeg='same_bar'` event. M28 replaces it with **per-transition** dedup:
+each genuine HALTED→RUNNING transition emits exactly one event (the same-call `mutableDay.isHalted`
+flip already guards same-tick re-entry), while a same-tick duplicate is still suppressed. Equivalent
+keying `{ utcDateString, triggerLeg, dailyReHaltCount }` is acceptable; day-only dedup is not.
+
+**Halt-flag clear must recognise the new leg (M28, locked — `RiskListeners`).** The DB resume
+(`risk_state` clear) and the in-memory `HaltFlagService` clear are two paths: the gate clears the
+former, `RiskListeners.onMarketStressResumed` clears the latter on the `MARKET_STRESS_RESUMED` event.
+Before M28 the listener early-returned unless `triggerLeg === breadth`, so a same_bar resume would
+clear the DB but leave the in-memory flag halted — `GET /v1/control/halt` would keep reporting halted.
+M28 generalises the listener's leg check to `MARKET_STRESS_RESUME_ELIGIBLE_LEGS.has(triggerLeg)` so
+any resume-eligible leg clears the flag. The restart-safe `isHalted()` guard before `resume()` is
+unchanged.
+
+**Config flag — reuse `MARKET_STRESS_AUTO_RESUME_ENABLED` (locked).** No new flag. The §6d master
+switch (paper-default-on, live-default-off, read once at boot) gates the whole mechanism; `same_bar`
+resume rides under it. When off, both breadth and same_bar keep the pre-M23 full-day lock. A second
+flag is explicitly rejected — one master switch per mechanism.
+
+**Threshold homes (locked).** `STRESS_SAME_BAR_HALT_COUNT (20)`, `STRESS_SAME_BAR_RESUME_COUNT (12)`,
+and `SAME_BAR_RESUME_CLEAR_TICKS (2)` are all engine consts in `riskConsts.ts` — same home and
+rationale as the breadth resume consts. Risk config lives engine-side (Conflicts #1); the shared
+strategy-params schema is unchurned and the halt threshold stays off the param `classifyFlowType`
+reads.
+
+**Out of scope (M28).** Per-bar held-out validation of 20 / 12 / 2 (tech-debt, with breadth-N);
+splitting the re-halt cap per leg; persisting the in-memory counters; any change to the breadth
+resume path, the M25 paper-relax set (`same_bar` is never relaxed — §2 intact), the engage-side NaN
+guard, or the shared schema.
 
 ### 7. Live-vs-backtest contract — ports for time and state, pure decision core
 

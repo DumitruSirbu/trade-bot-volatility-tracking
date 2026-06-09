@@ -595,13 +595,13 @@ describe('RiskGateService M23 auto-resume — AR5/AR6/AR7/AR8: hysteresis bounda
 // ─── AR9: non-breadth halt stays full-day locked ──────────────────────────────
 
 describe('RiskGateService M23 auto-resume — AR9: non-breadth stress halts stay full-day locked', () => {
+    // same_bar removed: M28 made it resume-eligible (tested separately in M28 spec)
     const NON_BREADTH_HALT_REASONS = [
         'market_stress:btc_shock',
         'market_stress:eth_shock',
         'market_stress:oi',
         'market_stress:funding',
         'market_stress:spread',
-        'market_stress:same_bar',
         'market_stress:multi',
         'market_stress:invalid',
     ];

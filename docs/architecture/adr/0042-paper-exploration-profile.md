@@ -78,7 +78,7 @@ evaluator; it contains **no duplicate relax logic** of its own.
 |-----|----------|------|
 | `hasInvalidStressInputs` (NaN/non-finite guard) | **NEVER** | Fail-closed always. Never trade on a malformed snapshot, in any env, under any flag. The guard is evaluated before, and independent of, the relax helper. |
 | Breadth (`\|breadth−50\| ≥ STRESS_BREADTH_DISTANCE_PCT = 40`) | **NEVER** | M23 engage + auto-resume are untouched. `PAPER_RELAX_MARKET_STRESS` must not disable breadth engage, the breadth leg classification, or the M23 resume path. |
-| `same_bar_trigger_count` | **Not by this flag** | Governed **only** by the raised strategy param `stress_same_bar_trigger_count` (P2 item 2, the no-code lever). The flag does **not** touch this leg — double-relaxing it (param **and** flag) is forbidden. |
+| `same_bar_trigger_count` | **NEVER (M28 update)** | **Superseded by ADR 0004 §6e (M28).** The same-bar engage threshold moved engine-side to the const `STRESS_SAME_BAR_HALT_COUNT = 20`; the strategy param `stress_same_bar_trigger_count` (still 5) is now consumed **only** by `classifyFlowType` and no longer governs the halt. This leg is therefore **never** relaxed by `PAPER_RELAX_MARKET_STRESS` and is **not** tunable via the param either — it is recalibrated engine-side, not relaxed (ADR 0042 §2 invariant intact; same_bar is never in `PAPER_RELAXABLE_LEGS`). |
 | BTC 5m shock (`STRESS_BTC_5M_SHOCK_PCT`) | **Yes** | Skipped under the paper profile. |
 | ETH 5m shock (`STRESS_ETH_5M_SHOCK_PCT`) | **Yes** | Skipped under the paper profile. |
 | OI 5m shock (`STRESS_OI_CHANGE_5M_PCT`) | **Yes** | Skipped under the paper profile. |
@@ -256,7 +256,7 @@ For ~$1,500–$2,000 sizing capital supporting 3 concurrent $250 positions at �
 | `EXCHANGE_ENV` | `paper` | The single gating switch; every relaxation below is inert without it. |
 | `ACTIVE_STRATEGY_VERSION_ID` | `3` | v2 momentum — the volume driver. **Not 4** (v3 hybrid skips catalyst flow). |
 | `PAPER_RELAX_MARKET_STRESS` | `true` | Skips non-breadth global stress legs (§2). Strict-`true` only. |
-| `stress_same_bar_trigger_count` (strategy param) | raise above default ≥ 5 | The same-bar leg is relaxed via the param, **not** the flag (§2). No-code lever. |
+| `stress_same_bar_trigger_count` (strategy param) | **leave at 5 (M28 update)** | **Superseded by ADR 0004 §6e (M28).** No longer a same-bar halt lever — the halt threshold is the engine const `STRESS_SAME_BAR_HALT_COUNT = 20`. The param stays at 5 and is read **only** by `classifyFlowType` MARKET_BETA routing; raising it would silently change flow classification, not the halt. Do not tune the halt via this param. |
 | `MARKET_STRESS_AUTO_RESUME_ENABLED` | leave unset (paper-derives on) | M23 breadth auto-resume stays on in paper (unchanged). |
 | `MAX_EXPOSURE_PER_COIN_USDT` | `500` | Clears one max-size $250 position with 2× headroom. |
 | `MAX_SAME_DIRECTION_EXPOSURE_USDT` | `1500` | `= 3 × per-coin`, so same-direction is not the new ceiling when all 3 slots are same-side. |

@@ -21,6 +21,7 @@ import {
     STRESS_ETH_5M_SHOCK_PCT,
     STRESS_FUNDING_ANNUALIZED_PCT,
     STRESS_OI_CHANGE_5M_PCT,
+    STRESS_SAME_BAR_HALT_COUNT,
     STRESS_SPREAD_PCT,
 } from '../../../src/risk/const';
 import { StressHaltEvaluator } from '../../../src/risk/service/StressHaltEvaluator';
@@ -217,14 +218,20 @@ describe('StressHaltEvaluator', () => {
     });
 
     describe('same_bar_trigger_count trigger', () => {
-        it('triggers stress when same_bar_trigger_count >= stress_same_bar_trigger_count', () => {
-            const stressed = { ...calmSnapshot(), same_bar_trigger_count: 5 };
+        it('triggers stress when same_bar_trigger_count >= STRESS_SAME_BAR_HALT_COUNT (M28: const-governed, not param)', () => {
+            const stressed = { ...calmSnapshot(), same_bar_trigger_count: STRESS_SAME_BAR_HALT_COUNT };
             expect(makeEvaluator().isStressed(stressed, calmParams(), false)).toBe(true);
         });
 
-        it('does NOT trigger at one below the threshold', () => {
-            const calm = { ...calmSnapshot(), same_bar_trigger_count: 4 };
+        it('does NOT trigger at one below STRESS_SAME_BAR_HALT_COUNT', () => {
+            const calm = { ...calmSnapshot(), same_bar_trigger_count: STRESS_SAME_BAR_HALT_COUNT - 1 };
             expect(makeEvaluator().isStressed(calm, calmParams(), false)).toBe(false);
+        });
+
+        it('does NOT trigger at old param value 5 when const is 20 (decoupling regression lock)', () => {
+            const snapshot = { ...calmSnapshot(), same_bar_trigger_count: 5 };
+            const params = calmParams(); // stress_same_bar_trigger_count=5 in params
+            expect(makeEvaluator().isStressed(snapshot, params, false)).toBe(false);
         });
     });
 

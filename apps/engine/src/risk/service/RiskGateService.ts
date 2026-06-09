@@ -1,6 +1,7 @@
 import {
     CoinTierEnum,
     HaltSourceEnum,
+    IMarketSnapshot,
     IMarketStressResumedEvent,
     IModelDivergenceEvent,
     IRiskHaltEvent,
@@ -24,12 +25,14 @@ import {
     AGG_TRADE_BUY_FLOW_BALANCE,
     COIN_DEPTH_FLOOR_10BPS_USDT,
     CONSECUTIVE_LOSS_HALT_COUNT,
+    HALT_LEG_SAME_BAR,
     LIQUIDATION_SAFETY_BUFFER_FACTOR,
     MARKET_STRESS_MAX_DAILY_REHALT,
     MARKET_STRESS_RESUME_CLEAR_TICKS,
-    MARKET_STRESS_RESUME_ELIGIBLE_LEG,
+    MARKET_STRESS_RESUME_ELIGIBLE_LEGS,
     MAX_LEVERAGE,
     RESERVATION_TTL_MS,
+    SAME_BAR_RESUME_CLEAR_TICKS,
     TIER3_VALIDATED_VERSION_IDS,
     TIER_SPREAD_CEILING_PCT,
     WEEKLY_LOSS_WINDOW_DAYS,
@@ -67,6 +70,15 @@ type IMutableRiskStateDay = { -readonly [Key in keyof IRiskStateDay]: IRiskState
 interface IRejectVerdict {
     readonly reason: RejectReasonEnum;
     readonly haltReasonDetail: string | null;
+}
+
+// M28 (ADR 0004 §6e) — the leg-specific auto-resume profile. Bundles the resumed leg with its
+// still-stressed predicate and required clean-tick count so the resume call site threads ONE
+// object (≤2-arg convention) and the event payload + WARN log report the true resumed leg.
+interface IResumeProfile {
+    readonly leg: string;
+    readonly isStillStressed: (snapshot: IMarketSnapshot) => boolean;
+    readonly requiredTicks: number;
 }
 
 // The central risk gate (ADR 0004 §1/§2). The single chokepoint: nothing reaches execution
@@ -119,7 +131,9 @@ export class RiskGateService {
     private stressClearCount = 0; // consecutive clean global-breadth ticks in the inner band
     private stressReHaltCountForDate: string | null = null; // UTC day the re-halt counter belongs to
     private stressReHaltCount = 0; // breadth re-halts this UTC day; at the cap → full-day lock
-    private autoResumeEmittedForDate: string | null = null; // dedup for the MARKET_STRESS_RESUMED emit
+    // M28 — dedup key for the MARKET_STRESS_RESUMED emit, scoped to {utcDateString, triggerLeg,
+    // dailyReHaltCount} so two distinct legs (breadth then same_bar) can each emit in one UTC day.
+    private autoResumeEmittedForKey: string | null = null;
 
     constructor(
         private readonly ledger: ReservationLedger,
@@ -492,7 +506,7 @@ export class RiskGateService {
             this.stressReHaltCountForDate = context.utcDateString;
             this.stressReHaltCount = 0;
             this.stressClearCount = 0;
-            this.autoResumeEmittedForDate = null;
+            this.autoResumeEmittedForKey = null;
         }
 
         if (context.modelDivergenceDetected) {
@@ -556,7 +570,7 @@ export class RiskGateService {
         // (the day-row is the source of truth here; the gate does NOT re-classify the leg).
         const dayHaltVerdict: IRejectVerdict = { reason: RejectReasonEnum.GLOBAL_HALT, haltReasonDetail: day.haltReason };
 
-        if (!this.isBreadthAutoResumeEligible(day.haltReason)) {
+        if (!this.isStressLegAutoResumeEligible(day.haltReason)) {
             return dayHaltVerdict;
         }
 
@@ -564,7 +578,10 @@ export class RiskGateService {
             return dayHaltVerdict;
         }
 
-        if (this.stress.isGlobalStressed(context.snapshot)) {
+        const leg = day.haltReason!.split(':')[1] ?? '';
+        const profile = this.resumeProfileFor(leg);
+
+        if (profile.isStillStressed(context.snapshot)) {
             this.stressClearCount = 0;
 
             return dayHaltVerdict;
@@ -572,33 +589,67 @@ export class RiskGateService {
 
         this.stressClearCount++;
 
-        if (this.stressClearCount < MARKET_STRESS_RESUME_CLEAR_TICKS) {
+        if (this.stressClearCount < profile.requiredTicks) {
             return dayHaltVerdict;
         }
 
-        await this.autoResumeMarketStress(context, day);
+        await this.autoResumeMarketStress(context, day, profile);
 
         return null;
     }
 
-    // Only a breadth-SOLE market_stress halt auto-resumes (ADR 0004 §6d). The reason carries the
-    // canonical `market_stress:breadth` suffix; every other suffix (`:multi`, non-breadth legs,
-    // `:same_bar`, `:invalid`), a bare legacy `market_stress`, and every loss-based reason are not
-    // eligible. The whole branch is gated by the boot flag (paper-on, live-off).
-    private isBreadthAutoResumeEligible(haltReason: string | null): boolean {
+    // The leg-specific resume profile (M28, ADR 0004 §6e): same_bar resumes on its own
+    // still-stressed predicate after SAME_BAR_RESUME_CLEAR_TICKS (2) clean ticks; every other
+    // resume-eligible leg (breadth) uses the global breadth predicate after
+    // MARKET_STRESS_RESUME_CLEAR_TICKS (3). Pure — no state, no I/O.
+    private resumeProfileFor(leg: string): IResumeProfile {
+        if (leg === HALT_LEG_SAME_BAR) {
+            return {
+                leg,
+                isStillStressed: (snapshot) => this.stress.isSameBarStillStressed(snapshot),
+                requiredTicks: SAME_BAR_RESUME_CLEAR_TICKS,
+            };
+        }
+
+        return {
+            leg,
+            isStillStressed: (snapshot) => this.stress.isGlobalStressed(snapshot),
+            requiredTicks: MARKET_STRESS_RESUME_CLEAR_TICKS,
+        };
+    }
+
+    // A market_stress halt auto-resumes only when its persisted leg suffix is in the resume-eligible
+    // set (M23 breadth + M28 same_bar, ADR 0004 §6d/§6e). Every other suffix (`:multi`, non-resume
+    // legs, `:invalid`), a bare legacy `market_stress` with no suffix, and every loss-based reason
+    // are not eligible. The whole branch is gated by the boot flag (paper-on, live-off).
+    private isStressLegAutoResumeEligible(haltReason: string | null): boolean {
         if (!this.appConfig.marketStressAutoResumeEnabled) {
             return false;
         }
 
-        return haltReason === `${RejectReasonEnum.MARKET_STRESS}:${MARKET_STRESS_RESUME_ELIGIBLE_LEG}`;
+        if (haltReason === null) {
+            return false;
+        }
+
+        const [reason, leg] = haltReason.split(':');
+
+        if (reason !== RejectReasonEnum.MARKET_STRESS || leg === undefined) {
+            return false;
+        }
+
+        return MARKET_STRESS_RESUME_ELIGIBLE_LEGS.has(leg);
     }
 
-    // M23 (ADR 0004 §6d). Clear the persisted day-halt (preserving the PnL/exposure/trade
+    // M23/M28 (ADR 0004 §6d/§6e). Clear the persisted day-halt (preserving the PnL/exposure/trade
     // counters), drop the in-memory flag, reset the clean-tick counter, re-arm the stress-emit
     // dedup so a same-day re-halt still fires a fresh RISK_HALT_TRIGGERED (review M1), and emit
-    // MARKET_STRESS_RESUMED once per resume per UTC day. The caller flips the in-memory day row
-    // so later coins in the same tick do not re-enter the halted branch.
-    private async autoResumeMarketStress(context: IRiskGateContext, mutableDay: IMutableRiskStateDay): Promise<void> {
+    // MARKET_STRESS_RESUMED. The caller flips the in-memory day row so later coins in the same
+    // tick do not re-enter the halted branch. `leg` and `requiredTicks` carry the actual resumed
+    // leg's profile so the event payload and the WARN log report the true leg, not a hardcoded
+    // breadth value.
+    private async autoResumeMarketStress(context: IRiskGateContext, mutableDay: IMutableRiskStateDay, profile: IResumeProfile): Promise<void> {
+        const { leg, requiredTicks } = profile;
+
         await context.riskState.clearHaltForDate(context.utcDateString);
 
         mutableDay.isHalted = false;
@@ -608,18 +659,25 @@ export class RiskGateService {
         this.stressEmittedForDate = null;
 
         this.logger.warn(
-            `market_stress auto-resumed leg=${MARKET_STRESS_RESUME_ELIGIBLE_LEG} breadth=${context.snapshot.market_breadth_5m_up_pct} reHalts=${this.stressReHaltCount}`,
+            `market_stress auto-resumed leg=${leg} breadth=${context.snapshot.market_breadth_5m_up_pct} ` +
+                `sameBarCount=${context.snapshot.same_bar_trigger_count} reHalts=${this.stressReHaltCount}`,
         );
 
-        if (this.autoResumeEmittedForDate === context.utcDateString) {
+        // M28 — dedup is keyed on {utcDateString, triggerLeg, dailyReHaltCount}, NOT the date alone.
+        // A date-only guard silently suppressed a second same-day resume of a DIFFERENT leg (breadth
+        // then same_bar). The in-tick mutableDay.isHalted flip already prevents a same-tick duplicate,
+        // so this guard only coalesces repeat resumes of the SAME leg within the SAME re-halt cycle.
+        const resumeKey = `${context.utcDateString}:${leg}:${this.stressReHaltCount}`;
+
+        if (this.autoResumeEmittedForKey === resumeKey) {
             return;
         }
 
-        this.autoResumeEmittedForDate = context.utcDateString;
+        this.autoResumeEmittedForKey = resumeKey;
 
         const payload: IMarketStressResumedEvent = {
-            triggerLeg: MARKET_STRESS_RESUME_ELIGIBLE_LEG,
-            clearCount: MARKET_STRESS_RESUME_CLEAR_TICKS,
+            triggerLeg: leg,
+            clearCount: requiredTicks,
             breadthAtResume: context.snapshot.market_breadth_5m_up_pct,
             dailyReHaltCount: this.stressReHaltCount,
             utcDateString: context.utcDateString,
