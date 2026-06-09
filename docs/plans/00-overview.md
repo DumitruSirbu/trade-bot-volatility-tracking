@@ -183,6 +183,10 @@ dashboard talks to an authenticated read API. Full topology in `M15-cloud-go-liv
 | M13 | Agentic weekly loop (phase 2, local) | `M13-agentic-weekly-loop.md` |
 | M14 | CI review gate (phase 2, local) | `M14-ci-review-gate.md` |
 | M17 | Automated daily DB backup (local disk, 3-deep retention) | `M17-daily-db-backup.md` |
+| M24 | Live/paper open-fill wiring | `M24-live-paper-fill-wiring.md` |
+| M25 | Paper exploration enablement | `M25-paper-exploration.md` |
+| M26 | Shadow counterfactual fill wiring | `M26-shadow-fill-wiring.md` |
+| M27 | Decision data-capture completeness | `M27-decision-data-capture.md` |
 | M15 | Cloud go-live & scaling (gated by M11a soak exit criteria + M12/M13/M14) | `M15-cloud-go-live.md` |
 
 ## Cross-cutting risks
