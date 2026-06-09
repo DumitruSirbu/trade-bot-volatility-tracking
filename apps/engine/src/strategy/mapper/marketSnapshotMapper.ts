@@ -1,5 +1,7 @@
 import { CoinTierEnum, CorrelationModeEnum, FlowTypeEnum, IMarketSnapshot, IStrategyParams, IVolatilityDetectedEvent, PositionSlotEnum } from '@bot/shared';
 
+import { ACTIVE_POSITIONS_COUNT_DEFAULT } from '../const/strategyConsts';
+
 // Pure mapper: builds the persisted market_snapshot from the trigger event + the
 // orchestrator-stamped flow_type/signal_score. position_slot defaults to A here; the risk
 // gate overwrites it with the real assigned slot before persistence (ADR 0004 §4).
@@ -8,8 +10,6 @@ import { CoinTierEnum, CorrelationModeEnum, FlowTypeEnum, IMarketSnapshot, IStra
 // run their own ledger so the live open-count is not meaningful there); the live gate path
 // re-stamps the real post-evaluate open-position count in StrategyService (M27, A4). Extracted
 // from StrategyService so the orchestrator stays small (conventions: function size).
-
-const ACTIVE_POSITIONS_COUNT_DEFAULT = 0;
 
 export interface IMarketSnapshotInput {
     readonly event: IVolatilityDetectedEvent;

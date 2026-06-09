@@ -53,9 +53,9 @@ export const REQUIRED_SCHEMA_MANIFEST: ReadonlyArray<IRequiredTable> = [
     // M9 boot-blocker fix: actual M2 column is `rate` (numeric(18,10)),
     // not `funding_rate`. The manifest must reflect migration truth.
     { table: 'funding_rates', requiredColumns: ['symbol', 'funding_time', 'rate'] },
-    // M27 Dispatch C: additive observability columns — `event_id` links a snapshot
-    // to its triggering volatility event/decision; `mid_at_trigger` is the captured
-    // top-of-book mid. Both nullable in the table; listed here so the gate keeps
+    // Additive observability columns — `event_id` links a snapshot to its triggering
+    // volatility event/decision; `mid_at_trigger` is the captured top-of-book mid.
+    // Both nullable in the table; listed here so the gate keeps
     // drift detection accurate (presence, not non-null, is enforced).
     { table: 'book_snapshots', requiredColumns: ['symbol', 'ts', 'event_id', 'mid_at_trigger'] },
     { table: 'universe_membership', requiredColumns: ['symbol', 'entered_at'] },

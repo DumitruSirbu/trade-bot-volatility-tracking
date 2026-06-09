@@ -99,3 +99,7 @@ export const SHADOW_FILL_DEFAULT_POLICY = 'marketable_limit_ioc';
 // Held as a decimal-as-string per the project's money-is-Decimal invariant —
 // callers wrap in `new Decimal(SHADOW_TAKER_FEE_PCT)` for arithmetic.
 export const SHADOW_TAKER_FEE_PCT = '0.0004';
+
+// Default active-positions count stamped onto the market snapshot before the gate
+// evaluates; the real count is threaded in post-evaluate via stampGateVerdict.
+export const ACTIVE_POSITIONS_COUNT_DEFAULT = 0;
