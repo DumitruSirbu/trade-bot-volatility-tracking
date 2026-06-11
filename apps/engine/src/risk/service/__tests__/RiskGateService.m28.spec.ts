@@ -192,6 +192,7 @@ function buildIntent(): IOrderIntent {
             notional: new Money('50'),
             leverage: new Money('3'),
             riskPerTradeUsdt: new Money('5'),
+            effectiveRiskUsdt: new Money('5'),
         },
         flowType: FlowTypeEnum.FORCED_EXHAUSTION,
     };

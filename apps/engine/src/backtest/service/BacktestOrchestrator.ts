@@ -211,6 +211,7 @@ export class BacktestOrchestrator {
             fundingRate: event.fundingRate,
             fundingRateAnnualized: event.fundingRateAnnualized,
             fundingRateSuppressThreshold: ctx.params.funding_rate_suppress_threshold,
+            maxExposurePerCoinUsdt: new Money(MAX_EXPOSURE_PER_COIN_USDT),
             instrument,
         });
 

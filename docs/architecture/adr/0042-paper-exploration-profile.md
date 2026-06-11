@@ -201,6 +201,15 @@ sub-bucket math — it does NOT govern slots** (the gate ignores it for concurre
 config values; raising them scales position size and lowers `exposure_cap_per_coin` /
 `same_direction_exposure_cap` rejects without touching sizer code.
 
+> **[M29 AMENDMENT — 2026-06-10]:** Soak evidence (11 days, 36 `exposure_cap_per_coin` rejects
+> on an empty book) showed that config-only headroom (P3b) was insufficient: for low-ATR names,
+> the 1%-risk-targeted notional exceeds `MAX_EXPOSURE_PER_COIN_USDT=$500` before any position
+> exists, so the bot never opens. The sizer must clamp to the per-coin ceiling. `PositionSizer`
+> now accepts `maxExposurePerCoinUsdt` and applies it via `clampToCeilings`. This is a justified,
+> evidence-driven reversal of the "no `PositionSizer` change" lock. The per-coin cap value ($500)
+> is unchanged — the sizer shrinks to it, does not raise it. See ADR-0004 §8 for the clamp
+> semantics.
+
 ### 5. P1 — Activate v2 momentum (config-only)
 
 Set **`ACTIVE_STRATEGY_VERSION_ID = 3`** (DB id 3 = strategy version 2 momentum) in the paper

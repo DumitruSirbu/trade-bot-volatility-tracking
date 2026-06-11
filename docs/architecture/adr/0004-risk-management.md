@@ -970,6 +970,44 @@ logged per trade and stamped onto `positions` entry-time columns (`signal_score_
 `slippage_model_pct`, etc.) by M5/M6. `**riskPerTradePct` and `allocatedCapital` are new
 config/params** — see Conflicts.
 
+#### 8a. Sizer → per-coin-cap clamp + `effectiveRiskUsdt` (M29)
+
+> **Amendment (M29, 2026-06-10).** Soak evidence (11 days, 36 `exposure_cap_per_coin`
+> rejects on an empty book) showed that for low-ATR names the 1%-risk-targeted notional
+> exceeds `MAX_EXPOSURE_PER_COIN_USDT` *before any position exists*, so the bot never
+> opens. The fix moves the per-coin ceiling into the sizer as a shrink input. See ADR
+> 0042 §4 for the config-only-lock reversal that motivated this.
+
+1. **The sizer → cap clamp.** `PositionSizer` now accepts `maxExposurePerCoinUsdt` as a
+   sizing input and clamps the risk-targeted notional to
+   `min(riskTargeted, leverageCeiling, maxExposurePerCoinUsdt)`. The cap is the operator
+   hard ceiling; the sizer **shrinks** the 1%-risk target to fit it (shrink-never-grow),
+   the same shape as the existing leverage clamp (§8.3) — it can only lower notional,
+   never raise it. `RiskGateService.checkExposureCaps` remains **unchanged** as the final
+   authority (defence in depth for multi-reservation scenarios where the cap binds against
+   *existing* positions the sizer cannot see).
+
+2. **`effectiveRiskUsdt` (new field on `IIntentSizing`).** `riskPerTradeUsdt` is the
+   **pre-clamp** 1%-risk target (e.g. $15 = 1% of $1,500). `effectiveRiskUsdt` is the
+   **post-clamp** realized dollar risk:
+   `effectiveRiskUsdt = clampedNotional / entryPrice × stopDistance`. When no ceiling
+   binds, `effectiveRiskUsdt === riskPerTradeUsdt`. The gap between target and effective
+   is **audit signal** — `riskPerTradeUsdt` is **never overwritten** (the pre-clamp
+   intent is preserved for diagnosing how often, and how hard, the cap shrinks size).
+
+3. **R-multiple / expectancy denominator rule.** Any funnel rollup or PnL expectancy
+   calculation **MUST** use `effectiveRiskUsdt` as the denominator for R-multiples on
+   closed positions — it is the risk actually taken, not the pre-clamp target. Pre-M29
+   rows that lack `effectiveRiskUsdt` yield a **null** R-multiple, **not** a fallback to
+   `riskPerTradeUsdt` (falling back would silently overstate R when a clamp bound).
+
+4. **Funnel observability (D3).** The `getFunnelSummary` query in `packages/analysis` is
+   **observability-only**: read-only, derived from existing `decisions` rows, no new
+   schema. The `sl_outside_liquidation` sub-cause split (wrong-side stop / over-levered /
+   non-positive liquidation fraction) is derived from already-persisted columns
+   (`trade_side`, `stop_loss`, `leverage`, `notional`, `market_snapshot`) — there is **no
+   new `gate_reject_sub_reason` column**.
+
 ## M4 contract handoff
 
 ### `bot-shared-maintainer` adds to `packages/shared` (serial, first)

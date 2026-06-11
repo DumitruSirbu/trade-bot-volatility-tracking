@@ -222,6 +222,7 @@ export class StrategyService implements OnModuleInit {
             fundingRate: event.fundingRate,
             fundingRateAnnualized: event.fundingRateAnnualized,
             fundingRateSuppressThreshold: this.activeParams.funding_rate_suppress_threshold,
+            maxExposurePerCoinUsdt: new Money(this.config.maxExposurePerCoinUsdt),
             instrument,
         });
 

@@ -25,6 +25,9 @@ export type { IListPositionsParams, PositionListStatusFilter } from './query/lis
 export { getDecisions } from './query/getDecisions.js';
 export type { IGetDecisionsParams, IGetDecisionsResult } from './query/getDecisions.js';
 
+export { getFunnelSummary } from './query/getFunnelSummary.js';
+export type { IFunnelSummaryRow, GateAllowedBucket, SlSubCause } from './query/getFunnelSummary.js';
+
 export { selectHaltState } from './query/selectHaltState.js';
 
 export { decodeCursor, encodeCursor } from './util/CursorCodec.js';

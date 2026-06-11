@@ -117,6 +117,7 @@ function buildIntent(overrides: Partial<IOrderIntent> = {}): IOrderIntent {
             notional: new Money('250'),
             leverage: new Money('5'),
             riskPerTradeUsdt: new Money('10'),
+            effectiveRiskUsdt: new Money('10'),
         },
         flowType: FlowTypeEnum.TREND_INITIATION,
         ...overrides,
@@ -135,6 +136,7 @@ function buildApprovedDecision(): IRiskDecision {
             notional: new Money('250'),
             leverage: new Money('5'),
             riskPerTradeUsdt: new Money('10'),
+            effectiveRiskUsdt: new Money('10'),
         },
         clampedExit: {
             stopLossPrice: new Money('49100'),
