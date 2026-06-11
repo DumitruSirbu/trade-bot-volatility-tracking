@@ -28,6 +28,16 @@ export type { IGetDecisionsParams, IGetDecisionsResult } from './query/getDecisi
 export { getFunnelSummary } from './query/getFunnelSummary.js';
 export type { IFunnelSummaryRow, GateAllowedBucket, SlSubCause } from './query/getFunnelSummary.js';
 
+export { getIdiosyncraticEdgeReport } from './query/getIdiosyncraticEdgeReport.js';
+export type { IIdiosyncraticEdgeReport, IIdiosyncraticEdgeReportParams, IRegimeBucket } from './query/getIdiosyncraticEdgeReport.js';
+
+export { getIdiosyncrasyMissDistribution } from './query/getIdiosyncrasyMissDistribution.js';
+export type {
+    IIdiosyncrasyMissDistributionRow,
+    IIdiosyncrasyMissDistributionParams,
+    IMissDistributionBucket,
+} from './query/getIdiosyncrasyMissDistribution.js';
+
 export { selectHaltState } from './query/selectHaltState.js';
 
 export { decodeCursor, encodeCursor } from './util/CursorCodec.js';

@@ -1008,6 +1008,90 @@ config/params** — see Conflicts.
    (`trade_side`, `stop_loss`, `leverage`, `notional`, `market_snapshot`) — there is **no
    new `gate_reject_sub_reason` column**.
 
+#### 8b. Idiosyncratic-edge soak gate + idiosyncrasy observability (M30)
+
+> **Amendment (M30, 2026-06-11).** M29 made the first idiosyncratic paper fill possible
+> and instrumented the funnel, but left the slot-C prerequisite as a prose floor ("≥20
+> closed trades across ≥3 trading days"). M30 turns that floor into an **executable
+> instrument** — `getIdiosyncraticEdgeReport.slotCGateOpen` — and closes the
+> idiosyncrasy-funnel blind-spot. **Measurement-first, minimum-touch:** no migration, no
+> shared-package change, no DB-param change, no safety floor relaxed. The only runtime
+> change is a provably-tightening noise floor in a pure function (D4).
+
+1. **`slotCGateOpen` is a sample-readiness signal, NOT an edge-positive assertion.**
+   `slotCGateOpen = meetsClosedTradeFloor (n ≥ 20) AND meetsTradingDayFloor
+   (distinctTradingDays ≥ 3)`. It means "there are enough closed idiosyncratic trades to
+   evaluate the edge," nothing more. A measured **negative** expectancy with the gate open
+   is actionable data — it means "decide" (the sample is large enough to act on), **not**
+   "build." No slot-C / correlated-strategy milestone may open until this reads `true`
+   (D1 lock; tech-debt MEDIUM "Differentiated correlated slot-C strategy").
+
+2. **Fill-anchored risk reconstruction (F1 — `effectiveRiskUsdt` is never persisted).**
+   `effectiveRiskUsdt` (§8a.2) lives only on the engine-internal `IIntentSizing` and is
+   dropped at persistence (`StrategyService.buildGateGeometry` writes `qty/notional/leverage`
+   only; no `effective_risk_usdt` column exists on `decisions` or `positions`). The edge
+   report therefore **reconstructs** the per-trade R denominator from fill-anchored
+   `positions` columns:
+   `reconstructedEffectiveRiskUsdt = qty × |entry_price − stop_loss_price|`.
+   This is the dollar risk realized **at fill** — more correct for an edge read-out than
+   the pre-round intent value. **Three-column null-exclusion rule:** a closed trade where
+   ANY of `qty`, `entry_price`, `stop_loss_price` is null yields a **null** R-multiple and
+   is **excluded** from the expectancy aggregate — never a target-based fallback.
+
+3. **LATERAL open-decision join (F3 — `decisions.position_id` is never stamped).** The
+   column exists on `DecisionEntity` but `StrategyService.persistDecision` never writes it
+   on the open path, so it is null on live soak rows. To recover the BTC-move snapshot the
+   report joins each closed position to the most-recent matching open decision via a
+   **LATERAL time-join** on `(strategy_version_id, symbol, action='open', gate_allowed=true,
+   ts ≤ opened_at) ORDER BY ts DESC LIMIT 1` — not via the (null) `position_id` FK.
+
+4. **`rMultipleStdError = null` at `n < 2`.** Standard error of the mean R-multiple =
+   `stdDev / sqrt(n)` (decimal math). A single trade has no dispersion, so the report
+   returns **null** (not `0`) for `n < 2` — returning `0` would imply false certainty;
+   `null` reads honestly as "undefined at this sample size." `n = 0` also returns null.
+
+5. **D4 noise floor (the only runtime change — tightening-only).**
+   `IDIOSYNCRASY_MIN_COIN_MOVE_PCT = 0.05` is a new engine const. When
+   `abs(coin5mMovePct) < 0.05`, `computeIdiosyncrasyScore` returns `IDIOSYNCRASY_SCORE_MIN`
+   (0) — the noise-floor analogue of the existing `coinMagnitude === 0` guard. The floor is
+   **16× below** the tightest tier-1 trigger (`tier1_min_abs_move_pct = 0.8%`), so it is
+   **inert for every real trigger input** (asserted byte-identical by a regression test).
+   Its direction is provably safe: it can only **lower** a score toward 0 — it can remove
+   false idiosyncratic eligibility (a noise-inflated pass becomes a `no_eligible_slot`
+   reject) but never inflate a score or open a previously-rejected trade. The idiosyncrasy
+   **threshold** (`idiosyncrasy_min_score = 0.5`, per-version DB param) is **not touched**.
+
+6. **D4b — live/backtest idiosyncrasy-formula divergence (pre-existing, NOT fixed here).**
+   The live function (`computeIdiosyncrasyScore.ts`) computes `1 − abs(btc)/abs(coin)`;
+   `BacktestEventBuilder.ts` has a **separate private** formula
+   `abs(symbol−btc)/(abs(symbol)+abs(btc)+0.0001)`. These yield different scores for the
+   same inputs, so the same strategy sees a different idiosyncrasy gate live vs in backtest.
+   This predates M30 and is **explicitly not fixed** here (touching the backtest formula
+   demands its own parity suite + backtest re-baseline). D4 hardens the live function only
+   and makes **no parity claim** between the two. Unification is logged as MEDIUM tech-debt.
+
+7. **D3 idiosyncrasy miss-distribution (observability-only).** `getIdiosyncrasyMissDistribution`
+   is read-only, derived from existing `decisions` rows + `market_snapshot` JSONB, no schema
+   change. For each `no_eligible_slot` open decision it buckets
+   `missDistance = activeMinScore − idiosyncrasyScore` into five equal-width bands
+   `[0,0.1) … [0.4,0.5]` per UTC day. `activeMinScore` is resolved by the caller from
+   `ACTIVE_STRATEGY_VERSION_ID` (the env-selected v2 param 0.5), **not** the `status='active'`
+   v0 seed row. A coin scoring exactly at the threshold passes the gate (miss = 0) and never
+   appears; rows with no `idiosyncrasy_score` are counted as unknown, never as 0-score.
+   M30 does **not** move the threshold — D3 gathers evidence for a separate calibration
+   milestone starting from the correct 0.5 cut (not the WIP's stale 0.3).
+
+8. **`regimeRobustnessPasses` is advisory, NOT part of `slotCGateOpen`.** The `btc_5m_*`
+   sub-split partitions eligible trades by the per-bar BTC 5m move at entry vs the ±1.5%
+   boundary (`up`/`down`/`flat`). These are **per-bar move labels, not regime classifiers** —
+   a single 5-minute return is not a stable regime state. `regimeRobustnessPasses` is true
+   when every bucket with `n ≥ REGIME_BUCKET_MIN_N = 8` has a mean R-multiple agreeing in
+   sign with the aggregate; below that n a bucket does not participate. Because idiosyncratic
+   triggers fire *because BTC is calm*, `btc5mFlat` will structurally dominate — that is
+   expected, not a failure. The flag is reported alongside the gate for operator context but
+   is **never AND'd into** `slotCGateOpen`: a real positive edge running through calm-BTC
+   sessions must not be structurally blocked by a per-bar proxy biased toward the flat bucket.
+
 ## M4 contract handoff
 
 ### `bot-shared-maintainer` adds to `packages/shared` (serial, first)
