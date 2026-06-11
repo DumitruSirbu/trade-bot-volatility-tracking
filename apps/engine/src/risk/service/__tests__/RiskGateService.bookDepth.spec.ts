@@ -173,6 +173,7 @@ function buildIntent(coinTier: CoinTierEnum = CoinTierEnum.TIER_1): IOrderIntent
             notional: new Money('50'), // small: well within exposure caps
             leverage: new Money('3'),
             riskPerTradeUsdt: new Money('5'),
+            effectiveRiskUsdt: new Money('5'),
         },
         flowType: FlowTypeEnum.FORCED_EXHAUSTION,
     };

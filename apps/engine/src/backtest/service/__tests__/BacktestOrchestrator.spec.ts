@@ -169,6 +169,7 @@ function buildApprovedDecision(overrides: Partial<IApprovedRiskDecision> = {}): 
             notional: new Money('1000'),
             leverage: new Money('2'),
             riskPerTradeUsdt: new Money('20'),
+            effectiveRiskUsdt: new Money('20'),
         },
         clampedExit: {
             takeProfitPrice: new Money('1900'),
@@ -283,6 +284,7 @@ function buildOrchestrator(
                       notional: new Money('1000'),
                       leverage: new Money('2'),
                       riskPerTradeUsdt: new Money('20'),
+                      effectiveRiskUsdt: new Money('20'),
                   },
               }
             : { kind: sizingKind as any };
@@ -843,6 +845,7 @@ describe('BacktestOrchestrator — OrderPolicyRouter injection (M8 W1)', () => {
                     notional: new Money('1000'),
                     leverage: new Money('2'),
                     riskPerTradeUsdt: new Money('20'),
+                    effectiveRiskUsdt: new Money('20'),
                 },
             }),
         } as any;

@@ -357,6 +357,7 @@ export class LocalProtectiveMonitor {
             notional: position.qty.times(markPrice),
             leverage: position.leverage,
             riskPerTradeUsdt: new Money(0),
+            effectiveRiskUsdt: new Money(0),
         };
 
         return {

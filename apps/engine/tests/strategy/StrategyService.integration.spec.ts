@@ -73,7 +73,13 @@ async function buildModule(deps: IModuleDeps): Promise<{ module: TestingModule; 
         outcome: RiskOutcomeEnum.APPROVED,
         rejectReason: null,
         approvedSlot: 'A',
-        approvedSizing: { qty: new Money('0.01'), notional: new Money('100'), leverage: new Money('1'), riskPerTradeUsdt: new Money('10') },
+        approvedSizing: {
+            qty: new Money('0.01'),
+            notional: new Money('100'),
+            leverage: new Money('1'),
+            riskPerTradeUsdt: new Money('10'),
+            effectiveRiskUsdt: new Money('10'),
+        },
         clampedExit: null,
         reservationId: 'stub:A',
     };
@@ -88,7 +94,13 @@ async function buildModule(deps: IModuleDeps): Promise<{ module: TestingModule; 
     const sizerStub = {
         size: jest.fn().mockReturnValue({
             kind: 'sized',
-            sizing: { qty: new Money('0.01'), notional: new Money('100'), leverage: new Money('1'), riskPerTradeUsdt: new Money('10') },
+            sizing: {
+                qty: new Money('0.01'),
+                notional: new Money('100'),
+                leverage: new Money('1'),
+                riskPerTradeUsdt: new Money('10'),
+                effectiveRiskUsdt: new Money('10'),
+            },
         }),
     };
 

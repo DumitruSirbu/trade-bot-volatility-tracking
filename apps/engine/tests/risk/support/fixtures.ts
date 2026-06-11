@@ -45,6 +45,7 @@ export function buildSizing(overrides: Partial<IIntentSizing> = {}): IIntentSizi
         notional: new Money('100'),
         leverage: new Money('1'),
         riskPerTradeUsdt: new Money('10'),
+        effectiveRiskUsdt: new Money('10'),
         ...overrides,
     };
 }

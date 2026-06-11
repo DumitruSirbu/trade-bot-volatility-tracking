@@ -17,6 +17,7 @@ export interface ISizingInput {
     readonly fundingRate: number; // periodic rate (ratio)
     readonly fundingRateAnnualized: number; // pct
     readonly fundingRateSuppressThreshold: number; // params.funding_rate_suppress_threshold (abs periodic rate)
+    readonly maxExposurePerCoinUsdt: MoneyValue; // operator per-coin hard ceiling (ADR 0004 §8)
     readonly instrument: IInstrumentConstraints;
 }
 
@@ -27,9 +28,14 @@ export type SizingResult =
     | { readonly kind: 'funding_suppressed' };
 
 // Pure decimal sizing (ADR 0004 §8). All arithmetic in decimal.js — never float. Computes an
-// ATR-based notional, applies the funding adjustment, clamps to <= MAX_LEVERAGE, step-rounds
-// the qty DOWN, and enforces the instrument min-notional. No I/O, no clock — every input is
-// passed in so a backtest reproduces live sizing byte-for-byte.
+// ATR-based notional, applies the funding adjustment, clamps to <= MAX_LEVERAGE AND to the
+// operator per-coin hard ceiling (maxExposurePerCoinUsdt — the sizer shrinks the 1%-risk target
+// to fit it, never grows it), step-rounds the qty DOWN, and enforces the instrument min-notional.
+// effectiveRiskUsdt is the post-ceiling-clamp, pre-step-rounding realized dollar risk: it equals
+// riskPerTradeUsdt when no ceiling binds and drops below it when the cap shrinks the order. It is
+// a slight overestimate of the true fill risk (step-rounding further reduces qty), but is
+// conservative (never understates risk). No I/O, no clock — every input is passed in so a
+// backtest reproduces live sizing byte-for-byte.
 @Injectable()
 export class PositionSizer {
     size(input: ISizingInput): SizingResult {
@@ -46,9 +52,9 @@ export class PositionSizer {
 
         const baseNotional = riskPerTradeUsdt.dividedBy(stopDistance).times(input.entryPrice);
         const fundedNotional = this.applyFundingCut(baseNotional, input);
-        const leverageClampedNotional = this.clampToMaxLeverage(fundedNotional, input.allocatedCapital);
+        const clampedNotional = this.clampToCeilings(fundedNotional, input.allocatedCapital, input.maxExposurePerCoinUsdt);
 
-        const rawQty = leverageClampedNotional.dividedBy(input.entryPrice);
+        const rawQty = clampedNotional.dividedBy(input.entryPrice);
         const qty = this.roundDownToStep(rawQty, input.instrument.stepSize);
         const notional = qty.times(input.entryPrice);
 
@@ -57,6 +63,7 @@ export class PositionSizer {
         }
 
         const leverage = notional.dividedBy(input.allocatedCapital);
+        const effectiveRiskUsdt = clampedNotional.dividedBy(input.entryPrice).times(stopDistance);
 
         return {
             kind: 'sized',
@@ -65,6 +72,7 @@ export class PositionSizer {
                 notional,
                 leverage,
                 riskPerTradeUsdt,
+                effectiveRiskUsdt,
             },
         };
     }
@@ -111,14 +119,18 @@ export class PositionSizer {
         return fundingRate < 0;
     }
 
-    // required margin = notional / leverage; if implied leverage > MAX, shrink notional so
-    // leverage == MAX (margin == allocatedCapital * ... ). Implied leverage here is
-    // notional / allocatedCapital, so clamp notional to allocatedCapital * MAX_LEVERAGE.
-    private clampToMaxLeverage(notional: MoneyValue, allocatedCapital: MoneyValue): MoneyValue {
-        const maxNotional = allocatedCapital.times(MAX_LEVERAGE_DEC);
+    // Shrink-never-grow ceilings (ADR 0004 §8). Two hard caps bind the proposed notional:
+    //   1. MAX_LEVERAGE — implied leverage is notional / allocatedCapital, so clamp to
+    //      allocatedCapital * MAX_LEVERAGE (margin == allocatedCapital at the limit).
+    //   2. maxExposurePerCoinUsdt — the operator per-coin hard ceiling; the sizer shrinks the
+    //      1%-risk target to fit it so the order never reaches the gate above the cap.
+    // Result is min(notional, leverage cap, per-coin cap) — only ever reduces the notional.
+    private clampToCeilings(notional: MoneyValue, allocatedCapital: MoneyValue, maxExposurePerCoinUsdt: MoneyValue): MoneyValue {
+        const leverageCap = allocatedCapital.times(MAX_LEVERAGE_DEC);
+        const ceiling = Money.min(leverageCap, maxExposurePerCoinUsdt);
 
-        if (notional.greaterThan(maxNotional)) {
-            return maxNotional;
+        if (notional.greaterThan(ceiling)) {
+            return ceiling;
         }
 
         return notional;

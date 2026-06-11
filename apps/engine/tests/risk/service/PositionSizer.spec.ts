@@ -22,6 +22,7 @@ function buildInput(overrides: Partial<ISizingInput> = {}): ISizingInput {
         fundingRate: 0,
         fundingRateAnnualized: 0,
         fundingRateSuppressThreshold: 0.001, // abs periodic rate threshold for funding cut
+        maxExposurePerCoinUsdt: new Money(9_999_999), // M29: per-coin hard ceiling — default huge so pre-M29 tests are unaffected
         instrument: buildInstrument({
             stepSize: new Money('0.001'),
             minNotional: new Money('5'),
