@@ -18,6 +18,13 @@ export const ADX_TRENDING_MIN = 25;
 export const IDIOSYNCRASY_SCORE_MIN = 0;
 export const IDIOSYNCRASY_SCORE_MAX = 1;
 
+// Minimum coin 5m move magnitude (%) below which the idiosyncrasy score is
+// treated as pure microstructure noise and floored to IDIOSYNCRASY_SCORE_MIN.
+// 16× below the tightest tier-1 trigger floor (tier1_min_abs_move_pct = 0.8%),
+// so it is inert for every real trigger input and only ever removes false
+// idiosyncratic eligibility on sub-noise denominators (tightening-only, M30 D4).
+export const IDIOSYNCRASY_MIN_COIN_MOVE_PCT = 0.05;
+
 // Multi-anchor VWAP event-shift detector: a closed bar whose volume ratio exceeds
 // this re-anchors the event-anchored VWAP (high-volume regime shift, M1 task).
 export const EVENT_ANCHOR_VOLUME_RATIO = 4;

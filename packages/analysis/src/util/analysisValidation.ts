@@ -9,7 +9,7 @@
 // Boundary invariant (ADR 0033 §2.2): no @bot/engine, no @bot/shared value
 // imports — pure local infra.
 
-import { ANALYSIS_MAX_RANGE_MS, MS_PER_DAY } from '../const/index.js';
+import { ANALYSIS_MAX_RANGE_MS, FUNNEL_UTC_DATE_REGEX, MS_PER_DAY } from '../const/index.js';
 
 export class AnalysisValidationError extends Error {
     readonly field: string;
@@ -36,5 +36,27 @@ export function validateDateRangeOrThrow(from: Date, to: Date): void {
 
     if (to.getTime() - from.getTime() > ANALYSIS_MAX_RANGE_MS) {
         throw new AnalysisValidationError('range', `window exceeds analysis hard cap of ${ANALYSIS_MAX_RANGE_MS / MS_PER_DAY} days`);
+    }
+}
+
+export function validateUtcDateOrThrow(field: string, value: string): void {
+    if (typeof value !== 'string' || !FUNNEL_UTC_DATE_REGEX.test(value)) {
+        throw new AnalysisValidationError(field, `must be a 'YYYY-MM-DD' UTC date string, got "${String(value)}"`);
+    }
+
+    const parsed = Date.parse(`${value}T00:00:00.000Z`);
+    if (Number.isNaN(parsed)) {
+        throw new AnalysisValidationError(field, `is not a real calendar date: "${value}"`);
+    }
+
+    const roundTripped = new Date(parsed).toISOString().slice(0, 10);
+    if (roundTripped !== value) {
+        throw new AnalysisValidationError(field, `is not a real calendar date: "${value}"`);
+    }
+}
+
+export function validateDateOrderOrThrow(fromDate: string, toDate: string): void {
+    if (fromDate > toDate) {
+        throw new AnalysisValidationError('range', `fromDate (${fromDate}) must be on or before toDate (${toDate})`);
     }
 }

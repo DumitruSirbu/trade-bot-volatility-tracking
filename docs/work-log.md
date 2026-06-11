@@ -1,3 +1,21 @@
+## 2026-06-11 — M30: Idiosyncratic-edge soak gate + idiosyncrasy observability
+
+**Goal:** Turn the M29 soak from "running" into a read-out — an executable gate query (`slotCGateOpen`) plus funnel observability for `no_eligible_slot` rejects.
+
+**Shipped:**
+- D4: `computeIdiosyncrasyScore` noise floor (IDIOSYNCRASY_MIN_COIN_MOVE_PCT=0.05, 16× below tier-1, tightening-only). Engine restart required.
+- D2: `getIdiosyncraticEdgeReport` — closed-trade expectancy + `slotCGateOpen` gate (fill-anchored risk, LATERAL join, `rMultipleStdError` null at n<2, BTC sub-split, regime robustness). No restart required.
+- D3: `getIdiosyncrasyMissDistribution` — per-day miss-distance histogram for `no_eligible_slot` (5 bands, caller-supplied threshold). No restart required.
+- ADR 0004 §8b added; tech-debt updated (slot-C gate → executable query; 2 new MEDIUMs, 1 new LOW).
+
+**Tests:** 3,362 engine + 199 analysis = 3,561 total. 89 new (47 D2 + 42 D3) + D4 inertness regression (99 combinations).
+
+**Review:** 2 rounds. R1: 2 security MEDIUMs + 10 clean-code must-fixes + 4 MEDIUMs. R2: CLEAN. Logic + quant: 1 round, CLEAN.
+
+**Status:** DONE. Post-deploy: pg_dump → restart → smoke → first-trigger inertness confirm → run both M30 instruments. 14-day soak gate active. Slot-C remains deferred behind slotCGateOpen=true.
+
+---
+
 ## 2026-06-03 — Operational soak halt investigation + breadth-threshold hotfix
 
 - **Problem discovered:** Engine had 0 trades across 4 consecutive days (May 31 – June 3 03:15 UTC) despite M19 being deployed. Every UTC day's `risk_state` row showed `is_halted=true, halt_reason=market_stress`.
