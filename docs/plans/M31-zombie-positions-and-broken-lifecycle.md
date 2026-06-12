@@ -2,7 +2,7 @@
 
 **Status:** DONE — implementation complete, all reviewers clean, 3406 tests passing
 **Type:** Bug-fix milestone. Engine-only. **No schema migration** (see §8).
-**Source defect doc:** `docs/wip/first-three-paper-fills-and-zombie-positions.md`
+**Source defect doc:** `docs/wip/done/first-three-paper-fills-and-zombie-positions.md`
 **Owns ADR amendments:** 0009 (state graph), 0012 (recompute-based risk_state booking on open+close), 0014 (boot hardening: residual notional + qty=0 exclusion). 0008 reaffirmed and unchanged in the default path; the gated Task 2 reorder would require a separate ADR 0008 §2 amendment + architect sign-off (default path needs none).
 
 ---

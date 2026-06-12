@@ -3,7 +3,9 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 
 import { IPositionClosedEvent } from '../../common/interface/IPositionClosedEvent';
+import { IPositionOpenedEvent } from '../../common/interface/IPositionOpenedEvent';
 import { ORDER_INTENT_FAILED_EVENT, POSITION_CLOSED_EVENT, POSITION_OPENED_EVENT } from '../../common/const';
+import { formatPositionClosedBody, formatPositionOpenedBody } from '../format/positionAlertText';
 import { CLOCK, IClock } from '../../common/clock/Clock';
 import { HaltFlagService } from '../../common/service/HaltFlagService';
 import { HaltService } from '../../control/HaltService';
@@ -137,14 +139,22 @@ export class RiskListeners {
     }
 
     @OnEvent(POSITION_OPENED_EVENT)
-    async onPositionOpened(event: { positionId: number; symbol: string }): Promise<void> {
+    async onPositionOpened(event: IPositionOpenedEvent): Promise<void> {
         const payload: IAlertPayload = {
             type: AlertTypeEnum.POSITION_OPENED,
             severity: AlertSeverityEnum.INFO,
             occurredAt: this.clock.now().toISOString(),
             title: `Position opened — ${event.symbol}`,
-            body: `positionId=${event.positionId} symbol=${event.symbol}`,
-            data: { positionId: String(event.positionId), symbol: event.symbol },
+            body: formatPositionOpenedBody(event),
+            data: {
+                positionId: String(event.positionId),
+                symbol: event.symbol,
+                side: event.side,
+                leverage: event.leverage.toFixed(),
+                entryPrice: event.entryPrice.toFixed(),
+                entryNotional: event.entryNotional.toFixed(),
+                strategyVersionId: String(event.strategyVersionId),
+            },
         };
 
         await this.publishSafe(payload);
@@ -152,19 +162,23 @@ export class RiskListeners {
 
     @OnEvent(POSITION_CLOSED_EVENT)
     async onPositionClosed(event: IPositionClosedEvent): Promise<void> {
-        const realized = event.realizedPnl === null || event.realizedPnl === undefined ? 'n/a' : event.realizedPnl.toString();
-        const exitReason = event.exitReason ?? 'unknown';
-
         const payload: IAlertPayload = {
             type: AlertTypeEnum.POSITION_CLOSED,
             severity: AlertSeverityEnum.INFO,
             occurredAt: this.clock.now().toISOString(),
             title: `Position closed — ${event.symbol}`,
-            body: `positionId=${event.positionId} symbol=${event.symbol} side=${event.side} exit=${exitReason} realizedPnl=${realized}`,
+            body: formatPositionClosedBody(event),
             data: {
                 positionId: String(event.positionId),
                 symbol: event.symbol,
-                exitReason: String(exitReason),
+                side: event.side,
+                exitReason: String(event.exitReason ?? 'unknown'),
+                entryPrice: event.entryPrice.toFixed(),
+                exitPrice: event.exitPrice?.toFixed() ?? 'n/a',
+                realizedPnl: event.realizedPnl?.toFixed() ?? 'n/a',
+                leverage: event.leverage.toFixed(),
+                strategyVersionId: String(event.strategyVersionId),
+                holdMs: event.closedAt == null ? 'n/a' : String(event.closedAt.getTime() - event.openedAt.getTime()),
             },
         };
 

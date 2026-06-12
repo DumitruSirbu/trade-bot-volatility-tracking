@@ -1,7 +1,7 @@
 # Paper Soak: Zero Live Trades & Shadow Fill Gap
 
 **Date:** 2026-06-06  
-**Status:** WIP — analysis + recommendations; no implementation decision yet  
+**Status:** DONE — recommendations implemented via **M24–M26** (fill path, paper exploration, shadow wiring). Archived under `docs/wip/done/`.  
 **Trigger:** Operator wants simulated paper transactions (losses acceptable) but soak shows only skips/rejects, no `positions` or `transactions` rows.
 
 ---

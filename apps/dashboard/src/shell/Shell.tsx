@@ -10,7 +10,7 @@ import { HaltBanner } from '@/views/HaltBanner';
 import { HaltHistoryDrawer } from '@/views/HaltHistoryDrawer';
 import { KillSwitchControl } from '@/views/KillSwitchButton';
 import { PerformanceByVersion } from '@/views/PerformanceByVersion';
-import { PositionsTable } from '@/views/PositionsTable';
+import { PositionsPanel } from '@/views/PositionsPanel';
 
 type TabId = 'positions' | 'decisions' | 'performance';
 
@@ -21,7 +21,7 @@ interface ITabDef {
 }
 
 const TABS: readonly ITabDef[] = [
-    { id: 'positions', label: 'Positions', render: () => <PositionsTable /> },
+    { id: 'positions', label: 'Positions', render: () => <PositionsPanel /> },
     { id: 'decisions', label: 'Decisions', render: () => <DecisionsFeed /> },
     { id: 'performance', label: 'Performance', render: () => <PerformanceByVersion /> },
 ];

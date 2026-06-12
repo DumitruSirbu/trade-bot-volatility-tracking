@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { IDecisionView, IPositionDetailView } from '@bot/shared';
+import { PositionStateEnum } from '@bot/shared';
 
 import { ApiError } from '@/api/apiClient';
 import { usePositionByIdQuery } from '@/api/mutations';
@@ -16,6 +17,22 @@ import { addMoneyStrings, formatAgeMs, formatMoneyString } from '@/lib/utils';
 // protective-order info, and per-symbol recent decisions for context.
 
 const DECISIONS_PREVIEW_COUNT = 25;
+
+// Terminal/closing states for which the open-shaped "mark / unrealized PnL"
+// fields are meaningless — surfaced as a prominent header badge so the operator
+// is not misled by a live-looking mark on a position that is no longer open.
+const TERMINAL_STATES: ReadonlySet<PositionStateEnum> = new Set([PositionStateEnum.CLOSING, PositionStateEnum.CLOSED]);
+
+const isTerminalState = (state: PositionStateEnum): boolean => TERMINAL_STATES.has(state);
+
+const StateHeaderBadge = ({ state }: { state: PositionStateEnum }): React.ReactElement => (
+    <div className="flex items-center gap-2">
+        <Badge variant={isTerminalState(state) ? 'secondary' : 'success'}>{state.toUpperCase()}</Badge>
+        {isTerminalState(state) && (
+            <span className="text-xs text-muted-foreground">Position is no longer open — mark and unrealized-PnL fields below are not live.</span>
+        )}
+    </div>
+);
 
 const sumPnl = (position: IPositionDetailView): string | null => addMoneyStrings(position.unrealizedPnlPriceUsd, position.unrealizedPnlFundingUsd);
 
@@ -138,6 +155,7 @@ export const PositionDetail = (): React.ReactElement => {
             {isError && (
                 <p className="text-sm text-destructive">{error instanceof ApiError ? `${error.code}: ${error.message}` : 'Failed to load position.'}</p>
             )}
+            {data !== undefined && <StateHeaderBadge state={data.state} />}
             {data !== undefined && (
                 <div className="grid gap-4 lg:grid-cols-2">
                     <PricingCard position={data} nowMs={nowMs} />

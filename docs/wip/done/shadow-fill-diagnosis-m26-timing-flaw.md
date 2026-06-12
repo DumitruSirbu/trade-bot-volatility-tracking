@@ -1,7 +1,7 @@
 # Shadow Fill Diagnosis: M26 Timing Flaw
 
 **Date:** 2026-06-09  
-**Status:** Awaiting decision  
+**Status:** DONE — fixed in **M26** (`docs/plans/M26-shadow-counterfactual-fill-wiring.md`). Archived under `docs/wip/done/`.  
 **Related:** ADR 0029, M26, `ShadowStrategyOrchestratorService`, `missedFillDetector`
 
 ---

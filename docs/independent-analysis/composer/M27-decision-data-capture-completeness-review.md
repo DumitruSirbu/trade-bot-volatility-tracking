@@ -364,7 +364,7 @@ Meaningful 24–48h capture confirmation (plan post-deploy step 4) needs **M24 f
 ## References consulted
 
 - Plan: `docs/plans/M27-decision-data-capture-completeness.md`
-- Architect P5: `docs/wip/main-architector-paper-soak-fill-and-gate-analysis.md` §4, §5
+- Architect P5: `docs/wip/done/main-architector-paper-soak-fill-and-gate-analysis.md` §4, §5
 - Entities: `DecisionEntity.ts`, `ShadowDecisionEntity.ts`, `BookSnapshotEntity.ts`
 - Writers: `StrategyService.ts`, `DecisionRepository.ts`, `ShadowStrategyOrchestratorService.ts`
 - Halt legs: `StressHaltEvaluator.ts`, `riskConsts.ts` (M23 suffix tokens)

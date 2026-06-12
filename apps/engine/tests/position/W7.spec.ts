@@ -16,6 +16,7 @@
 import { PositionSideEnum, PositionSlotEnum, PositionStateEnum, ProtectiveOrderTypeEnum, TransactionTypeEnum } from '@bot/shared';
 
 import { Money, MoneyValue } from '../../src/common/utils/money';
+import { IPositionOpenedEvent } from '../../src/common/interface/IPositionOpenedEvent';
 import { IBalanceSnapshot, IExchangeClient } from '../../src/exchange/interface';
 import { AccountSnapshotEntity, PositionEntity, TransactionEntity } from '../../src/position/entity';
 import { AccountSnapshotRepository } from '../../src/position/repository/AccountSnapshotRepository';
@@ -25,6 +26,18 @@ import { AccountSnapshotWriter, ACCOUNT_SNAPSHOT_INTERVAL_MS } from '../../src/p
 import { PositionInstrumentor } from '../../src/position/service/PositionInstrumentor';
 
 const NOW_MS = 1_700_000_000_000;
+
+function buildOpenedEvent(positionId: number): IPositionOpenedEvent {
+    return {
+        positionId,
+        symbol: 'BTCUSDT',
+        side: PositionSideEnum.LONG,
+        leverage: new Money('5'),
+        entryPrice: new Money('30000'),
+        entryNotional: new Money('300'),
+        strategyVersionId: 1,
+    };
+}
 
 function buildPositionRow(overrides: Partial<PositionEntity> = {}): PositionEntity {
     return {
@@ -333,7 +346,7 @@ describe('PositionInstrumentor.onPositionOpenedEvent — W7 wiring (W6 carry-for
         const positions = { findById, save: jest.fn() } as unknown as PositionRepository;
         const instrumentor = new PositionInstrumentor(positions, { isRecoveryReady: jest.fn().mockReturnValue(true) } as never);
 
-        await instrumentor.onPositionOpenedEvent({ positionId: 42, symbol: 'BTCUSDT' });
+        await instrumentor.onPositionOpenedEvent(buildOpenedEvent(42));
 
         const stats = instrumentor.getLifeStats(42);
         expect(stats).not.toBeNull();
@@ -345,7 +358,7 @@ describe('PositionInstrumentor.onPositionOpenedEvent — W7 wiring (W6 carry-for
         const positions = { findById, save: jest.fn() } as unknown as PositionRepository;
         const instrumentor = new PositionInstrumentor(positions, { isRecoveryReady: jest.fn().mockReturnValue(true) } as never);
 
-        await instrumentor.onPositionOpenedEvent({ positionId: 999, symbol: 'BTCUSDT' });
+        await instrumentor.onPositionOpenedEvent(buildOpenedEvent(999));
 
         expect(instrumentor.getLifeStats(999)).toBeNull();
     });

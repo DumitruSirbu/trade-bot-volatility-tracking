@@ -384,11 +384,18 @@ describe('RiskListeners', () => {
             exitReason: ExitReasonEnum.STOP_LOSS,
             realizedPnl: new Decimal('-12.50') as never,
             closedAt: now,
+            entryPrice: new Decimal('64000') as never,
+            exitPrice: new Decimal('63800') as never,
+            leverage: new Decimal('3') as never,
+            strategyVersionId: 2,
+            openedAt: new Date(now.getTime() - 60_000),
         });
 
         expect(sink.published).toHaveLength(1);
         expect(sink.published[0]!.type).toBe(AlertTypeEnum.POSITION_CLOSED);
-        expect(sink.published[0]!.body).toContain('BTCUSDT');
+        expect(sink.published[0]!.body).toContain('LONG');
+        expect(sink.published[0]!.body).toContain('−$12.50 (net)');
+        expect(sink.published[0]!.title).toContain('BTCUSDT');
     });
 
     it('fires MODEL_DIVERGENCE_ENGAGED alert with sample data and flips the flag when divergence trips', async () => {

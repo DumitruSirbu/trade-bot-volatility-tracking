@@ -145,7 +145,7 @@ Engine-only SELECT on existing `tick_aggregates` is the minimal fix, matches arc
 
 ### Reject WIP “minimal high/low only” — **Plan is right**
 
-`docs/wip/paper-soak-zero-trades-and-shadow-fill-gap.md` Tier C still lists “minimal fix: pass trigger bar high/low” as a first step. M26 correctly states that is **insufficient**. Implementation and docs should not resurrect that shortcut.
+`docs/wip/done/paper-soak-zero-trades-and-shadow-fill-gap.md` Tier C still lists “minimal fix: pass trigger bar high/low” as a first step. M26 correctly states that is **insufficient**. Implementation and docs should not resurrect that shortcut.
 
 ### Missing-tick conservative miss — **Correct, tagging underspecified**
 
@@ -217,7 +217,7 @@ Beyond the plan’s list:
 ## References Consulted
 
 - Plan: `docs/plans/M26-shadow-counterfactual-fill-wiring.md`
-- WIP analysis: `docs/wip/paper-soak-zero-trades-and-shadow-fill-gap.md` (Tier C — minimal fix superseded by M26)
+- WIP analysis: `docs/wip/done/paper-soak-zero-trades-and-shadow-fill-gap.md` (Tier C — minimal fix superseded by M26)
 - Related: `docs/independent-analysis/composer/M24-paper-open-fill-wiring-review.md` (same miss-detector root cause on live path)
 - ADR 0029 (shadow pipeline), ADR 0015 §6 (conservative miss), M7 `CandleLoader.loadTicksForBar`
 
