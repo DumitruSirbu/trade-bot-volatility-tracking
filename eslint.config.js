@@ -121,6 +121,15 @@ export default [
         },
     },
     {
+        // Repo maintenance scripts (docs CI guards, etc.) — Node CLI, not browser.
+        files: ['scripts/**/*.mjs'],
+        languageOptions: {
+            globals: {
+                ...globals.node,
+            },
+        },
+    },
+    {
         // Dashboard runs in the browser (window, document, localStorage, fetch, ...).
         files: ['apps/dashboard/**/*.{ts,tsx}'],
         languageOptions: {
