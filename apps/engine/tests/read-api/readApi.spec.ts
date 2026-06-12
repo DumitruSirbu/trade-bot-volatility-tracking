@@ -117,7 +117,7 @@ class FakePositionRepository {
     byId: Map<number, PositionEntity> = new Map();
     perfRows: Array<{ strategyVersionId: number; tradeCount: number; winCount: number; netPnlUsd: string }> = [];
 
-    async findOpen(): Promise<PositionEntity[]> {
+    async findLiveRisk(): Promise<PositionEntity[]> {
         return this.open;
     }
 

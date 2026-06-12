@@ -32,7 +32,9 @@ export class PositionsController {
 
     @Get('open')
     async listOpen(): Promise<IOpenPositionView[]> {
-        const rows = await this.positions.findOpen();
+        // M31 R1 (HIGH): live-risk view only (qty > 0 AND non-terminal) — a qty=0 zombie row is
+        // lifecycle residue, not a live position, and must not surface on /v1/positions/open.
+        const rows = await this.positions.findLiveRisk();
 
         return rows.map((position) => mapOpenPosition({ position, markPrice: null }));
     }

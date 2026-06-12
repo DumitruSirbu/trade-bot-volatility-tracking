@@ -69,7 +69,7 @@ interface IHarness {
     accountState: { fetchPositions: jest.Mock; fetchOpenOrders: jest.Mock; fetchFundingHistory: jest.Mock };
     ccxtExecutionClient: { fetchOrderByClientId: jest.Mock };
     exchangeClient: { fetchPositions: jest.Mock; fetchOpenOrders: jest.Mock; fetchOrderByClientId: jest.Mock; fetchFundingHistory: jest.Mock };
-    positions: { findOpen: jest.Mock; createOpen: jest.Mock; save: jest.Mock; findLastClosedBySymbol: jest.Mock };
+    positions: { findOpen: jest.Mock; findNonTerminal: jest.Mock; createOpen: jest.Mock; save: jest.Mock; findLastClosedBySymbol: jest.Mock };
     transactions: { findByClientOrderId: jest.Mock };
     positionService: { transition: jest.Mock };
     riskGate: { expireStaleReservations: jest.Mock };
@@ -160,6 +160,7 @@ function buildHarness(opts: IBuildOpts = {}): IHarness {
 
     const positions = {
         findOpen: jest.fn().mockResolvedValue(dbPositions),
+        findNonTerminal: jest.fn().mockResolvedValue(dbPositions),
         createOpen: jest.fn().mockImplementation(async (entityLike: Partial<PositionEntity>) => ({ id: 999, ...entityLike }) as PositionEntity),
         save: jest.fn().mockImplementation(async (entity: PositionEntity) => entity),
         findLastClosedBySymbol: jest.fn().mockResolvedValue(null),

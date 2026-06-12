@@ -63,8 +63,8 @@ function buildWriterHarness(opts: IWriterHarnessOpts = {}) {
 
     const exchangeClient = { fetchBalance } as unknown as IExchangeClient;
 
-    const findOpen = jest.fn().mockResolvedValue(opts.positions ?? []);
-    const positions = { findOpen } as unknown as PositionRepository;
+    const findLiveRisk = jest.fn().mockResolvedValue(opts.positions ?? []);
+    const positions = { findLiveRisk } as unknown as PositionRepository;
 
     const findByPosition = jest.fn().mockImplementation(async (positionId: number) => opts.transactionsByPositionId?.get(positionId) ?? []);
     const transactions = { findByPosition } as unknown as TransactionRepository;
@@ -84,7 +84,7 @@ function buildWriterHarness(opts: IWriterHarnessOpts = {}) {
     const appConfig = { exchangeEnv: 'testnet' } as never;
     const writer = new AccountSnapshotWriter(exchangeClient as never, positions, transactions, snapshots, riskGate, appConfig);
 
-    return { writer, fetchBalance, findOpen, findByPosition, save };
+    return { writer, fetchBalance, findLiveRisk, findByPosition, save };
 }
 
 // ─── snapshot row contents ─────────────────────────────────────────────────
@@ -383,6 +383,7 @@ describe('ReconciliationService — liquidation-price propagation to instrumento
         };
         const positions = {
             findOpen: jest.fn().mockResolvedValue([dbRow]),
+            findNonTerminal: jest.fn().mockResolvedValue([dbRow]),
             findById: jest.fn().mockResolvedValue(dbRow),
             createOpen: jest.fn(),
             save: jest.fn(),
@@ -452,6 +453,7 @@ describe('ReconciliationService — liquidation-price propagation to instrumento
         };
         const positions = {
             findOpen: jest.fn().mockResolvedValue([dbRow]),
+            findNonTerminal: jest.fn().mockResolvedValue([dbRow]),
             findById: jest.fn().mockResolvedValue(dbRow),
             createOpen: jest.fn(),
             save: jest.fn(),
@@ -513,6 +515,7 @@ describe('ReconciliationService — drift-forced snapshot (W7 item 2; ADR 0012 �
         };
         const positions = {
             findOpen: jest.fn().mockResolvedValue([dbRow]),
+            findNonTerminal: jest.fn().mockResolvedValue([dbRow]),
             findById: jest.fn().mockResolvedValue(dbRow),
             createOpen: jest.fn(),
             save: jest.fn(),
@@ -564,6 +567,7 @@ describe('ReconciliationService — drift-forced snapshot (W7 item 2; ADR 0012 �
         };
         const positions = {
             findOpen: jest.fn().mockResolvedValue([]),
+            findNonTerminal: jest.fn().mockResolvedValue([]),
             findById: jest.fn().mockResolvedValue(null),
             findLastClosedBySymbol: jest.fn().mockResolvedValue(null),
         };

@@ -33,7 +33,7 @@ function buildGuardHarness(env: 'paper' | 'testnet' | 'live') {
         fetchFundingHistory: jest.fn().mockResolvedValue([]),
     };
     const ccxtExecutionClient = { fetchOrderByClientId: jest.fn() };
-    const positions = { findOpen: jest.fn().mockResolvedValue([]) };
+    const positions = { findOpen: jest.fn().mockResolvedValue([]), findNonTerminal: jest.fn().mockResolvedValue([]) };
     const transactions = { findLatestByPositionId: jest.fn().mockResolvedValue(null) };
     const positionService = { transition: jest.fn(), finalizeRealizedPnl: jest.fn(), recordFunding: jest.fn() };
     const riskGate = { expireStaleReservations: jest.fn() };
@@ -80,6 +80,7 @@ describe('ReconciliationService — PAPER env-gate', () => {
         expect(harness.accountState.fetchFundingHistory).not.toHaveBeenCalled();
         expect(harness.ccxtExecutionClient.fetchOrderByClientId).not.toHaveBeenCalled();
         expect(harness.positions.findOpen).not.toHaveBeenCalled();
+        expect(harness.positions.findNonTerminal).not.toHaveBeenCalled();
         expect(harness.riskGate.expireStaleReservations).not.toHaveBeenCalled();
         expect(harness.snapshotWriter.writeNow).not.toHaveBeenCalled();
     });
@@ -91,6 +92,7 @@ describe('ReconciliationService — PAPER env-gate', () => {
 
         expect(harness.accountState.fetchPositions).not.toHaveBeenCalled();
         expect(harness.positions.findOpen).not.toHaveBeenCalled();
+        expect(harness.positions.findNonTerminal).not.toHaveBeenCalled();
     });
 
     it('EXCHANGE_ENV=testnet: tick reaches the port (positive control)', async () => {

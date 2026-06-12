@@ -68,6 +68,7 @@ function buildFlattenHarness(insertedRowIdSeed: number): IFlattenHarness {
 
     const positions = {
         findOpen: jest.fn().mockResolvedValue([]),
+        findNonTerminal: jest.fn().mockResolvedValue([]),
         createOpen: jest.fn().mockImplementation(
             async (entityLike: Partial<PositionEntity>) =>
                 // Deterministic id seed so both runs produce the same positionId; this

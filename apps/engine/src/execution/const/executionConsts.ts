@@ -76,6 +76,19 @@ export const SUBMIT_TIMEOUT_ERROR_MARKER = 'submit_network_timeout';
 // "why is amount='0'" magic disappears from ProtectiveOrderAttacher.
 export const BINANCE_CLOSE_POSITION_PLACEHOLDER_AMOUNT = '0';
 
+// --- M31 escalation reasons + event classes (zombie-position lifecycle) ---
+//
+// `reason` values carried on ORDER_INTENT_UNKNOWN_EVENT when a reduce/close path aborts and
+// hands the residual to M6 reconciliation. Kept as named constants so the wire strings are a
+// single source of truth across ExecutionService + tests (no inline magic strings).
+export const REDUCE_ON_FLAT_POSITION_REASON = 'reduce_on_flat_position';
+export const PENDING_PROMOTE_FAILED_REASON = 'pending_promote_failed';
+export const ENTRY_AUDIT_PERSIST_FAILED_REASON = 'entry_audit_persist_failed';
+
+// eventClass stamped on the PENDING_OPEN -> OPEN promote transition that precedes a closing
+// fill (ADR 0009 §6.3 two-step promote through `open`).
+export const PENDING_OPEN_PROMOTE_EVENT_CLASS = 'execution.reduce.fill.terminal.pending_promote';
+
 // --- reject-classification taxonomy (ADR 0006 §4) ---
 //
 // Pure table from Binance USDT-M Futures numeric error codes → reject class. The

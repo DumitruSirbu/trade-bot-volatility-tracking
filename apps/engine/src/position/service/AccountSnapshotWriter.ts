@@ -232,15 +232,12 @@ export class AccountSnapshotWriter {
         return new Money(usdt.total);
     }
 
-    // ADR 0009 §1 projection: status='open' covers state ∈ non-CLOSED. The
-    // writer iterates positions in pending_open / open / closing / reconciling /
-    // manual_adopted_unmanaged. `reconciling` and `manual_adopted_unmanaged`
-    // positions contribute zero unrealized (no mark cache hit / no valid
-    // priceTerm in drift state) — defensive filter in the aggregator below.
+    // M31 R1 (HIGH): live-risk view only (qty > 0 AND non-terminal). A qty=0 zombie row is
+    // lifecycle residue carrying no live exposure and would otherwise phantom-inflate the
+    // account snapshot's unrealized/exposure aggregate. `findLiveRisk` already excludes CLOSED,
+    // so no further state filter is needed; flat residue contributes zero unrealized anyway.
     private async loadOpenPositions(): Promise<PositionEntity[]> {
-        const all = await this.positions.findOpen();
-
-        return all.filter((p) => p.state !== PositionStateEnum.CLOSED);
+        return this.positions.findLiveRisk();
     }
 
     private async aggregateUnrealized(positions: PositionEntity[]): Promise<{ unrealizedPnlPrice: MoneyValue; unrealizedPnlFunding: MoneyValue }> {

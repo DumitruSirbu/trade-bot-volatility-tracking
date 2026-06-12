@@ -196,7 +196,7 @@ export class EngineBootstrapService implements OnApplicationBootstrap {
         return nonClosed;
     }
 
-    // §4a: `open_exposure := SUM(entry_notional)` over non-closed positions,
+    // §4a: `open_exposure := SUM(qty * entry_price)` over non-closed positions,
     // excluding `MANUAL_ADOPTED_UNMANAGED` rows (foreign adopted, no slot impact
     // until operator-ack — ADR 0010 §1a, ADR 0014 §4a revised).
     //
@@ -206,6 +206,16 @@ export class EngineBootstrapService implements OnApplicationBootstrap {
     // OPEN (R1.2.2 also wires the ack to assign correlationMode=CORRELATED),
     // that position MUST contribute to exposure. State-keyed exclusion ensures
     // post-ack positions are counted; pre-ack ones are not.
+    //
+    // ADR 0014 §4a amended: two corrections.
+    //   (1) Residual formula `qty * entry_price` — NOT `entry_notional`, which is
+    //       immutable after ADDs and not reduced on partial reduces, so it
+    //       overstates exposure for any post-ADD/post-reduce row. This matches
+    //       the decrement in `RiskGateService.reconcileClose`.
+    //   (2) Exclude `qty <= 0` rows. A flat row contributes zero real exposure;
+    //       summing its notional is exactly what produced the `1508.35` post-deploy
+    //       artefact. Explicit qty guard for defence-in-depth even though the
+    //       residual formula already zeroes a flat row.
     async phase4aRebuildOpenExposure(positions: readonly PositionEntity[], nowMs: number): Promise<void> {
         let total = new Money(0);
 
@@ -214,11 +224,18 @@ export class EngineBootstrapService implements OnApplicationBootstrap {
                 continue; // foreign adopted, awaiting operator ack — no slot impact
             }
 
-            total = total.plus(position.entryNotional);
+            if (position.qty.lessThanOrEqualTo(0)) {
+                continue; // flat lifecycle residue — no live exposure to rebuild
+            }
+
+            total = total.plus(position.qty.times(position.entryPrice));
         }
 
         await this.riskGate.setOpenExposureFromBoot(total, nowMs);
-        this.logger.log(`phase 4a: open_exposure rebuilt = ${total.toFixed()} (from ${positions.length} non-closed rows, MANUAL_ADOPTED_UNMANAGED excluded)`);
+        this.logger.log(
+            `phase 4a: open_exposure rebuilt = ${total.toFixed()} (residual qty*entry_price from ${positions.length} non-closed rows, ` +
+                `MANUAL_ADOPTED_UNMANAGED + qty<=0 excluded)`,
+        );
     }
 
     // §4c: re-arm `LocalProtectiveMonitor` for every position whose protective
@@ -240,6 +257,13 @@ export class EngineBootstrapService implements OnApplicationBootstrap {
             // reduce mid-flight still needs the monitor for the remainder
             // until the close transition fires.
             if (position.state === PositionStateEnum.RECONCILING || position.state === PositionStateEnum.MANUAL_ADOPTED_UNMANAGED) {
+                continue;
+            }
+
+            // Skip flat lifecycle residue. A qty=0 position has nothing to protect; arming it
+            // creates a dead armed entry that can fire a spurious SL/TP breach against zero
+            // quantity.
+            if (position.qty.lessThanOrEqualTo(0)) {
                 continue;
             }
 

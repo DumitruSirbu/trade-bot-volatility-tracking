@@ -76,7 +76,7 @@ class FakePositionRepository {
     closed: PositionEntity[] = [];
     byId: Map<number, PositionEntity> = new Map();
 
-    async findOpen(): Promise<PositionEntity[]> {
+    async findLiveRisk(): Promise<PositionEntity[]> {
         return this.open;
     }
 

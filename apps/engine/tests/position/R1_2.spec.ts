@@ -158,7 +158,10 @@ describe('M6 R1.2.2 — phase4a exclusion keyed on state (ADR 0014 §4a revised)
     }
 
     function buildBootHarness(positions: PositionEntity[]): IBootHarness {
-        const positionsRepo = { findOpen: jest.fn().mockResolvedValue(positions) } as unknown as PositionRepository;
+        const positionsRepo = {
+            findOpen: jest.fn().mockResolvedValue(positions),
+            findNonTerminal: jest.fn().mockResolvedValue(positions),
+        } as unknown as PositionRepository;
         const setOpenExposure = jest.fn().mockResolvedValue(undefined);
         const riskGate = {
             setOpenExposureFromBoot: setOpenExposure,
@@ -213,7 +216,10 @@ describe('M6 R1.2.2 — phase4a exclusion keyed on state (ADR 0014 §4a revised)
         // Defensive scenario: an OPEN row with null correlationMode shouldn't exist
         // in production (the executor always stamps a value at open), but if one
         // exists we still count it — the state, not correlationMode, drives slot impact.
-        const rows = [buildPositionRow({ id: 1, state: PositionStateEnum.OPEN, correlationMode: null, entryNotional: new Money('400') })];
+        // M31 Wave B: exposure is the residual qty*entry_price (0.02 * 20000 = 400), not entry_notional.
+        const rows = [
+            buildPositionRow({ id: 1, state: PositionStateEnum.OPEN, correlationMode: null, qty: new Money('0.02'), entryPrice: new Money('20000') }),
+        ];
         const h = buildBootHarness(rows);
 
         await h.boot.phase4aRebuildOpenExposure(rows, NOW_MS);
@@ -228,7 +234,8 @@ describe('M6 R1.2.2 — phase4a exclusion keyed on state (ADR 0014 §4a revised)
                 id: 1,
                 state: PositionStateEnum.OPEN, // post-ack
                 correlationMode: CorrelationModeEnum.CORRELATED,
-                entryNotional: new Money('250'),
+                qty: new Money('0.0125'), // residual 0.0125 * 20000 = 250
+                entryPrice: new Money('20000'),
             }),
         ];
         const h = buildBootHarness(rows);
@@ -380,6 +387,7 @@ describe('M6 R1.2.4 — ReconciliationService case-(f) UNKNOWN_INTENT_OUTCOME', 
         } as unknown as IExchangeClient;
         const positions = {
             findOpen: jest.fn().mockResolvedValue([opts.reconcilingPosition]),
+            findNonTerminal: jest.fn().mockResolvedValue([opts.reconcilingPosition]),
             findById: jest.fn().mockResolvedValue(opts.reconcilingPosition),
             createOpen: jest.fn(),
             save: jest.fn(),
@@ -579,6 +587,7 @@ describe('M6 R1.2.5 — ReconciliationService.handleProtectiveOrderDriftIfNeeded
         const updateMock = jest.fn().mockResolvedValue(opts.updateAffected);
         const positions = {
             findOpen: jest.fn().mockResolvedValue([opts.position]),
+            findNonTerminal: jest.fn().mockResolvedValue([opts.position]),
             findById: jest.fn().mockResolvedValue(opts.position),
             createOpen: jest.fn(),
             save: jest.fn(),

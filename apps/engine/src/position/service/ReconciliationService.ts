@@ -1416,7 +1416,11 @@ export class ReconciliationService {
     // manual_adopted_unmanaged}. Filtering further on `state !== CLOSED` is
     // defensive — should be a no-op given the projection invariant.
     private async loadNonClosedPositions(): Promise<PositionEntity[]> {
-        const rows = await this.positions.findOpen();
+        // M31 Wave B (Defect 5): repointed from `findOpen` to `findNonTerminal` so the
+        // reconciler still sees qty=0 zombie rows (state != CLOSED but quantity drained to
+        // zero). `findLiveRisk` narrows on qty for sizing; reconciliation MUST NOT be qty-
+        // narrowed or it goes blind to exactly the zombies it exists to resolve.
+        const rows = await this.positions.findNonTerminal();
 
         return rows.filter((row) => row.state !== PositionStateEnum.CLOSED);
     }

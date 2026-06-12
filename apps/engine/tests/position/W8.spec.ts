@@ -4,8 +4,8 @@
  * Coverage:
  *   - Gate guard: RECOVERY_IN_PROGRESS rejection before phase 9; opens after.
  *   - Each phase callable in isolation; ordering preserved by `boot()`.
- *   - Phase 4a: open_exposure rebuild = SUM(entry_notional WHERE non-closed AND correlation_mode != null).
- *   - Phase 4c: re-arm LOCAL_FALLBACK positions; skip EXCHANGE_SIDE; skip RECONCILING / MANUAL_ADOPTED_UNMANAGED.
+ *   - Phase 4a: open_exposure rebuild = SUM(qty * entry_price WHERE non-closed AND qty > 0), foreign-adopted excluded.
+ *   - Phase 4c: re-arm LOCAL_FALLBACK positions; skip EXCHANGE_SIDE; skip RECONCILING / MANUAL_ADOPTED_UNMANAGED; skip qty=0.
  *   - Phase 4d: instrumentor seeded for every non-drift open position.
  *   - Phase 5: retainer rebuilt with state-matched reasons.
  *   - Phase 7: equity-drift alert when delta > tolerance; silent when within.
@@ -326,12 +326,20 @@ describe('EngineBootstrapService — per-phase isolation (tests drive each phase
         expect(harness.recon.forceTick).toHaveBeenCalledWith(NOW_MS);
     });
 
-    it('phase 4a rebuilds open_exposure as SUM(entry_notional) over non-closed positions with non-null correlation_mode', async () => {
+    it('phase 4a rebuilds open_exposure as SUM(qty * entry_price) over non-closed positions, excluding foreign-adopted', async () => {
         const positions = [
-            buildPositionRow({ id: 1, entryNotional: new Money('300'), correlationMode: CorrelationModeEnum.IDIOSYNCRATIC }),
-            buildPositionRow({ id: 2, entryNotional: new Money('500'), correlationMode: CorrelationModeEnum.CORRELATED }),
-            // Foreign adopted (excluded per ADR §4a).
-            buildPositionRow({ id: 3, entryNotional: new Money('999'), state: PositionStateEnum.MANUAL_ADOPTED_UNMANAGED, correlationMode: null }),
+            // residual = 0.01 * 30000 = 300
+            buildPositionRow({ id: 1, qty: new Money('0.01'), entryPrice: new Money('30000'), correlationMode: CorrelationModeEnum.IDIOSYNCRATIC }),
+            // residual = 0.02 * 25000 = 500
+            buildPositionRow({ id: 2, qty: new Money('0.02'), entryPrice: new Money('25000'), correlationMode: CorrelationModeEnum.CORRELATED }),
+            // Foreign adopted (excluded per ADR §4a) — residual would be 999 if counted.
+            buildPositionRow({
+                id: 3,
+                qty: new Money('0.0333'),
+                entryPrice: new Money('30000'),
+                state: PositionStateEnum.MANUAL_ADOPTED_UNMANAGED,
+                correlationMode: null,
+            }),
         ];
         const harness = buildHarness();
 
@@ -341,6 +349,22 @@ describe('EngineBootstrapService — per-phase isolation (tests drive each phase
         const [exposure, nowMs] = harness.riskGate.setOpenExposureFromBoot.mock.calls[0];
         expect((exposure as MoneyValue).toFixed()).toBe('800'); // 300 + 500, foreign excluded
         expect(nowMs).toBe(NOW_MS);
+    });
+
+    // M31 Wave B (Task 6): a flat (qty=0) non-closed row is lifecycle residue, not live
+    // exposure. Summing its (immutable) entry_notional is what produced the 1508.35 artefact;
+    // the residual formula + explicit qty>0 guard exclude it.
+    it('phase 4a excludes qty=0 zombie rows from the exposure rebuild', async () => {
+        const positions = [
+            buildPositionRow({ id: 1, qty: new Money('0.01'), entryPrice: new Money('30000') }), // residual 300
+            buildPositionRow({ id: 2, qty: new Money('0'), entryPrice: new Money('30000'), entryNotional: new Money('1208.35') }), // flat zombie
+        ];
+        const harness = buildHarness();
+
+        await harness.boot.phase4aRebuildOpenExposure(positions, NOW_MS);
+
+        const [exposure] = harness.riskGate.setOpenExposureFromBoot.mock.calls[0];
+        expect((exposure as MoneyValue).toFixed()).toBe('300'); // zombie contributes zero
     });
 
     it('phase 4a treats empty position list as zero exposure', async () => {
@@ -376,6 +400,20 @@ describe('EngineBootstrapService — per-phase isolation (tests drive each phase
         harness.boot.phase4cRearmLocalMonitor([reconciling, adopted]);
 
         expect(harness.monitor.arm).not.toHaveBeenCalled();
+    });
+
+    // M31 Wave B (Task 6): a flat (qty=0) LOCAL_FALLBACK row has nothing to protect; arming
+    // it creates a dead armed entry that can fire a spurious breach against zero quantity.
+    it('phase 4c skips qty=0 positions even when LOCAL_FALLBACK', () => {
+        const flat = buildPositionRow({ id: 1, qty: new Money('0'), protectiveOrderType: ProtectiveOrderTypeEnum.LOCAL_FALLBACK });
+        const live = buildPositionRow({ id: 2, qty: new Money('0.01'), protectiveOrderType: ProtectiveOrderTypeEnum.LOCAL_FALLBACK });
+        const harness = buildHarness();
+
+        harness.boot.phase4cRearmLocalMonitor([flat, live]);
+
+        expect(harness.monitor.arm).toHaveBeenCalledTimes(1);
+        const armCall = harness.monitor.arm.mock.calls[0][0] as { positionId: number };
+        expect(armCall.positionId).toBe(2);
     });
 
     it('phase 4d seeds instrumentor for non-drift positions', () => {
