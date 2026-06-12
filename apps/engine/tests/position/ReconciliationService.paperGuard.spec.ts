@@ -16,6 +16,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { PositionRepository } from '../../src/position/repository/PositionRepository';
 import { TransactionRepository } from '../../src/position/repository/TransactionRepository';
 import { PositionService } from '../../src/position/service/PositionService';
@@ -62,6 +63,7 @@ function buildGuardHarness(env: 'paper' | 'testnet' | 'live') {
         instrumentor,
         snapshotWriter,
         events,
+        new SharedCloseCoordinator(),
     );
 
     return { service, accountState, ccxtExecutionClient, positions, riskGate, snapshotWriter: snapshotWriterMock };

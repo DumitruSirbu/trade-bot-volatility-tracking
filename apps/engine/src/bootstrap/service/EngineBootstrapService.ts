@@ -238,17 +238,25 @@ export class EngineBootstrapService implements OnApplicationBootstrap {
         );
     }
 
-    // §4c: re-arm `LocalProtectiveMonitor` for every position whose protective
-    // type is LOCAL_FALLBACK. After phase 2-3, the recon sweep has already
-    // flipped any EXCHANGE_SIDE row whose SL/TP went missing on the exchange
-    // to LOCAL_FALLBACK (case-e handler in W4a, ADR 0010 §1e). So this loop
-    // catches BOTH pre-crash LOCAL_FALLBACK rows AND post-recon-drift flips.
+    // §4c: re-arm `LocalProtectiveMonitor` from the persisted SL/TP. The in-memory arm is lost on
+    // restart, so boot must re-establish it for every row the local monitor is the protection for.
+    // Three re-arm classes (M33 Task 5 widens the original LOCAL_FALLBACK-only behavior):
     //
-    // Side / SL / TP must be on the row at this point. ADR 0011 §7 added
-    // `stop_loss_price` and `take_profit_price` columns precisely for boot
-    // re-arm. A null SL/TP on a LOCAL_FALLBACK row is degraded protection;
-    // arm anyway — the monitor handles nulls gracefully (ADR 0011 §1) and
-    // case-e retry on the next recon tick may re-attach exchange-side.
+    //   1. LOCAL_FALLBACK (any env) — the original case. After phase 2-3, the recon sweep has
+    //      already flipped any EXCHANGE_SIDE row whose SL/TP went missing on the exchange to
+    //      LOCAL_FALLBACK (case-e, ADR 0010 §1e), so this catches both pre-crash LOCAL_FALLBACK
+    //      rows and post-recon-drift flips.
+    //   2. PENDING_OPEN (any env) — these are NEVER disarmed; the local monitor is their only
+    //      protection until the protective attach settles (ADR 0008 §2). The pre-attach crash
+    //      window (GBT H3) is closed by Task 5 persisting SL/TP at insert, so the row is re-armable.
+    //   3. Paper EXCHANGE_SIDE (ADR 0008 §7) — in paper there is no exchange matching engine to
+    //      fire the protective orders, so the local monitor stays the SL/TP enforcer; it must be
+    //      re-armed on boot. LIVE/TESTNET EXCHANGE_SIDE rows are NOT re-armed — the exchange holds
+    //      protection there.
+    //
+    // qty is read from the CURRENT DB row at breach time (the monitor's handleBreach re-reads via
+    // findById), so a position partially reduced before the restart closes against its remaining
+    // qty — the armed struct carries only the prices (Composer A6 / Gemini 3.4).
     phase4cRearmLocalMonitor(positions: readonly PositionEntity[]): void {
         let armed = 0;
 
@@ -267,8 +275,8 @@ export class EngineBootstrapService implements OnApplicationBootstrap {
                 continue;
             }
 
-            if (position.protectiveOrderType !== ProtectiveOrderTypeEnum.LOCAL_FALLBACK) {
-                continue; // EXCHANGE_SIDE is alive — monitor stays disarmed
+            if (!this.shouldRearmLocalMonitor(position)) {
+                continue;
             }
 
             this.localProtectiveMonitor.arm({
@@ -281,7 +289,28 @@ export class EngineBootstrapService implements OnApplicationBootstrap {
             armed++;
         }
 
-        this.logger.log(`phase 4c: re-armed LocalProtectiveMonitor for ${armed} LOCAL_FALLBACK positions`);
+        this.logger.log(`phase 4c: re-armed LocalProtectiveMonitor for ${armed} positions (LOCAL_FALLBACK + PENDING_OPEN + paper EXCHANGE_SIDE)`);
+    }
+
+    // Decides whether the local monitor is the protection layer for a row on boot (M33 Task 5).
+    private shouldRearmLocalMonitor(position: PositionEntity): boolean {
+        if (position.protectiveOrderType === ProtectiveOrderTypeEnum.LOCAL_FALLBACK) {
+            return true;
+        }
+
+        // PENDING_OPEN rows are never disarmed — the monitor is their only protection pre-attach,
+        // in every env (ADR 0008 §2).
+        if (position.state === PositionStateEnum.PENDING_OPEN) {
+            return true;
+        }
+
+        // Paper EXCHANGE_SIDE: the local monitor stays the SL/TP enforcer (ADR 0008 §7). LIVE/
+        // TESTNET EXCHANGE_SIDE rows stay disarmed — the exchange holds protection.
+        if (position.protectiveOrderType === ProtectiveOrderTypeEnum.EXCHANGE_SIDE && this.appConfig.exchangeEnv === ExchangeEnvironmentEnum.PAPER) {
+            return true;
+        }
+
+        return false;
     }
 
     // §4d: seed the instrumentor's in-memory accumulator from the persisted

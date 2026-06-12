@@ -15,6 +15,7 @@ import { CorrelationModeEnum, PositionSideEnum, PositionSlotEnum, PositionStateE
 
 import { Money, MoneyValue } from '../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { PositionEntity } from '../../src/position/entity';
 import { AccountSnapshotRepository } from '../../src/position/repository/AccountSnapshotRepository';
@@ -299,6 +300,7 @@ describe('M31 D5-adv — ReconciliationService.loadNonClosedPositions is wired t
             instrumentor as never,
             snapshotWriter as never,
             events,
+            new SharedCloseCoordinator(),
         );
 
         // forceTick bypasses the interval lower-bound — gives us a deterministic trigger.

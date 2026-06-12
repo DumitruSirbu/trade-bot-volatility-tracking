@@ -28,13 +28,20 @@ import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Interval } from '@nestjs/schedule';
 
-import { ORDER_INTENT_APPROVED_EVENT, ORDER_INTENT_UNKNOWN_EVENT } from '../../common/const';
+import { ORDER_INTENT_APPROVED_EVENT, ORDER_INTENT_EXPIRED_EVENT, ORDER_INTENT_UNKNOWN_EVENT } from '../../common/const';
 import { IOrderIntentUnknownEvent } from '../../common/interface';
 import { HaltFlagService } from '../../common/service/HaltFlagService';
 import { Money, MoneyValue, formatMoney, parseMoney } from '../../common/utils/money';
 import { AppConfigService } from '../../config/service';
-import { PROTECTIVE_CLIENT_ORDER_ID_SL_SUFFIX, PROTECTIVE_CLIENT_ORDER_ID_TP_SUFFIX } from '../../execution/const';
+import {
+    ORDER_INTENT_EXPIRED_REASON_DRY_RUN,
+    ORDER_INTENT_EXPIRED_REASON_HALTED,
+    PROTECTIVE_CLIENT_ORDER_ID_SL_SUFFIX,
+    PROTECTIVE_CLIENT_ORDER_ID_TP_SUFFIX,
+    RECONCILIATION_FLATTEN_EVENT_ID_PREFIX,
+} from '../../execution/const';
 import { LocalProtectiveMonitor } from '../../execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../execution/service/SharedCloseCoordinator';
 import { ACCOUNT_STATE_SOURCE } from '../../exchange/interface';
 import { CcxtExecutionClient } from '../../exchange/service/CcxtExecutionClient';
 import { SubscriptionRetainer } from '../../market-data/service/SubscriptionRetainer';
@@ -195,6 +202,12 @@ export class ReconciliationService {
         private readonly instrumentor: PositionInstrumentor,
         private readonly snapshotWriter: AccountSnapshotWriter,
         private readonly events: EventEmitter2,
+        // M33 Fix 1b (ADR 0011 §9) — the shared close-in-flight registry. The flatten
+        // producer acquires the position's slot before emitting a CLOSE so a concurrent
+        // time-stop or SL/TP close on the same row emits exactly one close. Lives in
+        // ExecutionModule (forwardRef-imported here, same seam as LocalProtectiveMonitor).
+        @Inject(forwardRef(() => SharedCloseCoordinator))
+        private readonly closeCoordinator: SharedCloseCoordinator,
     ) {}
 
     // Operator / boot-pipeline policy setter (ADR 0010 §1a). Live should call this
@@ -290,6 +303,63 @@ export class ReconciliationService {
             // the structural backstop.
             this.logger.error(`order.intent.unknown transition failed positionId=${event.positionId} eventId=${event.eventId}: ${this.describe(cause)}`);
         }
+    }
+
+    // M33 R1-Fix-A. A flatten that emits its CLOSE intent and then loses the executor race to a
+    // halt / dry_run boundary surfaces as `ORDER_INTENT_EXPIRED_EVENT{reason:'halted'|'dry_run'}`.
+    // The enforcer's parser (`time-stop-enforcer-`) and the monitor's parser (`local-monitor-breach-`)
+    // do NOT match the flatten eventId, so without this listener the shared close slot stays held
+    // forever and the foreign position can never be re-flattened in-run. We release ONLY our own
+    // flatten slot (matched on the `reconciliation-flatten-` eventId prefix); the next reconciliation
+    // tick re-attempts the flatten once halt clears. We do NOT release on ORDER_INTENT_UNKNOWN —
+    // reconciliation owns that row's lifecycle through `onOrderIntentUnknown` instead.
+    @OnEvent(ORDER_INTENT_EXPIRED_EVENT)
+    onOrderIntentExpired(event: { eventId: string; reservationId: string | null; reason?: string }): void {
+        if (event.reason !== ORDER_INTENT_EXPIRED_REASON_HALTED && event.reason !== ORDER_INTENT_EXPIRED_REASON_DRY_RUN) {
+            return;
+        }
+
+        const positionId = this.extractPositionIdFromFlattenEventId(event.eventId);
+
+        if (positionId === null) {
+            return;
+        }
+
+        if (!this.closeCoordinator.isHeld(positionId)) {
+            return;
+        }
+
+        this.closeCoordinator.release(positionId);
+        this.logger.warn(
+            `case-a flatten intent for positionId=${positionId} expired (reason=${event.reason}) — released close slot; ` +
+                `next reconciliation tick will re-attempt the flatten`,
+        );
+    }
+
+    // Parses a positionId out of the flatten eventId scheme `reconciliation-flatten-${positionId}-${nowMs}`.
+    // Splits from the RIGHT (the `nowMs` suffix is the trailing dash-segment) and returns null on any
+    // mismatch so an enforcer / monitor expiry never releases a reconciliation-owned slot.
+    private extractPositionIdFromFlattenEventId(eventId: string): number | null {
+        const prefix = RECONCILIATION_FLATTEN_EVENT_ID_PREFIX;
+
+        if (!eventId.startsWith(prefix)) {
+            return null;
+        }
+
+        const rest = eventId.slice(prefix.length);
+        const dashIndex = rest.lastIndexOf('-');
+
+        if (dashIndex <= 0) {
+            return null;
+        }
+
+        const positionId = Number.parseInt(rest.slice(0, dashIndex), 10);
+
+        if (!Number.isInteger(positionId) || positionId <= 0) {
+            return null;
+        }
+
+        return positionId;
     }
 
     // Periodic 30s tick — the production cadence. Honors the `running` guard so
@@ -790,41 +860,65 @@ export class ReconciliationService {
             return;
         }
 
-        const markPrice = parseMoney(snapshot.markPrice ?? snapshot.entryPrice ?? '0');
-        const intent = this.buildCloseIntent(position, markPrice, nowMs);
-        const context = this.buildDeRiskContext(nowMs);
-        const decision = await this.riskGate.evaluate(intent, context);
-
-        if (decision.outcome !== RiskOutcomeEnum.APPROVED) {
-            this.logger.error(
-                `case-a flatten gate rejected positionId=${position.id} ${position.symbol} reason=${decision.rejectReason ?? 'unknown'} - row remains MANUAL_ADOPTED_UNMANAGED`,
-            );
+        // M33 Fix 1b (HIGH L2): acquire the shared close slot before emitting. If a time-stop
+        // or SL/TP close already holds it for this row, skip the flatten — exactly one close
+        // fires. Release on any abort below (gate-reject); on a successful emit the slot is held
+        // until the row reaches CLOSED (released there by the shared registry's CLOSED listener).
+        if (!this.closeCoordinator.tryAcquire(position.id)) {
+            this.logger.warn(`case-a flatten skipped positionId=${position.id} ${position.symbol} - close already in flight (shared registry)`);
 
             return;
         }
 
-        const approvedEvent: IOrderIntentApprovedEvent = {
-            intent,
-            approvedSlot: position.positionSlot ?? PositionSlotEnum.A,
-            approvedSizing: intent.sizing,
-            clampedExit: intent.proposedExit,
-            reservationId: decision.reservationId,
-            strategyVersionId: position.strategyVersionId,
-        };
-        this.events.emit(ORDER_INTENT_APPROVED_EVENT, approvedEvent);
+        // M33 R1-Fix-A: once the slot is held, an unexpected throw from the gate evaluate would
+        // leak it forever — the foreign position could never be re-flattened in-run. Wrap the
+        // post-acquire body so any throw releases the slot, logs with context, and returns; the
+        // next reconciliation tick re-attempts the flatten. The conditional gate-reject release
+        // inside the try body remains correct as-is.
+        try {
+            const markPrice = parseMoney(snapshot.markPrice ?? snapshot.entryPrice ?? '0');
+            const intent = this.buildCloseIntent(position, markPrice, nowMs);
+            const context = this.buildDeRiskContext(nowMs);
+            const decision = await this.riskGate.evaluate(intent, context);
 
-        // M6 R1.1.3 (ADR 0010 §5 revised). FLATTENED outcome now in the shared
-        // enum — replaces the prior RECONCILED_MISSING placeholder. M8 analytics
-        // distinguishes "bot flattened a foreign position via case-a policy"
-        // from "DB row vanished from exchange (case-b reconciled-missing)".
-        this.emitResolved({
-            positionId: position.id,
-            driftCase: DriftCaseEnum.EXCHANGE_NOT_IN_DB,
-            outcome: ReconciliationOutcomeEnum.FLATTENED,
-            resolvedAtMs: nowMs,
-        });
+            if (decision.outcome !== RiskOutcomeEnum.APPROVED) {
+                this.closeCoordinator.release(position.id);
+                this.logger.error(
+                    `case-a flatten gate rejected positionId=${position.id} ${position.symbol} reason=${decision.rejectReason ?? 'unknown'} - row remains MANUAL_ADOPTED_UNMANAGED`,
+                );
 
-        this.logger.warn(`case-a FLATTEN positionId=${position.id} symbol=${snapshot.symbol} qty=${snapshot.qty} - close intent emitted through gate`);
+                return;
+            }
+
+            const approvedEvent: IOrderIntentApprovedEvent = {
+                intent,
+                approvedSlot: position.positionSlot ?? PositionSlotEnum.A,
+                approvedSizing: intent.sizing,
+                clampedExit: intent.proposedExit,
+                reservationId: decision.reservationId,
+                strategyVersionId: position.strategyVersionId,
+            };
+            this.events.emit(ORDER_INTENT_APPROVED_EVENT, approvedEvent);
+
+            // M6 R1.1.3 (ADR 0010 §5 revised). FLATTENED outcome now in the shared
+            // enum — replaces the prior RECONCILED_MISSING placeholder. M8 analytics
+            // distinguishes "bot flattened a foreign position via case-a policy"
+            // from "DB row vanished from exchange (case-b reconciled-missing)".
+            this.emitResolved({
+                positionId: position.id,
+                driftCase: DriftCaseEnum.EXCHANGE_NOT_IN_DB,
+                outcome: ReconciliationOutcomeEnum.FLATTENED,
+                resolvedAtMs: nowMs,
+            });
+
+            this.logger.warn(`case-a FLATTEN positionId=${position.id} symbol=${snapshot.symbol} qty=${snapshot.qty} - close intent emitted through gate`);
+        } catch (cause) {
+            this.closeCoordinator.release(position.id);
+            this.logger.error(
+                `case-a flatten threw for positionId=${position.id} ${position.symbol}: ${this.describe(cause)} - ` +
+                    `released close slot; next tick re-attempts the flatten`,
+            );
+        }
     }
 
     // Synthesize a CLOSE IOrderIntent for an adopted foreign position. Side = opposite
@@ -837,7 +931,7 @@ export class ReconciliationService {
     // identical inputs produce identical eventIds (deterministic / replay-safe).
     private buildCloseIntent(position: PositionEntity, markPrice: MoneyValue, nowMs: number): IOrderIntent {
         const closeSide = position.side === PositionSideEnum.LONG ? PositionSideEnum.SHORT : PositionSideEnum.LONG;
-        const eventId = `reconciliation-flatten-${position.id}-${nowMs}`;
+        const eventId = `${RECONCILIATION_FLATTEN_EVENT_ID_PREFIX}${position.id}-${nowMs}`;
         const sizing = {
             qty: position.qty,
             notional: position.qty.times(markPrice),

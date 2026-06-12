@@ -19,6 +19,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ORDER_INTENT_APPROVED_EVENT } from '../../src/common/const';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { IPositionSnapshot } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { PositionEntity } from '../../src/position/entity';
@@ -140,6 +141,7 @@ function buildFlattenHarness(insertedRowIdSeed: number): IFlattenHarness {
         instrumentor,
         snapshotWriter,
         events,
+        new SharedCloseCoordinator(),
     );
 
     service.setForeignPositionPolicy('flatten');

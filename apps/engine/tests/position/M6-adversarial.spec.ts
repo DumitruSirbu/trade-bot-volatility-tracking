@@ -29,6 +29,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { Money } from '../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { IExchangeClient, IFundingPaymentSnapshot, IOpenOrderSnapshot, IPositionSnapshot } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { AccountSnapshotEntity, PositionEntity, TransactionEntity } from '../../src/position/entity';
@@ -421,6 +422,7 @@ describe('2. Reconciliation adversarials', () => {
             instrumentor,
             snapshotWriter,
             events,
+            new SharedCloseCoordinator(),
         );
 
         return {
@@ -670,7 +672,7 @@ describe('3. LocalProtectiveMonitor adversarials', () => {
         const events = new EventEmitter2();
         const emitSpy = jest.spyOn(events, 'emit');
 
-        const monitor = new LocalProtectiveMonitor(positionRepository, riskGate, events);
+        const monitor = new LocalProtectiveMonitor(positionRepository, riskGate, events, new SharedCloseCoordinator());
 
         return { monitor, positionRepository, riskGate, events, emitSpy, positionRow };
     }
@@ -1072,6 +1074,7 @@ describe('5. Funding ingestion adversarials', () => {
             instrumentor,
             snapshotWriter,
             events,
+            new SharedCloseCoordinator(),
         );
 
         return { service, positionService, exchangeClient };
@@ -1697,6 +1700,7 @@ describe('9. Crash-window adversarials (ADR 0014)', () => {
             instrumentor,
             snapshotWriter,
             events,
+            new SharedCloseCoordinator(),
         );
 
         // scheduledTick (not forceTick) is the boot-guarded path
@@ -1719,7 +1723,7 @@ describe('9. Crash-window adversarials (ADR 0014)', () => {
         const events = new EventEmitter2();
         const emitSpy = jest.spyOn(events, 'emit');
 
-        const monitor = new LocalProtectiveMonitor(positionRepository, riskGate, events);
+        const monitor = new LocalProtectiveMonitor(positionRepository, riskGate, events, new SharedCloseCoordinator());
 
         monitor.arm({
             positionId: 42,
@@ -1801,6 +1805,7 @@ describe('9. Crash-window adversarials (ADR 0014)', () => {
                 instr,
                 snapWriter,
                 ev,
+                new SharedCloseCoordinator(),
             );
         };
 

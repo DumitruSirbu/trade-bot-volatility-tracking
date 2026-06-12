@@ -13,7 +13,9 @@ import {
     FillAccumulator,
     LocalProtectiveMonitor,
     OrderPolicyRouter,
+    PositionTimeStopEnforcer,
     ProtectiveOrderAttacher,
+    SharedCloseCoordinator,
 } from './service';
 
 // M5 ExecutionModule. The single legitimate caller of the exchange order API: subscribes to
@@ -33,9 +35,15 @@ import {
         FillAccumulator,
         LocalProtectiveMonitor,
         OrderPolicyRouter,
+        PositionTimeStopEnforcer,
         ProtectiveOrderAttacher,
+        SharedCloseCoordinator,
         ExecutionService,
     ],
-    exports: [ExecutionService, LocalProtectiveMonitor],
+    // M33 Fix 1b — export SharedCloseCoordinator so PositionModule's ReconciliationService
+    // injects the SAME single instance (the registry must not be duplicated; two instances
+    // = two registries = the double-close it exists to prevent). PositionModule already
+    // imports ExecutionModule (via forwardRef) and consumes LocalProtectiveMonitor the same way.
+    exports: [ExecutionService, LocalProtectiveMonitor, SharedCloseCoordinator],
 })
 export class ExecutionModule {}

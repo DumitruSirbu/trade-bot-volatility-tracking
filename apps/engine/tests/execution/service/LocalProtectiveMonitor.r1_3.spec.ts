@@ -16,6 +16,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import { Money } from '../../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../../src/execution/service/SharedCloseCoordinator';
 import { PositionEntity } from '../../../src/position/entity';
 import { PositionRepository } from '../../../src/position/repository/PositionRepository';
 import { IRiskGateContext } from '../../../src/risk/interface';
@@ -59,7 +60,7 @@ function buildHarness(): IHarness {
     } as unknown as RiskGateService;
 
     const events = new EventEmitter2();
-    const monitor = new LocalProtectiveMonitor(repository, gate, events);
+    const monitor = new LocalProtectiveMonitor(repository, gate, events, new SharedCloseCoordinator());
 
     return { monitor, evaluateSpy };
 }

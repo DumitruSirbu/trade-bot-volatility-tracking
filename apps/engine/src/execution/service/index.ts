@@ -4,4 +4,6 @@ export * from './ExecutionService';
 export * from './FillAccumulator';
 export * from './LocalProtectiveMonitor';
 export * from './OrderPolicyRouter';
+export * from './PositionTimeStopEnforcer';
 export * from './ProtectiveOrderAttacher';
+export * from './SharedCloseCoordinator';

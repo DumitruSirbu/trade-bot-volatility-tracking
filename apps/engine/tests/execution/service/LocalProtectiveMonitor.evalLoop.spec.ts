@@ -36,6 +36,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ORDER_INTENT_APPROVED_EVENT, PRICE_UPDATE_EVENT } from '../../../src/common/const';
 import { Money } from '../../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../../src/execution/service/SharedCloseCoordinator';
 import { POSITION_STATE_TRANSITIONED_EVENT } from '../../../src/position/const';
 import { PositionEntity } from '../../../src/position/entity';
 import { PositionRepository } from '../../../src/position/repository/PositionRepository';
@@ -100,7 +101,7 @@ function buildHarness(opts: IHarnessOpts = {}): IHarness {
     const events = new EventEmitter2();
     const emitSpy = jest.spyOn(events, 'emit');
 
-    const monitor = new LocalProtectiveMonitor(repository, gate, events);
+    const monitor = new LocalProtectiveMonitor(repository, gate, events, new SharedCloseCoordinator());
 
     return { monitor, events, emitSpy, gate, evaluateSpy, repository };
 }

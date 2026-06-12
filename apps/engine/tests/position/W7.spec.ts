@@ -24,6 +24,7 @@ import { PositionRepository } from '../../src/position/repository/PositionReposi
 import { TransactionRepository } from '../../src/position/repository/TransactionRepository';
 import { AccountSnapshotWriter, ACCOUNT_SNAPSHOT_INTERVAL_MS } from '../../src/position/service/AccountSnapshotWriter';
 import { PositionInstrumentor } from '../../src/position/service/PositionInstrumentor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 
 const NOW_MS = 1_700_000_000_000;
 
@@ -428,6 +429,7 @@ describe('ReconciliationService — liquidation-price propagation to instrumento
             instrumentor as never,
             snapshotWriter as never,
             events,
+            new SharedCloseCoordinator(),
         );
 
         await service.tick(NOW_MS);
@@ -497,6 +499,7 @@ describe('ReconciliationService — liquidation-price propagation to instrumento
             instrumentor as never,
             snapshotWriter as never,
             events,
+            new SharedCloseCoordinator(),
         );
 
         await service.tick(NOW_MS);
@@ -558,6 +561,7 @@ describe('ReconciliationService — drift-forced snapshot (W7 item 2; ADR 0012 �
             instrumentor as never,
             snapshotWriter as never,
             events,
+            new SharedCloseCoordinator(),
         );
 
         await service.tick(NOW_MS);
@@ -601,6 +605,7 @@ describe('ReconciliationService — drift-forced snapshot (W7 item 2; ADR 0012 �
             { setLiquidationPrice: jest.fn() } as never,
             snapshotWriter as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
 
         await service.tick(NOW_MS);

@@ -34,6 +34,7 @@ import { ExecutionService } from '../../../src/execution/service/ExecutionServic
 import { ExchangeOrderSubmitter } from '../../../src/execution/service/ExchangeOrderSubmitter';
 import { FillAccumulator } from '../../../src/execution/service/FillAccumulator';
 import { LocalProtectiveMonitor } from '../../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../../src/execution/service/SharedCloseCoordinator';
 import { OrderPolicyRouter } from '../../../src/execution/service/OrderPolicyRouter';
 import { ProtectiveOrderAttacher } from '../../../src/execution/service/ProtectiveOrderAttacher';
 import { RiskGateService } from '../../../src/risk/service/RiskGateService';
@@ -83,6 +84,7 @@ function makeService(
         { findById: jest.fn().mockResolvedValue(null) } as never,
         { evaluate: jest.fn() } as never,
         new EventEmitter2(),
+        new SharedCloseCoordinator(),
     );
     const haltFlag = new HaltFlagService();
 
@@ -434,6 +436,7 @@ describe('ExecutionService — POST_ONLY_MAKER awaitPolicyTimeout: cancel + clas
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
         const haltFlag = new HaltFlagService();
         // bestBid=29999, bestAsk=30001: SHORT wouldCross = limitPrice(30000) <= bestBid(29999) → false
@@ -528,6 +531,7 @@ describe('ExecutionService — POST_ONLY_MAKER would-cross → CANCELLED, no res
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
         const haltFlag = new HaltFlagService();
 
@@ -639,6 +643,7 @@ describe('ExecutionService — ADD path with weighted-average entry', () => {
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
         const haltFlag = new HaltFlagService();
         const exchangeClient = {
@@ -760,6 +765,7 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
         const haltFlag = new HaltFlagService();
         const exchangeClient = { watchOrderBook: jest.fn() } as unknown as import('../../../src/exchange/interface').IExchangeClient;
@@ -876,6 +882,7 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
         const haltFlag = new HaltFlagService();
         const exchangeClient = { watchOrderBook: jest.fn() } as unknown as import('../../../src/exchange/interface').IExchangeClient;

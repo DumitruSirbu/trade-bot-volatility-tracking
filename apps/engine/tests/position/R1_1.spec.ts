@@ -29,6 +29,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { Money, MoneyValue } from '../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { IExchangeClient, IPositionSnapshot } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { PositionEntity } from '../../src/position/entity';
@@ -128,6 +129,7 @@ function buildReconHarness(opts: { positions?: PositionEntity[]; exchangePositio
         instrumentor,
         snapshotWriter,
         events,
+        new SharedCloseCoordinator(),
     );
 
     return { service, positionService, riskGate, monitor, events, emitSpy };
@@ -263,6 +265,7 @@ describe('M6 R1.1.3 — case-(a) flatten emits ReconciliationOutcomeEnum.FLATTEN
             { setLiquidationPrice: jest.fn() } as never,
             { writeNow: jest.fn().mockResolvedValue(null) } as never,
             events,
+            new SharedCloseCoordinator(),
         );
         service.setForeignPositionPolicy('flatten');
 

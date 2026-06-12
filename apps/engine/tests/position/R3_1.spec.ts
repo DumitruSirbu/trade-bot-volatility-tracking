@@ -31,6 +31,7 @@ import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { Money } from '../../src/common/utils/money';
 import { SubmitStateEnum } from '../../src/execution/enum';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { IOpenOrderSnapshot, IPositionSnapshot } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { PositionEntity } from '../../src/position/entity';
@@ -161,6 +162,7 @@ function buildReconHarness(opts: {
         instrumentor,
         snapshotWriter,
         events,
+        new SharedCloseCoordinator(),
     );
 
     return { service, positions, positionService, riskGate, monitor, exchangeClient, transactions };
@@ -339,7 +341,7 @@ describe('R3.2.2 — LocalProtectiveMonitor.extractPositionIdFromBreachEventId t
         const gate = { evaluate: evaluateSpy, isRecoveryReady: jest.fn().mockReturnValue(true) } as unknown as RiskGateService;
         const events = new EventEmitter2();
         const emitSpy = jest.spyOn(events, 'emit');
-        const monitor = new LocalProtectiveMonitor(repository, gate, events);
+        const monitor = new LocalProtectiveMonitor(repository, gate, events, new SharedCloseCoordinator());
 
         return { monitor, evaluateSpy, emitSpy };
     }

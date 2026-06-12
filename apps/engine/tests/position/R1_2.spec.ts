@@ -33,6 +33,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { Money, MoneyValue } from '../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { IExchangeClient, IPositionSnapshot } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { PositionEntity } from '../../src/position/entity';
@@ -436,6 +437,7 @@ describe('M6 R1.2.4 — ReconciliationService case-(f) UNKNOWN_INTENT_OUTCOME', 
             instrumentor,
             snapshotWriter,
             events,
+            new SharedCloseCoordinator(),
         );
 
         return { service, emitSpy, fetchOrderByClientId, findLatestByPositionId };
@@ -653,6 +655,7 @@ describe('M6 R1.2.5 — ReconciliationService.handleProtectiveOrderDriftIfNeeded
             instrumentor,
             snapshotWriter,
             events,
+            new SharedCloseCoordinator(),
         );
 
         return { service, updateMock, armMock, emitSpy };

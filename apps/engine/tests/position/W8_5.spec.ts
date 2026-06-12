@@ -20,6 +20,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import { Money } from '../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { IExchangeClient, IOpenOrderSnapshot, IPositionSnapshot } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
@@ -111,6 +112,7 @@ describe('ReconciliationService.scheduledTick — boot-race guard (M6 W8.5)', ()
             instrumentor,
             snapshotWriter,
             events,
+            new SharedCloseCoordinator(),
         );
 
         return { service, exchangeClient, positions, riskGate };
@@ -264,7 +266,7 @@ describe('LocalProtectiveMonitor.onPriceUpdate — recovery interaction (M6 R2.1
         } as unknown as RiskGateService;
         const events = new EventEmitter2();
         const emitSpy = jest.spyOn(events, 'emit');
-        const monitor = new LocalProtectiveMonitor(positions, riskGate, events);
+        const monitor = new LocalProtectiveMonitor(positions, riskGate, events, new SharedCloseCoordinator());
 
         return { monitor, evaluateSpy, emitSpy };
     }

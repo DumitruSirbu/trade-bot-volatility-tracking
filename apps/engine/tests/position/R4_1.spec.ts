@@ -21,6 +21,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { Money } from '../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { IOpenOrderSnapshot, IPositionSnapshot } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { PositionEntity } from '../../src/position/entity';
@@ -249,6 +250,7 @@ function buildReconHarness(opts: {
         instrumentor,
         snapshotWriter,
         events,
+        new SharedCloseCoordinator(),
     );
 
     return { service, positionService, riskGate, monitor, exchangeClient };
