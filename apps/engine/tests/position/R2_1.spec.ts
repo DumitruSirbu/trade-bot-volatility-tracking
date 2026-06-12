@@ -219,6 +219,7 @@ interface IReconHarness {
     positions: {
         findById: jest.Mock;
         findOpen: jest.Mock;
+        findNonTerminal: jest.Mock;
         createOpen: jest.Mock;
         save: jest.Mock;
         findLastClosedBySymbol: jest.Mock;
@@ -243,6 +244,7 @@ function buildReconHarness(opts: { dbPositions?: PositionEntity[]; exchangePosit
     const positions = {
         findById: jest.fn().mockImplementation(async (id: number) => dbPositions.find((p) => p.id === id) ?? null),
         findOpen: jest.fn().mockResolvedValue(dbPositions),
+        findNonTerminal: jest.fn().mockResolvedValue(dbPositions),
         createOpen: jest.fn(),
         save: jest.fn().mockImplementation(async (e: PositionEntity) => e),
         findLastClosedBySymbol: jest.fn().mockResolvedValue(null),

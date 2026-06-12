@@ -39,7 +39,14 @@ import { computeFillCashflow } from '../../position/util/pnlMath';
 import { IOrderIntent, IOrderIntentApprovedEvent } from '../../risk/interface';
 import { RiskGateService } from '../../risk/service';
 import { StrategyVersionRepository } from '../../strategy/repository/StrategyVersionRepository';
-import { MAX_PERMANENT_RETRY_ATTEMPTS, MAX_REDUCE_REMAINDER_ATTEMPTS } from '../const';
+import {
+    ENTRY_AUDIT_PERSIST_FAILED_REASON,
+    MAX_PERMANENT_RETRY_ATTEMPTS,
+    MAX_REDUCE_REMAINDER_ATTEMPTS,
+    PENDING_OPEN_PROMOTE_EVENT_CLASS,
+    PENDING_PROMOTE_FAILED_REASON,
+    REDUCE_ON_FLAT_POSITION_REASON,
+} from '../const';
 import { SubmitStateEnum } from '../enum';
 import { IFillSummary, IOrderPlanInternal, IProtectiveAttachResult, IProtectiveFallbackEvent } from '../interface';
 import { ClientOrderIdFactory } from './ClientOrderIdFactory';
@@ -280,6 +287,28 @@ export class ExecutionService {
             return;
         }
 
+        // M31 Defect 1 (flat-row guard). A reduce fill against an already-flat row (qty <= 0)
+        // means the position was finalized/zeroed by a prior path; writing another close tx
+        // would double-book the ledger. Escalate to M6 reconciliation and abort without any
+        // write (no second close row, no qty mutation).
+        if (position.qty.lessThanOrEqualTo(0)) {
+            this.logger.warn(
+                `reduce fill on already-flat positionId=${position.id} ${event.intent.symbol} slot=${slot} ` +
+                    `qty=${formatMoney(position.qty)} - skipping double-close, escalating to M6`,
+            );
+            const flatRowEvent: IOrderIntentUnknownEvent = {
+                eventId: event.intent.eventId,
+                reservationId: event.reservationId,
+                state: submitResult.state,
+                reason: REDUCE_ON_FLAT_POSITION_REASON,
+                positionId: position.id,
+            };
+            this.events.emit(ORDER_INTENT_UNKNOWN_EVENT, flatRowEvent);
+            this.releaseReservationSafely(event.reservationId);
+
+            return;
+        }
+
         const newQty = position.qty.minus(fillSummary.filledQty);
 
         // Round-4 #3: a negative remainder means exchange-vs-local drift (filled qty exceeds
@@ -325,6 +354,22 @@ export class ExecutionService {
         // arithmetic-difference check (e.g. newQty = 1e-30 would have read as still-open).
         const isClosingFill = position.qty.lessThanOrEqualTo(fillSummary.filledQty);
         const clampedQty = isClosingFill ? new Money(0) : newQty;
+
+        // M31 Defect 1 (ADR 0009 §6.3 — two-step promote through `open`). A monitor-breach or
+        // kill-switch close can land on a row still in PENDING_OPEN (the protective monitor is
+        // armed during PENDING_OPEN per ADR 0008 §2). The state graph deliberately forbids
+        // pending_open -> closing (positionStateGraph.ts), so the row must be promoted
+        // pending_open -> open BEFORE any irreversible write. This guard runs at the TOP of the
+        // closing-fill block: if the promote throws, NOTHING is committed (no qty=0, no disarm,
+        // no close tx) — a clean abort that escalates to M6 rather than leaving a flat,
+        // close-tx'd, non-terminal zombie row.
+        if (isClosingFill && position.state === PositionStateEnum.PENDING_OPEN) {
+            try {
+                await this.promotePendingOpenBeforeClose(event, submitResult, position);
+            } catch {
+                return;
+            }
+        }
 
         // M6 W4b (ADR 0009 §6.1b). The qty mutation routes through PositionService.adjustQty
         // on the non-closing partial-reduce path so the qty axis has a single writer and
@@ -414,6 +459,36 @@ export class ExecutionService {
             `reduce applied positionId=${position.id} ${event.intent.symbol} -${formatMoney(fillSummary.filledQty)} ` +
                 `@ ${formatMoney(fillSummary.avgFillPrice)} (qty now ${formatMoney(position.qty)})`,
         );
+    }
+
+    // M31 Defect 1 (ADR 0009 §6.3). Promote a PENDING_OPEN row to OPEN before a closing fill
+    // commits any irreversible write. Resolves cleanly on success (or when the source state was
+    // already promotable); THROWS when the promote fails — in which case it has already escalated
+    // to M6 (ORDER_INTENT_UNKNOWN_EVENT) and released the reservation, and the caller aborts the
+    // closing-fill path with nothing committed. Throwing (not returning a bool) keeps this a pure
+    // command per CQS; the caller's try/catch owns the abort path.
+    private async promotePendingOpenBeforeClose(event: IOrderIntentApprovedEvent, submitResult: ILiveSubmitResult, position: PositionEntity): Promise<void> {
+        try {
+            await this.positionService.transition(position.id, PositionStateEnum.OPEN, {
+                nowMs: Date.now(),
+                eventClass: PENDING_OPEN_PROMOTE_EVENT_CLASS,
+            });
+        } catch (cause) {
+            this.logger.error(
+                `pending_open promote failed positionId=${position.id} sourceState=${position.state}: ${this.describe(cause)} - escalating to M6`,
+            );
+            const promoteFailedEvent: IOrderIntentUnknownEvent = {
+                eventId: event.intent.eventId,
+                reservationId: event.reservationId,
+                state: submitResult.state,
+                reason: PENDING_PROMOTE_FAILED_REASON,
+                positionId: position.id,
+            };
+            this.events.emit(ORDER_INTENT_UNKNOWN_EVENT, promoteFailedEvent);
+            this.releaseReservationSafely(event.reservationId);
+
+            throw cause;
+        }
     }
 
     // ADR 0012 §1: cashflow is only populated for reduce/close fills (open/add are
@@ -818,6 +893,9 @@ export class ExecutionService {
         // re-arm (that would double-watch and risk double-exit on breach) — the existing
         // protection state stays untouched. ADR 0007 §3 also forbids re-anchoring SL/TP on
         // ADD, so neither arm nor attach is re-run on this path.
+        // arm order is intentional per ADR 0008 §2 — do NOT move recordEntryTransaction before arm
+        // without an ADR 0008 §2 amendment and architect sign-off
+
         if (isOpenIntent) {
             this.localProtectiveMonitor.arm({
                 positionId: positionRow.id,
@@ -828,7 +906,7 @@ export class ExecutionService {
             });
         }
 
-        await this.recordEntryTransaction(positionRow.id, event, submitResult, fillSummary);
+        await this.recordEntryTransactionOrEscalate(positionRow.id, event, submitResult, fillSummary);
 
         if (!isOpenIntent) {
             // SL/TP on an ADD are not re-anchored by default (ADR 0007 §3); the existing
@@ -911,6 +989,45 @@ export class ExecutionService {
         positionRow.entryNotional = newEntryNotional;
 
         return this.positions.save(positionRow);
+    }
+
+    // M31 Defect 2 (fail-loud on missing entry transaction). recordTerminal already swallows
+    // duplicate-key as an idempotent no-op (TransactionRepository), so any throw here is a
+    // NON-duplicate persist failure — an OPEN/ADD that filled but whose audit row never landed.
+    // That is the survival-class invariant ("every fill shows up in transactions") breaking, so
+    // escalate the same way the zero-fill path does: error log + ORDER_AUDIT_PERSIST_FAILED_EVENT
+    // (operator alert, M9) + ORDER_INTENT_UNKNOWN_EVENT (M6 owns the unaudited row) — never leave
+    // an unprotected/unaudited live position silently un-escalated. Arm ordering is unchanged
+    // (ADR 0008 §2); this is a fail-loud wrapper only.
+    private async recordEntryTransactionOrEscalate(
+        positionId: number,
+        event: IOrderIntentApprovedEvent,
+        submitResult: ILiveSubmitResult,
+        fillSummary: IFillSummary,
+    ): Promise<void> {
+        try {
+            await this.recordEntryTransaction(positionId, event, submitResult, fillSummary);
+        } catch (cause) {
+            this.logger.error(
+                `entry transaction persist failed positionId=${positionId} clientOrderId=${submitResult.clientOrderId} ` +
+                    `eventId=${event.intent.eventId}: ${this.describe(cause)} - escalating to M6/M9`,
+            );
+            this.events.emit(ORDER_AUDIT_PERSIST_FAILED_EVENT, {
+                eventId: event.intent.eventId,
+                clientOrderId: submitResult.clientOrderId,
+                symbol: event.intent.symbol,
+                intentAction: event.intent.intentAction,
+                auditFailureReason: this.classifyAuditFailure(cause),
+            });
+            const persistFailedEvent: IOrderIntentUnknownEvent = {
+                eventId: event.intent.eventId,
+                reservationId: event.reservationId,
+                state: submitResult.state,
+                reason: ENTRY_AUDIT_PERSIST_FAILED_REASON,
+                positionId,
+            };
+            this.events.emit(ORDER_INTENT_UNKNOWN_EVENT, persistFailedEvent);
+        }
     }
 
     private async recordEntryTransaction(

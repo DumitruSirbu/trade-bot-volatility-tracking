@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { And, DeepPartial, In, LessThan, MoreThanOrEqual, Not, Repository } from 'typeorm';
 
 import { BaseRepository } from '../../common/repository/BaseRepository';
+import { Money, MoneyValue } from '../../common/utils/money';
 import { PositionEntity } from '../entity';
 import { IPositionQuery } from '../interface';
 
@@ -23,6 +24,63 @@ export class PositionRepository extends BaseRepository<PositionEntity> implement
 
     async findOpen(): Promise<PositionEntity[]> {
         return this.repository.find({ where: { state: Not(PositionStateEnum.CLOSED) } });
+    }
+
+    // Broad reconciliation view: every non-terminal row regardless of qty. This MUST include
+    // qty=0 "zombie" rows so the reconciler can still see and resolve a position whose quantity
+    // drained to zero but whose state never finalized. The predicate is currently identical to
+    // `findOpen` (state != CLOSED); the distinction is semantic, not a different filter. If
+    // `findOpen` is ever narrowed to `qty > 0`, this method MUST NOT inherit that narrowing —
+    // split the two at that point so the reconciliation view keeps seeing flat residue.
+    async findNonTerminal(): Promise<PositionEntity[]> {
+        return this.findOpen();
+    }
+
+    // Live-risk view: only rows that carry real residual exposure (`qty > 0` AND non-terminal).
+    // A flat (qty=0) non-terminal row is lifecycle residue, not live risk; summing its notional
+    // overstates exposure (the `1508.35` post-deploy artefact). Kept distinct from `findOpen` so
+    // existing call sites are unaffected.
+    async findLiveRisk(): Promise<PositionEntity[]> {
+        return this.repository.createQueryBuilder('p').where('p.state != :closed', { closed: PositionStateEnum.CLOSED }).andWhere('p.qty > 0').getMany();
+    }
+
+    // Scalar open-exposure aggregate for the lifecycle recompute: SUM(qty * entry_price) over
+    // live-risk rows (`qty > 0` AND non-terminal). Residual notional — matches `reconcileClose`
+    // in RiskGateService — NOT entry_notional, which is immutable after ADDs and would overstate
+    // exposure. Returns Money(0) when no rows match (COALESCE guards the empty-table NULL).
+    async findLiveRiskAggregates(): Promise<{ openExposure: MoneyValue }> {
+        const row = await this.repository
+            .createQueryBuilder('p')
+            .select('COALESCE(SUM(p.qty * p.entry_price), 0)', 'openExposure')
+            .where('p.state != :closed', { closed: PositionStateEnum.CLOSED })
+            .andWhere('p.qty > 0')
+            .getRawOne<{ openExposure: string }>();
+
+        return { openExposure: new Money(row?.openExposure ?? '0') };
+    }
+
+    // Close-side aggregates for the lifecycle recompute, scoped to one UTC day via an explicit
+    // half-open range [utcDayStart, utcDayStart+1d). Realized PnL books to the CLOSE date
+    // (ADR 0004 §5), so the predicate is keyed on closedAt, not openedAt. The caller derives
+    // `utcDayStart` from the current UTC day — never CURRENT_DATE, which is session-timezone
+    // dependent near midnight.
+    async findClosedTodayAggregates(utcDayStart: Date): Promise<{ realizedPnlDay: MoneyValue; tradesCount: number }> {
+        const nextDay = new Date(utcDayStart.getTime());
+        nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+
+        const row = await this.repository
+            .createQueryBuilder('p')
+            .select('COALESCE(SUM(p.realized_pnl), 0)', 'realizedPnlDay')
+            .addSelect('COUNT(*)', 'tradesCount')
+            .where('p.state = :closed', { closed: PositionStateEnum.CLOSED })
+            .andWhere('p.closed_at >= :dayStart', { dayStart: utcDayStart })
+            .andWhere('p.closed_at < :nextDay', { nextDay })
+            .getRawOne<{ realizedPnlDay: string; tradesCount: string }>();
+
+        return {
+            realizedPnlDay: new Money(row?.realizedPnlDay ?? '0'),
+            tradesCount: Number(row?.tradesCount ?? 0),
+        };
     }
 
     async findOpenBySymbol(symbol: string): Promise<PositionEntity[]> {

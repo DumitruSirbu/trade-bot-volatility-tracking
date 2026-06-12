@@ -19,6 +19,10 @@ import { PositionStateEnum } from '@bot/shared';
 // entry here or transitions originating from it throw.
 
 const LEGAL_TRANSITIONS: ReadonlyMap<PositionStateEnum, ReadonlySet<PositionStateEnum>> = new Map([
+    // pending_open -> closing is DELIBERATELY absent (ADR 0009 §3 / §6.3). A reduce-family
+    // close on a pending_open row promotes through `open` first (two-step, via
+    // ExecutionService.promotePendingOpenBeforeClose) so the close never fires on an
+    // unprotected, un-finalized row. Do NOT add a direct pending_open -> closing edge.
     [PositionStateEnum.PENDING_OPEN, new Set<PositionStateEnum>([PositionStateEnum.OPEN, PositionStateEnum.RECONCILING])],
     [PositionStateEnum.OPEN, new Set<PositionStateEnum>([PositionStateEnum.CLOSING, PositionStateEnum.RECONCILING])],
     [PositionStateEnum.CLOSING, new Set<PositionStateEnum>([PositionStateEnum.OPEN, PositionStateEnum.CLOSED, PositionStateEnum.RECONCILING])],

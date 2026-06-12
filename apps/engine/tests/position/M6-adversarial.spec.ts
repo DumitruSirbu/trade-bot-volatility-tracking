@@ -340,8 +340,12 @@ describe('2. Reconciliation adversarials', () => {
             fetchFundingHistory: jest.fn().mockResolvedValue([] as IFundingPaymentSnapshot[]),
         } as unknown as IExchangeClient;
 
+        // M31 Wave B: reconciliation reads via findNonTerminal; share the same mock as
+        // findOpen so the dynamic mockImplementation reassignment below stays in sync.
+        const findNonTerminalMock = jest.fn().mockResolvedValue(opts.dbPositions ?? []);
         const positions = {
-            findOpen: jest.fn().mockResolvedValue(opts.dbPositions ?? []),
+            findOpen: findNonTerminalMock,
+            findNonTerminal: findNonTerminalMock,
             createOpen: jest.fn().mockResolvedValue(buildPosition({ state: PositionStateEnum.MANUAL_ADOPTED_UNMANAGED })),
             save: jest.fn().mockImplementation(async (entity: PositionEntity) => entity),
             findLastClosedBySymbol: jest.fn().mockResolvedValue(null),
@@ -1019,6 +1023,7 @@ describe('5. Funding ingestion adversarials', () => {
 
         const positions = {
             findOpen: jest.fn().mockResolvedValue([position]),
+            findNonTerminal: jest.fn().mockResolvedValue([position]),
             createOpen: jest.fn(),
             save: jest.fn().mockImplementation(async (entity: PositionEntity) => entity),
             findLastClosedBySymbol: jest.fn().mockResolvedValue(null),
@@ -1338,7 +1343,8 @@ describe('7. AccountSnapshotWriter adversarials', () => {
         } as unknown as IExchangeClient;
 
         const positions = {
-            findOpen: jest.fn().mockResolvedValue(opts.positions ?? []),
+            findLiveRisk: jest.fn().mockResolvedValue(opts.positions ?? []),
+            findNonTerminal: jest.fn().mockResolvedValue(opts.positions ?? []),
         } as unknown as PositionRepository;
 
         const transactions = {
@@ -1455,6 +1461,7 @@ describe('8. EngineBootstrapService adversarials', () => {
     ) {
         const positionRepo = {
             findOpen: jest.fn().mockResolvedValue(opts.positions ?? []),
+            findNonTerminal: jest.fn().mockResolvedValue(opts.positions ?? []),
         } as unknown as PositionRepository;
 
         const reconciliation = {
@@ -1654,7 +1661,10 @@ describe('9. Crash-window adversarials (ADR 0014)', () => {
             fetchOrderByClientId: jest.fn().mockResolvedValue(null),
         } as unknown as IExchangeClient;
 
-        const positions = { findOpen: jest.fn().mockResolvedValue([]) } as unknown as PositionRepository;
+        const positions = {
+            findOpen: jest.fn().mockResolvedValue([]),
+            findNonTerminal: jest.fn().mockResolvedValue([]),
+        } as unknown as PositionRepository;
         const transactions = {
             findLatestFundingByPosition: jest.fn().mockResolvedValue(null),
         } as unknown as TransactionRepository;
@@ -1744,6 +1754,7 @@ describe('9. Crash-window adversarials (ADR 0014)', () => {
 
             const posRepo = {
                 findOpen: jest.fn().mockResolvedValue([position]),
+                findNonTerminal: jest.fn().mockResolvedValue([position]),
                 findLastClosedBySymbol: jest.fn().mockResolvedValue(null),
                 save: jest.fn().mockImplementation(async (entity: PositionEntity) => entity),
             } as unknown as PositionRepository;

@@ -67,6 +67,7 @@ describe('ReconciliationService.scheduledTick — boot-race guard (M6 W8.5)', ()
         } as unknown as IExchangeClient;
         const positions = {
             findOpen: jest.fn().mockResolvedValue([]),
+            findNonTerminal: jest.fn().mockResolvedValue([]),
             findById: jest.fn().mockResolvedValue(null),
             findLastClosedBySymbol: jest.fn().mockResolvedValue(null),
         } as unknown as PositionRepository;
@@ -148,7 +149,7 @@ describe('AccountSnapshotWriter.scheduledTick — boot-race guard (M6 W8.5)', ()
     function buildHarness(gateReady: boolean) {
         const fetchBalance = jest.fn().mockResolvedValue([{ asset: 'USDT', free: '1000', used: '0', total: '1000' }]);
         const exchangeClient = { fetchBalance } as unknown as IExchangeClient;
-        const positions = { findOpen: jest.fn().mockResolvedValue([]) } as unknown as PositionRepository;
+        const positions = { findLiveRisk: jest.fn().mockResolvedValue([]) } as unknown as PositionRepository;
         const transactions = { findByPosition: jest.fn().mockResolvedValue([]) } as unknown as TransactionRepository;
         const save = jest.fn().mockImplementation(async (row) => ({ ...row, id: 1 }));
         const buildSnapshot = jest.fn().mockImplementation((row) => row);

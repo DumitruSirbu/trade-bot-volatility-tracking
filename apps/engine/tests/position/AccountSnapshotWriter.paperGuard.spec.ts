@@ -21,8 +21,8 @@ import { AccountSnapshotWriter } from '../../src/position/service/AccountSnapsho
 function buildGuardHarness(env: 'paper' | 'testnet') {
     const fetchBalance = jest.fn().mockResolvedValue([{ asset: 'USDT', total: '0', free: '0', used: '0' }]);
     const accountState = { fetchBalance } as unknown as IAccountStateSource;
-    const findOpen = jest.fn().mockResolvedValue([]);
-    const positions = { findOpen } as unknown as PositionRepository;
+    const findLiveRisk = jest.fn().mockResolvedValue([]);
+    const positions = { findLiveRisk } as unknown as PositionRepository;
     const transactions = { findByPosition: jest.fn().mockResolvedValue([]) } as unknown as TransactionRepository;
     const save = jest.fn();
     const buildSnapshot = jest.fn();
@@ -32,7 +32,7 @@ function buildGuardHarness(env: 'paper' | 'testnet') {
 
     const writer = new AccountSnapshotWriter(accountState, positions, transactions, snapshots, riskGate, appConfig);
 
-    return { writer, fetchBalance, save, findOpen };
+    return { writer, fetchBalance, save, findLiveRisk };
 }
 
 describe('AccountSnapshotWriter — PAPER env-gate', () => {
@@ -43,7 +43,7 @@ describe('AccountSnapshotWriter — PAPER env-gate', () => {
 
         expect(row).toBeNull();
         expect(harness.fetchBalance).not.toHaveBeenCalled();
-        expect(harness.findOpen).not.toHaveBeenCalled();
+        expect(harness.findLiveRisk).not.toHaveBeenCalled();
         expect(harness.save).not.toHaveBeenCalled();
     });
 

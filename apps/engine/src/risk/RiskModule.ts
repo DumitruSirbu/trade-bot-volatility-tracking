@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { MarketDataModule } from '../market-data/MarketDataModule';
 import { PositionModule } from '../position/PositionModule';
 import { RiskStateEntity } from './entity';
+import { RiskStateLifecycleListener } from './listener/RiskStateLifecycleListener';
 import { RiskStateRepository } from './repository/RiskStateRepository';
 import {
     InstrumentPortAdapter,
@@ -44,6 +45,7 @@ import {
         RiskStatePortAdapter,
         OpenPositionsPortAdapter,
         InstrumentPortAdapter,
+        RiskStateLifecycleListener,
     ],
     exports: [RiskStateRepository, PositionSizer, RiskGateService, ReservationLedger, RiskStatePortAdapter, OpenPositionsPortAdapter, InstrumentPortAdapter],
 })

@@ -15,8 +15,12 @@ import { IClosedPositionView, IOpenPositionsPort, IOpenPositionView } from '../i
 export class OpenPositionsPortAdapter implements IOpenPositionsPort {
     constructor(private readonly positions: PositionRepository) {}
 
+    // M31 R1 (HIGH): live-risk view only (qty > 0 AND non-terminal). This port backs both the
+    // gate's occupiedSlots context (RiskGateService.loadState) and StrategyService's open-count
+    // stamp; a qty=0 zombie row would otherwise phantom-occupy a slot and inflate live-risk
+    // reporting. Reconciliation deliberately stays on the broad findNonTerminal view elsewhere.
     async findOpen(): Promise<IOpenPositionView[]> {
-        const open = await this.positions.findOpen();
+        const open = await this.positions.findLiveRisk();
 
         return open.map((position) => this.toOpenView(position));
     }

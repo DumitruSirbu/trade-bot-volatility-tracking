@@ -84,6 +84,7 @@ function buildReconHarness(opts: { positions?: PositionEntity[]; exchangePositio
     } as unknown as IExchangeClient;
     const positions = {
         findOpen: jest.fn().mockResolvedValue(opts.positions ?? []),
+        findNonTerminal: jest.fn().mockResolvedValue(opts.positions ?? []),
         findById: jest.fn().mockImplementation(async (id: number) => (opts.positions ?? []).find((p) => p.id === id) ?? null),
         createOpen: jest.fn(),
         save: jest.fn().mockImplementation(async (entity) => entity),
@@ -227,6 +228,7 @@ describe('M6 R1.1.3 — case-(a) flatten emits ReconciliationOutcomeEnum.FLATTEN
         } as unknown as IExchangeClient;
         const positions = {
             findOpen: jest.fn().mockResolvedValue([]),
+            findNonTerminal: jest.fn().mockResolvedValue([]),
             findById: jest.fn().mockResolvedValue(adoptedRow),
             createOpen: jest.fn().mockResolvedValue(adoptedRow),
             save: jest.fn(),

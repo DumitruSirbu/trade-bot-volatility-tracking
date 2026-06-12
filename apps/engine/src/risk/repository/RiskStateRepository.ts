@@ -42,6 +42,34 @@ export class RiskStateRepository extends BaseRepository<RiskStateEntity> {
         await this.repository.update({ date }, { isHalted: false, haltReason: null });
     }
 
+    // Column-scoped accounting upsert for the lifecycle listener. Writes
+    // ONLY open_exposure, realized_pnl_day, and trades_count. It MUST NEVER touch is_halted
+    // or halt_reason — those columns are owned exclusively by the halt-gate paths
+    // (RiskGateService.persistHalt / clearHaltForDate). The full-row `upsertDay` carried a
+    // read-then-write race: a halt persisted between the listener's read and its upsert would
+    // be silently overwritten back to false. This narrow ON CONFLICT update set closes it.
+    //
+    // First-touch INSERT seeds is_halted=false / halt_reason=null (a brand-new UTC day starts
+    // un-halted); the `orUpdate` set deliberately omits both halt columns, so an existing
+    // halted row keeps its halt state on conflict.
+    async upsertAccountingForDay(date: string, data: { openExposure: MoneyValue; realizedPnlDay: MoneyValue; tradesCount: number }): Promise<void> {
+        await this.repository
+            .createQueryBuilder()
+            .insert()
+            .values(
+                this.create({
+                    date,
+                    openExposure: data.openExposure,
+                    realizedPnlDay: data.realizedPnlDay,
+                    tradesCount: data.tradesCount,
+                    isHalted: false,
+                    haltReason: null,
+                }),
+            )
+            .orUpdate(['open_exposure', 'realized_pnl_day', 'trades_count'], ['date'])
+            .execute();
+    }
+
     // Idempotent upsert on uq_risk_state_date (ADR 0004 §5/§7). The live writer updates
     // today's row in place.
     async upsertDay(day: {

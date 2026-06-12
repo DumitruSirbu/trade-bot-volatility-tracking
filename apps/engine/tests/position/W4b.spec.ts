@@ -321,6 +321,7 @@ describe('ReconciliationService case (b) precise (W4b)', () => {
         } as unknown as IExchangeClient;
         const positions = {
             findOpen: jest.fn().mockResolvedValue([dbRow]),
+            findNonTerminal: jest.fn().mockResolvedValue([dbRow]),
             findById: jest.fn().mockResolvedValue(dbRow),
             save: jest.fn().mockResolvedValue(dbRow),
             findLastClosedBySymbol: jest.fn().mockResolvedValue(null),
@@ -430,6 +431,7 @@ describe('ReconciliationService case (c) precise (W4b)', () => {
         } as unknown as IExchangeClient;
         const positions = {
             findOpen: jest.fn().mockResolvedValue([dbRow]),
+            findNonTerminal: jest.fn().mockResolvedValue([dbRow]),
             findById: jest.fn().mockResolvedValue(dbRow),
             save: jest.fn().mockResolvedValue(dbRow),
             findLastClosedBySymbol: jest.fn().mockResolvedValue(null),
@@ -526,6 +528,7 @@ describe('ReconciliationService case (a) flatten policy (W4b)', () => {
         });
         const positions = {
             findOpen: jest.fn().mockResolvedValue([]),
+            findNonTerminal: jest.fn().mockResolvedValue([]),
             findById: jest.fn().mockResolvedValue(adoptedRow),
             createOpen: jest.fn().mockResolvedValue(adoptedRow),
             save: jest.fn(),

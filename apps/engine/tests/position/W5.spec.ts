@@ -510,6 +510,7 @@ describe('ReconciliationService funding ingestion (ADR 0012 §2)', () => {
 
         const positions = {
             findOpen: jest.fn().mockResolvedValue(opts.dbPositions),
+            findNonTerminal: jest.fn().mockResolvedValue(opts.dbPositions),
             findLastClosedBySymbol: jest.fn().mockResolvedValue(null),
         } as unknown as PositionRepository;
 
