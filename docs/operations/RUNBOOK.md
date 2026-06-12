@@ -9,7 +9,7 @@ Cross-references:
 - ADR 0027 — Login endpoint with bootstrap secret.
 - ADR 0020 — Auth, token shape, revocation.
 - ADR 0031 — `revoked_jti` TTL prune + age-floor.
-- `docs/plans/M11a-local-soak.md` §W1, §W3.15.
+- `docs/plans/archive/M11a-local-soak.md` §W1, §W3.15.
 
 ## Bootstrap-secret rotation (W1.8)
 
@@ -120,7 +120,7 @@ Every bootstrap-secret rotation MUST be recorded in the soak log
   inert under a normal rotation).
 
 The soak exit-gate requires at least one bootstrap-secret rotation to be
-exercised during the soak window (`docs/plans/M11a-local-soak.md` §"Soak
+exercised during the soak window (`docs/plans/archive/M11a-local-soak.md` §"Soak
 exit criteria"). Recording the rotation in the work log is the evidence
 that criterion was met.
 

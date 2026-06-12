@@ -4,7 +4,7 @@
 **Date:** 2026-05-27
 **Milestone:** M12 — Analysis MCP
 **Depends on:** ADR 0002 (persistence + domain-owned entities), ADR 0004 (risk gate as gatekeeper), ADR 0005 (execution order policy), ADR 0015 (backtest module — pure replay, no writes), ADR 0026 (workspace topology).
-**Related:** `docs/plans/M12-analysis-mcp.md`, `docs/plans/M12-execution-plan.md`.
+**Related:** `docs/plans/archive/M12-analysis-mcp.md`, `docs/plans/archive/M12-execution-plan.md`.
 
 ## 1. Context
 

@@ -154,7 +154,7 @@ SELECT position_id, type, created_at FROM transactions WHERE position_id IN (4, 
 
 ## Cross-references
 
-- M31 plan + outcome: `docs/plans/M31-zombie-positions-and-broken-lifecycle.md`, `docs/milestone-log.md`  
+- M31 plan + outcome: `docs/plans/archive/M31-zombie-positions-and-broken-lifecycle.md`, `docs/milestone-log.md`  
 - Zombie defect (resolved): [done/first-three-paper-fills-and-zombie-positions.md](done/first-three-paper-fills-and-zombie-positions.md)  
 - Slot / correlated leg (still open): [slot-model-and-correlated-leg-gaps.md](slot-model-and-correlated-leg-gaps.md)  
 - ADR 0003 §3 (strategy proposes, M4/M6 enforces)  

@@ -4,7 +4,7 @@
 **Date:** 2026-05-24
 **Milestone:** M8 — Strategy versioning & comparison
 **Depends on:** ADR 0003 (strategy engine), ADR 0015 (backtest module).
-**Related:** `docs/plans/M8-versioning-comparison.md`, `docs/plans/00-overview.md` (Locked decisions § Signal direction).
+**Related:** `docs/plans/archive/M8-versioning-comparison.md`, `docs/plans/00-overview.md` (Locked decisions § Signal direction).
 
 ## 1. Context
 

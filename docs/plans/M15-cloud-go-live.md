@@ -1,3 +1,8 @@
+---
+adr: []
+modules: [go-live]
+---
+
 # M15 — Cloud go-live & scaling
 
 **Goal:** Move the same stack off the local box onto a cheap, single-cloud

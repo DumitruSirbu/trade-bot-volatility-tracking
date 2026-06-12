@@ -3,7 +3,7 @@
 **Status:** Accepted (M9 design wave)
 **Date:** 2026-05-24
 **Milestone:** M9 — Observability, control & read API
-**Depends on:** M0 (secret loading), `docs/plans/M9-observability-control.md` (Auth-FIRST gate).
+**Depends on:** M0 (secret loading), `docs/plans/archive/M9-observability-control.md` (Auth-FIRST gate).
 **Consumed by:** ADR 0021 (kill-switch), ADR 0022 (read-API), ADR 0023 (WS/SSE), M10 (dashboard).
 
 ## 1. Context

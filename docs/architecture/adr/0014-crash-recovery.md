@@ -413,7 +413,7 @@ backtest crash-recovery match.
 
 ## See also
 
-- `docs/plans/M6-position-management.md` (crash-recovery task)
+- `docs/plans/archive/M6-position-management.md` (crash-recovery task)
 - `docs/architecture/adr/0009-position-state-machine.md` (states the recovery reads/writes)
 - `docs/architecture/adr/0010-reconciliation-and-drift-policy.md` (the drift cases the boot sweep applies)
 - `docs/architecture/adr/0011-local-sltp-fallback-and-held-symbols.md` (monitor re-arm, SubscriptionRetainer rebuild)

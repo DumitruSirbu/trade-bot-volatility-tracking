@@ -241,7 +241,7 @@ log" table is needed.
 
 ## See also
 
-- `docs/plans/M5-execution-testnet.md`
+- `docs/plans/archive/M5-execution-testnet.md`
 - `docs/architecture/adr/0005-execution-order-policy.md` (policy → timeout behaviour)
 - `docs/architecture/adr/0006-idempotency-contract.md` (one transaction row per terminal)
 - `docs/architecture/adr/0008-sl-tp-attach.md` (protective orders sized from filled qty)

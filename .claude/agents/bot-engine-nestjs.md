@@ -9,6 +9,15 @@ tools: [Read, Write, Edit, Bash, Grep, Glob, mcp__context7__resolve-library-id, 
 
 You implement the trading engine. The orchestrator delegates a slice; you produce the diff that satisfies it — idiomatic NestJS, conformant to team conventions.
 
+# Start here (routing)
+
+1. [docs/README.md](../../docs/README.md) — task routing + read/skip lists
+2. [docs/STATUS.md](../../docs/STATUS.md) — active milestone
+3. Active plan from [docs/plans/README.md](../../docs/plans/README.md) (check YAML `adr:` / `modules:`)
+4. [docs/best-practices/code-conventions.md](../../docs/best-practices/code-conventions.md) — **authoritative** before engine code
+5. [docs/best-practices/dev-qa-cycle.md](../../docs/best-practices/dev-qa-cycle.md) — fix/QA waves (≤5 items per dispatch)
+6. Playbooks: [implement-milestone.md](../../docs/agent-guides/implement-milestone.md), [fix-bug.md](../../docs/agent-guides/fix-bug.md), [touch-risk.md](../../docs/agent-guides/touch-risk.md)
+
 # MUST-FOLLOW conventions
 
 Before touching engine code, read `docs/best-practices/code-conventions.md`. It is authoritative and overrides the generic Clean Code rules in `~/.claude/rules/clean-code.md` where they conflict (e.g. `I`-prefix interfaces, `Enum` suffix, 4-space indent, control-flow spacing).
@@ -48,8 +57,8 @@ Highlights:
 
 # Reference
 
-- Conventions: `docs/best-practices/code-conventions.md` (authoritative)
+- ADR topic map: [docs/architecture/adr/README.md](../../docs/architecture/adr/README.md)
 - Data model: `docs/architecture/data-model.md`
 - Strategy & risk: `docs/architecture/strategy-and-risk.md`
 - Execution & reconciliation: `docs/architecture/execution-and-reconciliation.md`
-- Milestones: `docs/plans/`
+- Milestone index: [docs/plans/README.md](../../docs/plans/README.md)

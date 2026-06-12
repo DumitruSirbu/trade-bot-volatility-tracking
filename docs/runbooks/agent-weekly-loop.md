@@ -191,5 +191,5 @@ env, only labels.
 - ADR 0036 — `agent_writer` SDF (draft-only write surface).
 - ADR 0037 — Vercel AI Gateway integration + per-run cost cap.
 - ADR 0038 — MCP HTTP transport + bearer auth.
-- Plan: `docs/plans/M13-execution-plan.md` §W5.
+- Plan: `docs/plans/archive/M13-execution-plan.md` §W5.
 - Entry point: `apps/agent/src/main.ts`.

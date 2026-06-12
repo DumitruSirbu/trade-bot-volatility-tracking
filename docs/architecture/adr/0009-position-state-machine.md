@@ -41,7 +41,7 @@ purely under the bot's control, but M6 introduces the cases that break it:
   pre-bot leftover). M6's drift policy demands the bot manage such rows only after
   a human ack — they exist in the DB but are intentionally inert.
 
-`docs/plans/M6-position-management.md` requires "authoritative, crash-safe position
+`docs/plans/archive/M6-position-management.md` requires "authoritative, crash-safe position
 state that always matches the exchange" and an explicit reconciliation drift
 policy. The state model is the substrate both rest on.
 
@@ -134,7 +134,7 @@ them to learn the new vocabulary.
 verifies zero readers remain on `positions.status` via codebase grep + a
 read-site lint that fails on `status` access; (2) drop migration
 `<timestamp>-DropPositionsStatusLegacyColumn.ts`. Listed in
-`docs/plans/M7-backtesting.md` task list (W0) and in `00-overview.md`
+`docs/plans/archive/M7-backtesting.md` task list (W0) and in `00-overview.md`
 cross-cutting risks. If M7 lands before all readers migrate, the drop slips
 forward; `bot-shared-maintainer` removes the `PositionStatusEnum` export at
 the same time.
@@ -363,7 +363,7 @@ the M6 plan punch list.
 
 ## See also
 
-- `docs/plans/M6-position-management.md` (the brief)
+- `docs/plans/archive/M6-position-management.md` (the brief)
 - `docs/architecture/adr/0010-reconciliation-and-drift-policy.md` (drift events that drive `reconciling` transitions)
 - `docs/architecture/adr/0011-local-sltp-fallback-and-held-symbols.md` (monitor arm/disarm coupling to state)
 - `docs/architecture/adr/0012-funding-and-pnl.md` (`exit_reason` enum extensions; realized PnL written at `closing→closed`)

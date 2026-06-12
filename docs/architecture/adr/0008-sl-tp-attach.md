@@ -6,7 +6,7 @@ Milestone: M5 — Execution (testnet)
 
 ## Context
 
-`docs/plans/M5-execution-testnet.md` requires that **every open position be protected,
+`docs/plans/archive/M5-execution-testnet.md` requires that **every open position be protected,
 even for one tick**: SL/TP attached exchange-side at entry by default; when that path is
 unavailable or rejected, M6's local price-driven monitor takes over and exits **through
 the risk gate** at the level. `positions.protective_order_type ∈ {exchange_side,
@@ -203,7 +203,7 @@ unrepresentable. Cross-cutting, so listed in `00-overview.md`'s risks alongside 
 
 ## See also
 
-- `docs/plans/M5-execution-testnet.md`, `docs/plans/M6-position-management.md`
+- `docs/plans/archive/M5-execution-testnet.md`, `docs/plans/archive/M6-position-management.md`
 - `docs/architecture/adr/0005-execution-order-policy.md` (REDUCE_MARKET for local-monitor
   exits)
 - `docs/architecture/adr/0006-idempotency-contract.md` (`clientOrderId` for SL/TP suffix)

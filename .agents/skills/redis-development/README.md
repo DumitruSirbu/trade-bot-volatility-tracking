@@ -11,7 +11,7 @@ A structured repository for creating and maintaining Redis development guideline
   - `_contributing.md` - Contribution guidelines (excluded from build)
   - `prefix-description.md` - Individual rule files
 - `metadata.json` - Document metadata (version, organization, abstract)
-- `AGENTS.md` - Compiled output (generated)
+- `reference.md` - Compiled output (generated)
 - `SKILL.md` - Skill definition and entry point
 - `README.md` - This file
 
@@ -28,7 +28,7 @@ A structured repository for creating and maintaining Redis development guideline
    npm run validate
    ```
 
-4. Build AGENTS.md from rules:
+4. Build reference.md from rules:
    ```bash
    npm run build
    ```
@@ -51,7 +51,7 @@ A structured repository for creating and maintaining Redis development guideline
    - `observe-` for Observability
 3. Fill in the frontmatter and content
 4. Ensure you have clear examples with explanations
-5. Run `npm run build` (in the build package) to regenerate AGENTS.md
+5. Run `npm run build` (in the build package) to regenerate reference.md
 
 
 ## Rule File Structure
@@ -108,7 +108,7 @@ Reference: [Link](https://example.com/)
 
 (Run these from the repo root)
 
-- `npm run build` - Compile rules into AGENTS.md
+- `npm run build` - Compile rules into reference.md
 - `npm run validate` - Validate all rule files
 - `npm run dev` - Build and validate (if configured)
 
@@ -121,4 +121,4 @@ When adding or modifying rules:
 2. Follow the `_template.md` structure
 3. Include clear bad/good examples with explanations
 4. Add appropriate tags
-5. Run `npm run build` to regenerate AGENTS.md
+5. Run `npm run build` to regenerate reference.md
