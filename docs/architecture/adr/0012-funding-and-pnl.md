@@ -109,6 +109,22 @@ between longs and shorts mediated by the exchange. Co-mingling funding into
 `cashflow` column carries the funding amount; `fee` stays for true
 exchange fees only.
 
+#### 1c. Explicit zero cashflow for entry transactions (M33 clarification)
+
+Entry (open/add) transactions are written with **`cashflow = new Money(0)`
+explicitly**. The `transactions.cashflow` column is `numeric NOT NULL` and
+the decimal transformer serializes an absent property to null. Relying on
+the DDL default is insufficient. Every entry-side fill must explicitly
+construct `cashflow = new Money(0)` at the call site where the transaction
+row is created. This ensures:
+
+- No ambiguity between "cashflow unknown" (null) and "entry had zero PnL
+  by design" (zero decimal).
+- The decimal transformer sees a real `Money` object, not an undefined
+  property that might be serialized as null and fail NOT NULL validation
+  at the DB layer on edge-case timing windows.
+- Reviewers can audit the correct pattern by seeing the explicit zero.
+
 ### 2. Live funding ingestion — exchange-history poll, not WS
 
 **Live cadence:** reconciliation's 30-second tick (ADR 0010 §2) includes a

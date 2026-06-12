@@ -172,6 +172,24 @@ unrepresentable. Cross-cutting, so listed in `00-overview.md`'s risks alongside 
 - Any code that flips `protective_order_type` to `exchange_side` before both SL and TP
   acks are received is must-fix.
 
+### 7. Paper mode: exchange-side attach does not disarm the local layer
+
+**Status: Implemented in M33**
+
+In `EXCHANGE_ENV=paper`, an `exchange_side` attach success **skips the `localProtectiveMonitor.disarm(positionId)` call** (ADR 0008 §2 disarm is exchange-protection-confirmed-only in LIVE/TESTNET). The `protective_order_type` is still set to `exchange_side` for audit and dashboard accuracy; only the disarm logic is suppressed in paper mode.
+
+**Rationale:** In paper mode, the "exchange-side" SL/TP orders are simulated and cannot protect a position — the exchange is fake. The local `LocalProtectiveMonitor` is the true enforcer in paper mode (in parity with backtest `IntrabarStopSimulator`), so disarming it would leave the position unprotected. The `protective_order_type` field records whether we *attempted* exchange-side attach for audit purposes, but the local monitor remains armed.
+
+**Restart re-arm (Option A — resolved in M33):**
+
+Stop-loss and take-profit prices are **persisted at `createPositionFromFill` time** (alongside `timeStopAt`, before the protective attach), not only at attach time. This closes a pre-attach crash window where the position is PENDING_OPEN without SL/TP prices in the DB.
+
+**Re-arm logic for all environments:**
+
+- `phase4cRearmLocalMonitor` runs at boot and re-arms `PENDING_OPEN` rows (all envs) and `OPEN` rows with `protective_order_type = exchange_side` in paper mode from persisted `stop_loss_price` and `take_profit_price` columns.
+- **LIVE/testnet `exchange_side` rows are NOT re-armed at boot** (the exchange holds the actual protective orders). They only re-arm on restart if their protective orders failed and the position fell back to `protective_order_type = local_fallback`.
+- **Paper-mode `exchange_side` rows ARE re-armed at boot** (because the "exchange" protection is simulated and useless; the local monitor is the real enforcer).
+
 ## Consequences
 
 - The local monitor is a permanent component of the system, not a temporary fallback. It

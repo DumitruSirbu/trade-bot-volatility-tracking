@@ -168,6 +168,24 @@ FillSimulator.simulate(intent, context):
 - Hits liquidation when path crosses the maintenance-margin-derived liquidation price (same formula as M5 `PositionSizer` uses for the SL-inside-liquidation clamp).
 - If no tick_aggregates rows exist for the bar (sparse pre-M2 history), the simulator falls back to bar-extreme heuristics and flags the trade `lowFidelity=true`.
 
+### 4.6.1 Live-vs-backtest fill-price divergence for time-stop exits (M33)
+
+**Status: Accepted divergence, not a bug**
+
+Time-stop exits exhibit a structural price divergence between backtest and live:
+
+- **Backtest closes at slippage-free `bar.open`:** When a position's `timeStopAtMs` deadline passes during a 5-minute bar interval, `IntrabarStopSimulator.shouldHitTimeStop` returns before `simulateIntrabarStop` (SL/TP/liquidation checks). The exit is recorded at the bar's opening price (timestamp = next bar `openTimeMs`, fill price = `bar.open`), with zero slippage applied.
+- **Live closes at first-crossing live tick quote:** The `PositionTimeStopEnforcer` fires on the first incoming `price.update` event after the deadline elapses. The exit is recorded at the tick's mark price (timestamp = tick `timestampMs`, fill price = mark + adverse taker slippage per the `TierSlippageModel` taker fee bps). The enforcer decision timestamp **may lead backtest by up to one bar interval** (for mid-bar deadlines).
+
+**Why this divergence is acceptable:**
+
+1. **Enforcer is event-time deterministic:** the decision is compared to `event.timestampMs`, never `Date.now()`. The timestamp is recorded faithfully; the divergence is structural, not a timing bug.
+2. **Fail direction is conservative:** the live enforcer exits **earlier than backtest** (faster, more protective). A position that backtests until bar-open may close 2–5 minutes earlier in live; this is a feature, not a drawback.
+3. **Slippage is real but modest:** up to one taker-fee tier per time-stop exit. For a TIER_1 `slippage_tier_1_pct = 0.05%` position, the live exit may be 5–10 bps worse than the backtest assumption. This is the cost of real-time enforcement.
+4. **Not a go-live blocker:** soak gates (M33 and beyond) are set empirically from live fills, so the slippage becomes part of the measured edge, not a prediction error.
+
+**For operators:** when a backtest shows a break-even or small-loss position that exits via time-stop, and live shows a visible-slippage loss on the same signal, the divergence is expected. Evaluate the version's edge using live fill data, not backtest data, for time-stop-dependent strategies.
+
 ### 4.7 Shared cost model
 
 Fees, funding, and PnL identities are **imported from the execution/position modules**, not re-derived:
