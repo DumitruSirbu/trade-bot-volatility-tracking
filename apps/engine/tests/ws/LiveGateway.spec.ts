@@ -1,6 +1,7 @@
 import { AuthFailureReasonEnum, AuthScopeEnum, IAuthSubject, PositionSideEnum, PositionStateEnum, ProtectiveOrderTypeEnum, WsRoomEnum } from '@bot/shared';
 
 import { Money } from '../../src/common/utils/money';
+import { IPositionOpenedEvent } from '../../src/common/interface/IPositionOpenedEvent';
 import { LiveGateway } from '../../src/ws/LiveGateway';
 import {
     LIVE_NAMESPACE,
@@ -142,6 +143,18 @@ function fakePosition(id: number, overrides: Partial<PositionEntity> = {}): Posi
     };
 
     return base as PositionEntity;
+}
+
+function buildOpenedEvent(positionId: number): IPositionOpenedEvent {
+    return {
+        positionId,
+        symbol: 'BTCUSDT',
+        side: PositionSideEnum.LONG,
+        leverage: new Money(2),
+        entryPrice: new Money(50_000),
+        entryNotional: new Money(50_000),
+        strategyVersionId: 1,
+    };
 }
 
 // Tracks every WsAuthAdapter started by buildGateway so the sweeper interval
@@ -342,7 +355,7 @@ describe('LiveGateway — broadcast to room', () => {
             room: WsRoomEnum.POSITIONS,
         });
 
-        await gateway.onPositionOpened({ positionId: 42, symbol: 'BTCUSDT' });
+        await gateway.onPositionOpened(buildOpenedEvent(42));
 
         const opened = socket.emitted.find((e) => e.event === WS_EVENT_POSITION_OPENED);
 
@@ -360,7 +373,7 @@ describe('LiveGateway — broadcast to room', () => {
 
         await connect(gateway, namespace, socket);
         // No subscribe.
-        await gateway.onPositionOpened({ positionId: 7, symbol: 'BTCUSDT' });
+        await gateway.onPositionOpened(buildOpenedEvent(7));
 
         expect(socket.emitted.find((e) => e.event === WS_EVENT_POSITION_OPENED)).toBeUndefined();
     });

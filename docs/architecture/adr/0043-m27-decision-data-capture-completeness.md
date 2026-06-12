@@ -11,7 +11,7 @@ ADR 0025 (startup schema-validation gate), ADR 0032 (paper mode), ADR 0042 (M25 
 ## Context
 
 M27 is the fourth milestone of the data-fix arc (M24 → M25 → M26 → M27, analysis item P5 in
-`docs/wip/main-architector-paper-soak-fill-and-gate-analysis.md`). M24–M26 make trades *happen*
+`docs/wip/done/main-architector-paper-soak-fill-and-gate-analysis.md`). M24–M26 make trades *happen*
 (paper fills, gate approvals, shadow counterfactuals); **M27 makes every decision and fill
 *analyzable*** so the resulting dataset can fine-tune strategies. Unlike M24–M26 (code-only),
 M27 carries additive schema migrations.
@@ -291,4 +291,4 @@ linkage on the decision row is likewise a separate optional follow-on (set after
 - ADR 0022 (read-API surface — frozen by M27)
 - ADR 0025 (startup schema-validation gate — `book_snapshots` required columns updated)
 - ADR 0042 (M25 paper exploration profile — 3-slot ceiling, paper stress relax driving A2/A4 rationale)
-- Architect analysis (P5): `docs/wip/main-architector-paper-soak-fill-and-gate-analysis.md` §4, §5 P5, §6
+- Architect analysis (P5): `docs/wip/done/main-architector-paper-soak-fill-and-gate-analysis.md` §4, §5 P5, §6

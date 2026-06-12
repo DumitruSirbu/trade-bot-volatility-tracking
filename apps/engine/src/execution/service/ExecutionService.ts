@@ -26,7 +26,7 @@ import {
     POSITION_CLOSED_EVENT,
     POSITION_OPENED_EVENT,
 } from '../../common/const';
-import { IOrderIntentUnknownEvent, IPositionClosedEvent } from '../../common/interface';
+import { IOrderIntentUnknownEvent, IPositionClosedEvent, IPositionOpenedEvent } from '../../common/interface';
 import { HaltFlagService } from '../../common/service';
 import { formatMoney, Money, MoneyValue } from '../../common/utils/money';
 import { AppConfigService } from '../../config/service';
@@ -443,6 +443,11 @@ export class ExecutionService {
                 exitReason: finalized.exitReason,
                 realizedPnl: finalized.realizedPnl ?? null,
                 closedAt: finalized.closedAt ?? new Date(nowMs),
+                entryPrice: finalized.entryPrice,
+                exitPrice: finalized.exitPrice ?? null,
+                leverage: finalized.leverage,
+                strategyVersionId: finalized.strategyVersionId,
+                openedAt: finalized.openedAt,
             };
             this.events.emit(POSITION_CLOSED_EVENT, closedEvent);
 
@@ -948,7 +953,17 @@ export class ExecutionService {
         });
 
         this.confirmReservationSafely(event.reservationId);
-        this.events.emit(POSITION_OPENED_EVENT, { positionId: positionRow.id, symbol: positionRow.symbol });
+
+        const openedEvent: IPositionOpenedEvent = {
+            positionId: positionRow.id,
+            symbol: positionRow.symbol,
+            side: positionRow.side,
+            leverage: positionRow.leverage,
+            entryPrice: positionRow.entryPrice,
+            entryNotional: positionRow.entryNotional,
+            strategyVersionId: positionRow.strategyVersionId,
+        };
+        this.events.emit(POSITION_OPENED_EVENT, openedEvent);
     }
 
     // Weighted-average entry on ADD (ADR 0007 §3 + must-fix #4). Uses the slot-scoped

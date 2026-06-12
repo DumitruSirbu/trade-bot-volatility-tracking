@@ -4,6 +4,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { Interval } from '@nestjs/schedule';
 
 import { POSITION_OPENED_EVENT, PRICE_UPDATE_EVENT } from '../../common/const';
+import { IPositionOpenedEvent } from '../../common/interface';
 import { Money, MoneyValue } from '../../common/utils/money';
 import { RiskGateService } from '../../risk/service/RiskGateService';
 import {
@@ -221,7 +222,7 @@ export class PositionInstrumentor {
     // accumulator. Defensive on missing rows (race window between event
     // and DB visibility, or the row was deleted) — log + skip.
     @OnEvent(POSITION_OPENED_EVENT)
-    async onPositionOpenedEvent(event: { positionId: number; symbol: string }): Promise<void> {
+    async onPositionOpenedEvent(event: IPositionOpenedEvent): Promise<void> {
         await this.seedFromRow(event.positionId, 'opened');
     }
 

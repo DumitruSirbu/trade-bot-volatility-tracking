@@ -6,6 +6,7 @@ import { OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit, SubscribeMessa
 import { AUTH_CORS_ALLOWLIST_ENV } from '../auth/const/authConsts';
 import { POSITION_OPENED_EVENT, POSITION_CLOSED_EVENT } from '../common/const';
 import { IPositionClosedEvent } from '../common/interface/IPositionClosedEvent';
+import { IPositionOpenedEvent } from '../common/interface/IPositionOpenedEvent';
 import { POSITION_STATE_TRANSITIONED_EVENT } from '../position/const';
 import { PositionRepository } from '../position/repository/PositionRepository';
 import { mapClosedPosition, mapOpenPosition } from '../read-api/mappers/readApiMappers';
@@ -251,7 +252,7 @@ export class LiveGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     // ----- Outbound: position lifecycle -----------------------------------
 
     @OnEvent(POSITION_OPENED_EVENT)
-    async onPositionOpened(event: { positionId: number; symbol: string }): Promise<void> {
+    async onPositionOpened(event: IPositionOpenedEvent): Promise<void> {
         const position = await this.positions.findById(event.positionId);
 
         if (position === null) {

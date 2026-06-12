@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 
 import { POSITION_CLOSED_EVENT, POSITION_OPENED_EVENT } from '../../common/const';
+import { IPositionOpenedEvent } from '../../common/interface';
 import { PositionRepository } from '../../position/repository/PositionRepository';
 import { RiskStateRepository } from '../repository/RiskStateRepository';
 
@@ -35,8 +36,11 @@ export class RiskStateLifecycleListener {
         private readonly riskState: RiskStateRepository,
     ) {}
 
+    // The widened IPositionOpenedEvent payload is accepted for type-coherence with the
+    // emitter, but this listener recomputes the full UTC-day rollup from the authoritative
+    // position rows (Option R) and so reads no event field.
     @OnEvent(POSITION_OPENED_EVENT)
-    async onPositionOpened(): Promise<void> {
+    async onPositionOpened(_event?: IPositionOpenedEvent): Promise<void> {
         await this.recomputeForToday('open');
     }
 

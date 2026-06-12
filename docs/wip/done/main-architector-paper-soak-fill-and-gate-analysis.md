@@ -2,8 +2,8 @@
 
 **Date:** 2026-06-06
 **Author:** Main session (architect)
-**Status:** WIP — analysis + prioritized change set. **P0–P4 landed (M24–M26); P5 planned (M27).** See [Milestone coverage](#milestone-coverage) below. Moves to [`docs/wip/done/`](done/) when no OPEN/PLANNED rows remain.
-**Companion:** [docs/wip/paper-soak-zero-trades-and-shadow-fill-gap.md](paper-soak-zero-trades-and-shadow-fill-gap.md)
+**Status:** DONE — archived under `docs/wip/done/`. **P0–P4 landed (M24–M26); P5 → M27.** See [Milestone coverage](#milestone-coverage) below.
+**Companion:** [paper-soak-zero-trades-and-shadow-fill-gap.md](paper-soak-zero-trades-and-shadow-fill-gap.md)
 
 ---
 
@@ -16,7 +16,7 @@ Tracked against [`docs/milestone-log.md`](../milestone-log.md) and plans under `
 | **P0** — paper open fill (`StreamingFillAdapter` tick synthesis) | [M24](../plans/M24-paper-open-fill-wiring.md) | **DONE** | Code-only; post-deploy fill-path confirmation still operator-gated |
 | **P1** — activate v2 momentum (`ACTIVE_STRATEGY_VERSION_ID=3`) | [M25](../plans/M25-paper-exploration-enablement.md) | **DONE** | Config-only in M25 |
 | **P2** — paper-only stress relaxation (`PAPER_RELAX_MARKET_STRESS`) | M25 | **DONE** | ADR 0042; breadth + invalid-inputs never relaxed |
-| **P3** — more concurrent positions / slot headroom | M25 | **PARTIAL** | Exposure + capital headroom only; **3-slot ceiling unchanged** (true 5-slot expansion deferred). See [slot-model doc](slot-model-and-correlated-leg-gaps.md) |
+| **P3** — more concurrent positions / slot headroom | M25 | **PARTIAL** | Exposure + capital headroom only; **3-slot ceiling unchanged** (true 5-slot expansion deferred). See [slot-model doc](../slot-model-and-correlated-leg-gaps.md) |
 | **P4** — shadow counterfactual fills (bar evidence + `tick_aggregates`) | [M26](../plans/M26-shadow-counterfactual-fill-wiring.md) | **DONE** | M26 shipped: shadow now loads real `tick_aggregates` per event, aligns entry to next-bar open (M7 pattern), produces virtual PnL for counterfactual (ADR 0029); forward-only ledger + close-side proxy + analysis-layer missing-data detection documented. See `docs/milestone-log.md` M26 outcome. |
 | **P5** — decision data-capture completeness | [M27](../plans/M27-decision-data-capture-completeness.md) | **PLANNED** | Requires migrations; not started in milestone-log |
 | Gate / halt context (M19 depth skip, M21 shocks, M23 breadth resume) | M19, M21, M23 | **DONE** | Precedes this WIP; does not fix fill layer |
@@ -398,7 +398,7 @@ parallel and are about analyzability rather than producing the first trade.
 
 ## 7. References
 
-- Companion WIP: [docs/wip/paper-soak-zero-trades-and-shadow-fill-gap.md](paper-soak-zero-trades-and-shadow-fill-gap.md)
+- Companion WIP: [paper-soak-zero-trades-and-shadow-fill-gap.md](paper-soak-zero-trades-and-shadow-fill-gap.md)
 - Risk management + halt legs + M23 auto-resume: [docs/architecture/adr/0004-risk-management.md](../architecture/adr/0004-risk-management.md)
 - Missed-fill model: ADR 0015 §6 (`docs/architecture/adr/`)
 - Shadow counterfactual + fill simulator pipeline: `docs/architecture/adr/0029-shadow-counterfactual-and-fill-simulator-pipeline.md`

@@ -50,6 +50,47 @@ export const formatMoneyString = (value: string | null | undefined, fractionDigi
     return isNegative ? `-${body}` : body;
 };
 
+const MILLIS_PER_SECOND = 1_000;
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_HOUR = 3_600;
+const SECONDS_PER_DAY = 86_400;
+
+// Hold-duration formatter for closed positions. Pure: derives the elapsed span
+// between two ISO instants with no reference to the wall clock. Returns "—" when
+// the position has no close instant, and "0s" when the close is at/before the
+// open (same-millisecond close or minor clock skew) — never a negative string.
+export const formatDurationMs = (openedAt: string, closedAt: string | null): string => {
+    if (closedAt === null) {
+        return '—';
+    }
+
+    const deltaMs = new Date(closedAt).getTime() - new Date(openedAt).getTime();
+
+    if (!Number.isFinite(deltaMs) || deltaMs <= 0) {
+        return '0s';
+    }
+
+    const totalSeconds = Math.floor(deltaMs / MILLIS_PER_SECOND);
+    const days = Math.floor(totalSeconds / SECONDS_PER_DAY);
+    const hours = Math.floor((totalSeconds % SECONDS_PER_DAY) / SECONDS_PER_HOUR);
+    const minutes = Math.floor((totalSeconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
+    const seconds = totalSeconds % SECONDS_PER_MINUTE;
+
+    if (days > 0) {
+        return `${days}d ${hours}h`;
+    }
+
+    if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+    }
+
+    if (minutes > 0) {
+        return `${minutes}m ${seconds}s`;
+    }
+
+    return `${seconds}s`;
+};
+
 export const formatAgeMs = (fromIso: string, nowMs: number = Date.now()): string => {
     const startMs = Date.parse(fromIso);
 
@@ -57,11 +98,11 @@ export const formatAgeMs = (fromIso: string, nowMs: number = Date.now()): string
         return '—';
     }
 
-    const elapsedSec = Math.max(0, Math.floor((nowMs - startMs) / 1000));
-    const days = Math.floor(elapsedSec / 86_400);
-    const hours = Math.floor((elapsedSec % 86_400) / 3600);
-    const minutes = Math.floor((elapsedSec % 3600) / 60);
-    const seconds = elapsedSec % 60;
+    const elapsedSec = Math.max(0, Math.floor((nowMs - startMs) / MILLIS_PER_SECOND));
+    const days = Math.floor(elapsedSec / SECONDS_PER_DAY);
+    const hours = Math.floor((elapsedSec % SECONDS_PER_DAY) / SECONDS_PER_HOUR);
+    const minutes = Math.floor((elapsedSec % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
+    const seconds = elapsedSec % SECONDS_PER_MINUTE;
 
     if (days > 0) {
         return `${days}d ${hours}h`;

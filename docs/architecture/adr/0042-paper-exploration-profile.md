@@ -10,7 +10,7 @@ preserves ADR 0029 (backtest determinism), ADR 0030 (rate-limit invariant).
 
 After M24 a gate-approved open actually fills, but the 14-day paper soak still produces
 almost nothing to label. The funnel analysis
-(`docs/wip/main-architector-paper-soak-fill-and-gate-analysis.md`, items P1–P3) proves three
+(`docs/wip/done/main-architector-paper-soak-fill-and-gate-analysis.md`, items P1–P3) proves three
 binding constraints, all of them **correct for live capital** but **mis-tuned for a paper
 *exploration* soak** whose entire purpose is to collect labeled win/loss outcomes — including
 some bad ones:
