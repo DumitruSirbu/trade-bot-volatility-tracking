@@ -5,7 +5,7 @@
 **Milestone:** M13 — Agentic weekly loop
 **Depends on:** ADR 0020 (auth, CORS, HS256 + JTI revocation + TTL), ADR 0027 (login endpoint — token issuance pattern), ADR 0033 (MCP module boundary), ADR 0034 (MCP DB isolation), ADR 0035 (agent structural boundary).
 **Consumed by:** M13 W1 items 1–3 (HTTP transport, bearer auth, `get_halt_state` tool), M13 W6 (transport-spoofing adversarial QA).
-**Related:** `docs/plans/M13-execution-plan.md` §"Open architectural questions" #2, §W1, §W6a vector 5, M12 §R3 deferral note.
+**Related:** `docs/plans/archive/M13-execution-plan.md` §"Open architectural questions" #2, §W1, §W6a vector 5, M12 §R3 deferral note.
 
 ## 1. Context
 
@@ -300,7 +300,7 @@ The amendment is reflected in the M13 W1 migration.
 
 ## 5. References
 
-- `docs/plans/M13-execution-plan.md` §"Open architectural questions"
+- `docs/plans/archive/M13-execution-plan.md` §"Open architectural questions"
   #2 (HTTP-over-stdio decision rationale), §W1 items 1–3,
   §W6a vector 5, §Risks R3 + R6.
 - ADR 0020 §2.1 (HS256 token shape), §2.2 (revocation), §2.6

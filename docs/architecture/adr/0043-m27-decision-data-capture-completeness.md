@@ -36,7 +36,7 @@ weak for outcome-based learning:
 This ADR locks the architecture for closing those gaps. The defining invariant of M27:
 **it is observability-only — it must not alter a single gate decision** (it records what the gate
 already decided). The locked decisions below are amendments A0–A9 from three independent reviews
-(`docs/independent-analysis/{composer,gbt,gemini}/M27-*`, 2026-06-08), code-verified and folded in.
+(`docs/archive/independent-analysis/{composer,gbt,gemini}/M27-*`, 2026-06-08), code-verified and folded in.
 
 ## Decision
 
@@ -284,7 +284,7 @@ linkage on the decision row is likewise a separate optional follow-on (set after
 
 ## See also
 
-- `docs/plans/M27-decision-data-capture-completeness.md` (scope, amendments A0–A9, dispatch waves, DB safety)
+- `docs/plans/archive/M27-decision-data-capture-completeness.md` (scope, amendments A0–A9, dispatch waves, DB safety)
 - ADR 0002 (persistence & data model — `decisions`, `book_snapshots`, `marketSnapshotSchema`; amended here)
 - ADR 0004 (risk management — halt legs, stress logic; behaviour unchanged by M27)
 - ADR 0029 (shadow counterfactual + fill simulator — `ISimulatedFill`; `missedReason` added here)

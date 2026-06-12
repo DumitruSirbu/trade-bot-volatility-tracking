@@ -280,7 +280,7 @@ When Binance returns 429 (rate exceeded) or 418 (IP banned):
    halt is simply extended via a new kill-switch event.
 
 Repeated 429/418 (≥3 in any 24-hour window) is a soak-abort condition. The
-abort threshold is recorded in `docs/plans/M11a-local-soak.md` §"Soak
+abort threshold is recorded in `docs/plans/archive/M11a-local-soak.md` §"Soak
 abort thresholds" as a follow-up addition — this ADR documents the runtime
 behaviour, not the soak-management policy.
 

@@ -1,7 +1,7 @@
 # Daily DB backup — operator runbook
 
 Operator reference for the automated daily DB backup (M17). The full design lives
-in `docs/plans/M17-daily-db-backup.md`. This runbook covers the **DevOps setup**
+in `docs/plans/archive/M17-daily-db-backup.md`. This runbook covers the **DevOps setup**
 the operator must do before the first scheduled run; the in-engine scheduler
 behaviour (Wave 2) is documented inline in that code and summarised here.
 

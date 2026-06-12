@@ -3,7 +3,7 @@
 **Status:** Accepted (M7 design wave)
 **Numbering note:** the M7 plan referenced "ADR-0013-backtest-module.md", but `0013-position-instrumentation.md` already shipped in M6. This ADR slots into the next free index (0014 = crash-recovery is taken) and follows the existing lowercase `NNNN-title.md` convention.
 **Depends on:** ADR 0002 (persistence), 0003 (strategy), 0004 (risk), 0005 (execution order policy), 0009 (position state machine), 0012 (funding & PnL).
-**Related:** `docs/plans/M7-backtesting.md`, `docs/architecture/live-vs-backtest-contract.md`.
+**Related:** `docs/plans/archive/M7-backtesting.md`, `docs/architecture/live-vs-backtest-contract.md`.
 
 ## 1. Context
 
@@ -181,7 +181,7 @@ Fees, funding, and PnL identities are **imported from the execution/position mod
 
 Input: the closed `IBacktestTradeResult[]` stream plus the daily mark-to-market equity curve `IBacktestEquityPoint[]`.
 
-Output: `IBacktestReport` with the pinned definitions from `docs/plans/M7-backtesting.md` task "Metrics with pinned definitions":
+Output: `IBacktestReport` with the pinned definitions from `docs/plans/archive/M7-backtesting.md` task "Metrics with pinned definitions":
 - All trade-level metrics computed on **net PnL** (after fees + funding + slippage).
 - Win rate, profit factor, trade count, avg hold time, regime / flow / symbol breakdown.
 - **Max drawdown = peak-to-trough on the daily mark-to-market equity curve, expressed as %**, plus drawdown duration in days.

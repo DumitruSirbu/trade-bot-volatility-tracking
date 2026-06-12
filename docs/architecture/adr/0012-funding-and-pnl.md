@@ -418,7 +418,7 @@ strategy version. Shared/persistence change, routed through
 
 ## See also
 
-- `docs/plans/M6-position-management.md`
+- `docs/plans/archive/M6-position-management.md`
 - `docs/architecture/adr/0009-position-state-machine.md` (`closing → closed` transition writes realized PnL)
 - `docs/architecture/adr/0010-reconciliation-and-drift-policy.md` (RECONCILED_MISSING, LIQUIDATED exit-reason sources)
 - `docs/architecture/adr/0002-persistence-and-data-model.md` (transactions / account_snapshots schema)

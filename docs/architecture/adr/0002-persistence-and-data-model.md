@@ -385,7 +385,7 @@ persists before emitting). `SchemaValidationService` (ADR 0025) is updated for t
 
 ## See also
 
-- `docs/plans/M2-persistence.md`, `docs/plans/00-overview.md` ("Data model" section)
+- `docs/plans/archive/M2-persistence.md`, `docs/plans/00-overview.md` ("Data model" section)
 - `docs/architecture/adr/0043-m27-decision-data-capture-completeness.md` (M27 additive capture columns)
 - `docs/architecture/adr/0001-exchange-and-market-data.md` (the `IVolatilityDetectedEvent`
   payload the `market_snapshot` schema mirrors; the MarketData boundary)

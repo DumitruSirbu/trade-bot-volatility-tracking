@@ -311,7 +311,7 @@ params on the hot path; an untyped `Record<string, unknown>` invites silent typo
 M7/M8 load the same params.
 
 Reconcile with M2 seed defaults (the canonical base + per-version block in
-`docs/plans/M2-persistence.md` lines 62–104). The schema mirrors those keys exactly,
+`docs/plans/archive/M2-persistence.md` lines 62–104). The schema mirrors those keys exactly,
 **in their persisted snake_case form** (the JSONB stores snake_case), with the engine
 mapping to camelCase at the boundary. Base keys: `vwap_window_bars`,
 `vwap_sigma_trigger`, `volume_ratio_min`, `atr_period`, `atr_stop_multiplier`,
@@ -463,7 +463,7 @@ ADR, per the project's "no unsolicited docs" rule).
 
 ## See also
 
-- `docs/plans/M3-strategy-engine.md` (the milestone brief), `docs/plans/00-overview.md`
+- `docs/plans/archive/M3-strategy-engine.md` (the milestone brief), `docs/plans/00-overview.md`
   (locked decisions + StrategyModule paragraph + data model)
 - `docs/architecture/adr/0001-exchange-and-market-data.md` (`IVolatilityDetectedEvent`,
   closed-bar rule), `docs/architecture/adr/0002-persistence-and-data-model.md`

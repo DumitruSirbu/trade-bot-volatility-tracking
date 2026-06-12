@@ -216,3 +216,20 @@ Every reviewer round-2+ dispatch MUST use:
 
 > `SendMessage({ to: '<prior agentId>', message: '...' })` — never a fresh `Agent()`
 > spawn.
+
+---
+
+## 8 — Live-memory write protocol (milestone close)
+
+Routing docs only fix the *read* side. At milestone close, the scribe **must** update working memory so agents do not trust stale indexes.
+
+**Single writer = scribe.** Other agents do not edit `STATUS.md`, `plans/README.md` status rows, or the `CLAUDE.md` status pointer.
+
+**Mandatory update step** (same status as "tests green" — a milestone is **not closed** until all four are done):
+
+1. Append the milestone outcome to `docs/milestone-log/archive/M<N>.md` and add its row to the index in `docs/milestone-log.md` (episodic — append only, never edit prior archive files).
+2. Overwrite `docs/STATUS.md` (active → new active; last DONE; deploy state; next queue).
+3. Flip the milestone row in `docs/plans/README.md` (`ACTIVE` → `DONE`), move plan to `archive/` when Phase 2 layout is active.
+4. Replace the `CLAUDE.md` status pointer (no per-milestone paragraph — link to `docs/STATUS.md`).
+
+Agents must not edit episodic memory retroactively, and must not trust working memory that fails the CI staleness guard (`pnpm docs:check:staleness`).

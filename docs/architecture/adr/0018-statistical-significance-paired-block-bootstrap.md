@@ -4,7 +4,7 @@
 **Date:** 2026-05-24
 **Milestone:** M8
 **Depends on:** ADR 0017 (same-event comparison provides the paired per-event series).
-**Related:** `docs/plans/M8-versioning-comparison.md` (Statistical significance task — *non-negotiable*).
+**Related:** `docs/plans/archive/M8-versioning-comparison.md` (Statistical significance task — *non-negotiable*).
 
 ## 1. Context
 

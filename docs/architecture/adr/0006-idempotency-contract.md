@@ -6,7 +6,7 @@ Milestone: M5 — Execution (testnet)
 
 ## Context
 
-`docs/plans/M5-execution-testnet.md` requires that **a restart or retry never doubles an
+`docs/plans/archive/M5-execution-testnet.md` requires that **a restart or retry never doubles an
 order**, and that the property hold for `open / add / reduce / close` — not just entries.
 On an order whose final state is unknown (submit timeout), the executor must
 `fetchOrder(clientOrderId)` first and only retry if the exchange has no record.
@@ -243,7 +243,7 @@ Placement".
 
 ## See also
 
-- `docs/plans/M5-execution-testnet.md`, `docs/plans/M6-position-management.md`
+- `docs/plans/archive/M5-execution-testnet.md`, `docs/plans/archive/M6-position-management.md`
 - `docs/architecture/adr/0005-execution-order-policy.md`
 - `docs/architecture/adr/0007-partial-fill-semantics.md`
 - `docs/architecture/adr/0004-risk-management.md` §3 (reservation ledger seam)

@@ -363,7 +363,7 @@ After fix:
 ## Related docs / ADRs
 
 - `docs/plans/00-overview.md` — skip-first design; no daily profit target
-- `docs/plans/M11a-local-soak.md` — restricted v1 profile, shadow dry-run, soak exit criteria
+- `docs/plans/archive/M11a-local-soak.md` — restricted v1 profile, shadow dry-run, soak exit criteria
 - `docs/architecture/adr/0029-shadow-counterfactual-and-fill-simulator-pipeline.md` — shadow ledger + fill hard rule
 - `docs/architecture/adr/0004-risk-management.md` — halt legs, depth guard, M23 auto-resume
 - `docs/milestone-log.md` — M19 (0 trades / global halt), M21–M23 stress calibration

@@ -317,7 +317,7 @@ defaults would forget prior MAE/MFE.
 
 ## See also
 
-- `docs/plans/M6-position-management.md` (instrumentation task)
+- `docs/plans/archive/M6-position-management.md` (instrumentation task)
 - `docs/architecture/adr/0009-position-state-machine.md` (states the instrumentor reads)
 - `docs/architecture/adr/0011-local-sltp-fallback-and-held-symbols.md` (mark/last divergence under fallback)
 - `docs/architecture/adr/0012-funding-and-pnl.md` (close transition; instrumentation flushes before finalize)

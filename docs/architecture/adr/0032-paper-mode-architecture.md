@@ -1146,7 +1146,7 @@ M11a R2b sub-wave):
 - `docs/architecture/adr/0030-in-engine-rate-limit-token-bucket-policy.md`
   (explicitly **not** reachable from PAPER per D2; D13 probe cost
   reserved in the token-bucket constants table)
-- `docs/plans/M11a-paper-mode-addendum.md` (source of D1–D17; will
-  be merged into `docs/plans/M11a-local-soak.md` and deleted at
+- `docs/plans/archive/M11a-paper-mode-addendum.md` (source of D1–D17; will
+  be merged into `docs/plans/archive/M11a-local-soak.md` and deleted at
   R4.2)
-- `docs/plans/M11a-local-soak.md` (soak runbook + exit criteria)
+- `docs/plans/archive/M11a-local-soak.md` (soak runbook + exit criteria)

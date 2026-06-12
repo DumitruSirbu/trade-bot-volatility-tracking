@@ -5,7 +5,7 @@
 **Milestone:** M13 — Agentic weekly loop
 **Depends on:** ADR 0034 (MCP DB isolation: read-only role pattern), ADR 0033 (MCP module boundary), ADR 0016 (strategy version lineage + promotion), ADR 0019 (promotion gate is human-only), ADR 0035 (agent structural boundary).
 **Consumed by:** M13 W0.2 (`CreateAgentWriterRoleAndSdf` migration), M13 W0.3 (`CreateAgentRunHistory` migration), M13 W3 (draft persistence), M13 W6 (DB-role adversarial QA).
-**Related:** `docs/plans/M13-execution-plan.md` §"Inputs locked", §W0 items 2 + 3, §W6a vectors 3 + 4, §Test strategy item 6.
+**Related:** `docs/plans/archive/M13-execution-plan.md` §"Inputs locked", §W0 items 2 + 3, §W6a vectors 3 + 4, §Test strategy item 6.
 
 ## 1. Context
 
@@ -357,7 +357,7 @@ All seven assertions are required-green before M13 closes.
 
 ## 5. References
 
-- `docs/plans/M13-execution-plan.md` §"Inputs locked" #5, §W0 items 2–3,
+- `docs/plans/archive/M13-execution-plan.md` §"Inputs locked" #5, §W0 items 2–3,
   §W3, §W6a vector 4, §Test strategy items 5–6.
 - ADR 0034 §2.1 (sentinel-password rotation pattern), §2.5 (13-table
   whitelist).

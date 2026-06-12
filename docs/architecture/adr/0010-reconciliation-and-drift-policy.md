@@ -617,7 +617,7 @@ W2 retainer):**
 
 ## See also
 
-- `docs/plans/M6-position-management.md`
+- `docs/plans/archive/M6-position-management.md`
 - `docs/architecture/adr/0009-position-state-machine.md` (the `reconciling` state)
 - `docs/architecture/adr/0014-crash-recovery.md` (restart sweep, exposure rebuild)
 - `docs/architecture/adr/0006-idempotency-contract.md` §3 (timeout query protocol; case f)

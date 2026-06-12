@@ -5,7 +5,7 @@
 **Milestone:** M13 — Agentic weekly loop
 **Depends on:** ADR 0033 (MCP module-boundary enforcement), ADR 0034 (MCP DB isolation), ADR 0026 (workspace topology), ADR 0003 (strategy purity invariant).
 **Consumed by:** M13 W0 (workspace scaffold + ESLint rule), M13 W1 (MCP client), M13 W6 (boundary adversarial QA).
-**Related:** `docs/plans/M13-execution-plan.md` §"Workspace shape", §W0, §W6a.6, §Test strategy.
+**Related:** `docs/plans/archive/M13-execution-plan.md` §"Workspace shape", §W0, §W6a.6, §Test strategy.
 
 ## 1. Context
 
@@ -223,7 +223,7 @@ beyond shared DTOs.
 
 ## 5. References
 
-- `docs/plans/M13-execution-plan.md` §Workspace shape, §W0 items 1+4,
+- `docs/plans/archive/M13-execution-plan.md` §Workspace shape, §W0 items 1+4,
   §W6a vector 6, §Test strategy items 1–4.
 - ADR 0033 §2.4 (three-layer enforcement pattern this ADR mirrors).
 - ADR 0026 (workspace topology — `apps/agent/` is the fifth workspace app

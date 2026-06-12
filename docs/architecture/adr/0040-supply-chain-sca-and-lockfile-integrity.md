@@ -5,7 +5,7 @@
 **Milestone:** M14 — CI review gate (deterministic gates phase)
 **Depends on:** ADR 0039 (CI gate policy — this is one of its required checks).
 **Consumed by:** M14 W3 (SCA + lockfile jobs + allowlist file).
-**Related:** ADR 0041 (dependency pinning + provenance), `docs/plans/M14-execution-plan.md` §W3.
+**Related:** ADR 0041 (dependency pinning + provenance), `docs/plans/archive/M14-execution-plan.md` §W3.
 
 ## 1. Context
 
@@ -229,7 +229,7 @@ must be empty; exactly one root `pnpm-lock.yaml` must exist.
 
 ## 5. References
 
-- `docs/plans/M14-execution-plan.md` §W3 (SCA job, allowlist file, lockfile jobs).
+- `docs/plans/archive/M14-execution-plan.md` §W3 (SCA job, allowlist file, lockfile jobs).
 - ADR 0039 §2.2 (required-check set this gate joins), §2.4 (what "blocks merge"
   means).
 - ADR 0041 (pinning + provenance — the authenticity half of supply-chain).

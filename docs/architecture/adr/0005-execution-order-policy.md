@@ -14,7 +14,7 @@ M6 reconciliation never call `exchange.createOrder` directly — the only exchan
 caller is `ExecutionService` (reviewer must-fix invariant, mirroring the risk-gate
 invariant from ADR 0004 §2).
 
-The brief (`docs/plans/M5-execution-testnet.md`) calls for **marketable-limit-with-max-
+The brief (`docs/plans/archive/M5-execution-testnet.md`) calls for **marketable-limit-with-max-
 slippage** or **post-only maker entry after confirmation** with **no chasing**, cancel-on-
 timeout, and tier/regime-varying policy. M7 must mirror the same policy so live and
 backtest agree on fill quality. A plain market order at the moment a 5m VWAP-deviation
@@ -235,7 +235,7 @@ graduate to live.
 
 ## See also
 
-- `docs/plans/M5-execution-testnet.md` (milestone brief)
+- `docs/plans/archive/M5-execution-testnet.md` (milestone brief)
 - `docs/architecture/adr/0006-idempotency-contract.md` (clientOrderId, retries)
 - `docs/architecture/adr/0007-partial-fill-semantics.md` (filled-qty drives state)
 - `docs/architecture/adr/0008-sl-tp-attach.md` (protective-order attach + fallback)

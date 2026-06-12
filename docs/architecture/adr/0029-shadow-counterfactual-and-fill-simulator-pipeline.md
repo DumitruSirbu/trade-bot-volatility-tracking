@@ -6,7 +6,7 @@
 **Depends on:** ADR 0015 (BacktestModule + fill simulator), ADR 0017 (same-event comparison),
 ADR 0018 (paired circular-block bootstrap on expectancy-per-unit-risk),
 ADR 0019 (12-criterion promotion gate — criterion 12 `lowFidelity` rule).
-**Related:** `docs/plans/M11a-local-soak.md` §W0.5 (`shadow_decisions` table + `simulated_fill`
+**Related:** `docs/plans/archive/M11a-local-soak.md` §W0.5 (`shadow_decisions` table + `simulated_fill`
 JSONB schema), §W0.6 (the contracts this ADR locks), §W4.2 (how shadow runs over
 the live event tape), §"Soak exit criteria → M11b" (the "active version beats
 shadow v2/v3" gate).

@@ -164,7 +164,7 @@ the implementation across workspaces is unnecessary — only its types are the c
 ## See also
 
 - Contract specification + build-order note: sections below in this ADR.
-- `docs/plans/M1-exchange-market-data.md`, `docs/plans/00-overview.md`
+- `docs/plans/archive/M1-exchange-market-data.md`, `docs/plans/00-overview.md`
 
 ---
 

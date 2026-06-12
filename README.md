@@ -362,13 +362,17 @@ Walk-forward out-of-sample (OOS) splits + paired circular-block bootstrap (n=10,
 
 ## Documentation
 
+**Agents:** start with [CLAUDE.md](CLAUDE.md) (invariants), [docs/README.md](docs/README.md) (task routing), and [docs/STATUS.md](docs/STATUS.md) (current milestone).
+
+- **`docs/README.md`** — agent entry point: routing table, read/skip lists, task playbooks
+- **`docs/STATUS.md`** — living snapshot (active milestone, deploy state, next queue)
 - **`docs/plans/00-overview.md`** — locked design decisions, core principles, architecture diagram, data model
-- **`docs/plans/M*-*.md`** — milestone-by-milestone execution plans and outcomes
+- **`docs/plans/README.md`** — milestone index; done specs in **`docs/plans/archive/`**
+- **`docs/milestone-log.md`** — forensics index; per-milestone outcomes in **`docs/milestone-log/archive/`**
 - **`docs/architecture/`** — module architecture, ADRs (Architectural Decision Records), schema diagram
 - **`docs/best-practices/code-conventions.md`** — authoritative code style and module ownership (read before engine work)
 - **`docs/best-practices/dev-qa-cycle.md`** — QA workflow and wave dispatch rules (read before any fix/QA task)
 - **`docs/best-practices/testing.md`** — testing patterns and coverage expectations
-- **`CLAUDE.md`** — internal team guidance on monorepo structure and hard rules
 
 ## Observability
 

@@ -5,7 +5,7 @@
 **Milestone:** M14 — CI review gate (deterministic gates phase)
 **Depends on:** ADR 0039 (CI gate policy), ADR 0040 (SCA + lockfile integrity).
 **Consumed by:** M14 W3 (pinning + provenance job), `bot-shared-maintainer` (the `ccxt` pin change).
-**Related:** `docs/plans/M14-execution-plan.md` §W3, `docs/plans/00-overview.md` cross-cutting risks ("Order-policy matrix as shared truth"), CLAUDE.md trading-safety invariants.
+**Related:** `docs/plans/archive/M14-execution-plan.md` §W3, `docs/plans/00-overview.md` cross-cutting risks ("Order-policy matrix as shared truth"), CLAUDE.md trading-safety invariants.
 
 ## 1. Context
 
@@ -222,7 +222,7 @@ off to a required human acknowledgment rather than a machine pass/fail.
 
 ## 5. References
 
-- `docs/plans/M14-execution-plan.md` §W3 (pinning + provenance job, deps manifest,
+- `docs/plans/archive/M14-execution-plan.md` §W3 (pinning + provenance job, deps manifest,
   `ccxt` pin change via shared-maintainer).
 - ADR 0039 §2.2 (required-check set), §2.6 (conversation-resolution control used by
   the pin-change review).

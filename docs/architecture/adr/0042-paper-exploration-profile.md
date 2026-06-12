@@ -335,7 +335,7 @@ copy them in by accident.
 
 ## See also
 
-- `docs/plans/M25-paper-exploration-enablement.md` (milestone plan, amendments A1–A6)
+- `docs/plans/archive/M25-paper-exploration-enablement.md` (milestone plan, amendments A1–A6)
 - `docs/architecture/adr/0004-risk-management.md` (§4 slot model, §6/§6a–§6d stress halt + M23
   auto-resume, §8 sizing — the surfaces this ADR amends for paper)
 - `docs/architecture/adr/0032-paper-mode-architecture.md` (`EXCHANGE_ENV`, paper account state,

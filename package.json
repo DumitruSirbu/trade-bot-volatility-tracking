@@ -18,7 +18,11 @@
         "audit:ci": "pnpm audit --audit-level=high --prod --json > audit-prod.json || true; pnpm --filter @bot/engine exec ts-node tests/ci/runScaGate.ts \"$PWD/audit-prod.json\"; status=$?; rm -f audit-prod.json; exit $status",
         "dev": "pnpm -r --parallel dev",
         "engine:dev": "pnpm --filter @bot/engine dev",
-        "dashboard:dev": "pnpm --filter @bot/dashboard dev"
+        "dashboard:dev": "pnpm --filter @bot/dashboard dev",
+        "docs:check:links": "node scripts/docs/check-links.mjs",
+        "docs:check:staleness": "node scripts/docs/check-staleness.mjs",
+        "docs:check:adr": "node scripts/docs/check-adr-integrity.mjs",
+        "docs:check": "node scripts/docs/check-links.mjs && node scripts/docs/check-staleness.mjs && node scripts/docs/check-adr-integrity.mjs"
     },
     "devDependencies": {
         "@eslint/js": "9.39.4",

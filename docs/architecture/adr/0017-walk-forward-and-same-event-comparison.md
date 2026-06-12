@@ -4,7 +4,7 @@
 **Date:** 2026-05-24
 **Milestone:** M8
 **Depends on:** ADR 0003 (strategy), ADR 0015 (backtest module), ADR 0016 (lineage).
-**Related:** `docs/plans/M8-versioning-comparison.md` (tasks: walk-forward, compare-by-event_id, regime-robustness).
+**Related:** `docs/plans/archive/M8-versioning-comparison.md` (tasks: walk-forward, compare-by-event_id, regime-robustness).
 
 ## 1. Context
 

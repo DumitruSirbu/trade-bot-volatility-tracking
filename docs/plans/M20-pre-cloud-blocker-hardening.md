@@ -1,3 +1,8 @@
+---
+adr: []
+modules: [go-live]
+---
+
 # M20 — Pre-cloud go-live blocker hardening
 
 ## Context

@@ -1202,7 +1202,7 @@ money-free vocabulary enums go shared — same rule as ADR 0003 §2.
 
 ## See also
 
-- `docs/plans/M4-risk-management.md` (milestone brief), `docs/plans/00-overview.md`
+- `docs/plans/archive/M4-risk-management.md` (milestone brief), `docs/plans/00-overview.md`
 (locked decisions, data model, RiskModule paragraph)
 - `docs/architecture/adr/0003-strategy-engine.md` (`ISignal`/`IProposedExit`/`nowMs` the
 gate consumes), `0002-persistence-and-data-model.md` (`risk_state`/`positions`/`decisions`

@@ -322,7 +322,7 @@ in the M6 plan punch list as a shared/persistence pre-engine item.
 
 ## See also
 
-- `docs/plans/M6-position-management.md` (held-symbol blocker)
+- `docs/plans/archive/M6-position-management.md` (held-symbol blocker)
 - `docs/architecture/adr/0008-sl-tp-attach.md` §2/§3 (arm/disarm seam, fallback path)
 - `docs/architecture/adr/0009-position-state-machine.md` §5 (state↔monitor coupling)
 - `docs/architecture/adr/0010-reconciliation-and-drift-policy.md` case (e) (protective drift)

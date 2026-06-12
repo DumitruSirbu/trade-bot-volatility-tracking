@@ -5,7 +5,7 @@
 **Milestone:** M13 — Agentic weekly loop
 **Depends on:** ADR 0034 (MCP DB isolation — sensitive-table blocklist), ADR 0020 (auth-failure shape, token contents), ADR 0035 (agent structural boundary), ADR 0028 (key-permission assertion port — sensitive material).
 **Consumed by:** M13 W1.5 (`redactForLlm` chokepoint), M13 W2.2 (`buildPrompt`), M13 W6 (egress adversarial QA).
-**Related:** `docs/plans/M13-execution-plan.md` §"Inputs locked" #6, §W1 item 5, §W6a vector 1, §Risks R2.
+**Related:** `docs/plans/archive/M13-execution-plan.md` §"Inputs locked" #6, §W1 item 5, §W6a vector 1, §Risks R2.
 
 ## 1. Context
 
@@ -300,7 +300,7 @@ Forbidden call sites:
 
 ## 5. References
 
-- `docs/plans/M13-execution-plan.md` §"Inputs locked" #6, §W1.5,
+- `docs/plans/archive/M13-execution-plan.md` §"Inputs locked" #6, §W1.5,
   §W2.2, §W6a vector 1, §Risks R2.
 - ADR 0034 §2.5 (table-level grant blocklist this ADR complements at
   the field level).

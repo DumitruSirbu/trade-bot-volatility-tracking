@@ -5,7 +5,7 @@
 **Milestone:** M14 — CI review gate (deterministic gates phase)
 **Depends on:** ADR 0033 (MCP boundary), ADR 0035 (agent boundary), ADR 0034/0036 (DB-role isolation), `docs/best-practices/dev-qa-cycle.md` (definition of done — "green CI ≠ correct"), `docs/best-practices/code-conventions.md`.
 **Consumed by:** M14 W1 (workflow authoring), M14 W2 (branch-protection config), M14 W4 (gate smoke).
-**Related:** ADR 0040 (supply-chain/SCA gate), ADR 0041 (dependency pinning + provenance), `docs/plans/M14-execution-plan.md`.
+**Related:** ADR 0040 (supply-chain/SCA gate), ADR 0041 (dependency pinning + provenance), `docs/plans/archive/M14-execution-plan.md`.
 
 ## 1. Context
 
@@ -20,7 +20,7 @@ dependency is exactly the failure class the project cannot tolerate.
 
 **Scope decision locked by the user (do NOT re-litigate):** M14 ships
 **deterministic CI gates only**. The LLM review agents, the QA agent, and the
-scribe agent named in `docs/plans/M14-ci-review-gate.md` are **explicitly deferred**
+scribe agent named in `docs/plans/archive/M14-ci-review-gate.md` are **explicitly deferred**
 to a future pass (see §6 and the execution plan's Deferred section). This ADR
 therefore decides *only* the deterministic-gate policy and how GitHub enforces it.
 
@@ -203,7 +203,7 @@ in `docs/runbooks/ci-gates.md` so it is reproducible):
 
 ## 5. References
 
-- `docs/plans/M14-execution-plan.md` §W1 (workflow), §W2 (branch protection), §W4
+- `docs/plans/archive/M14-execution-plan.md` §W1 (workflow), §W2 (branch protection), §W4
   (gate smoke).
 - `docs/best-practices/dev-qa-cycle.md` §4.1 (green CI ≠ correct), §5 (trust but
   verify), §7.2 (adversarial tests inherit forward).

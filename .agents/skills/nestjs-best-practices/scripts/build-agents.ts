@@ -288,7 +288,7 @@ function main() {
 
     const agentsMd = generateAgentsMd(rules, metadata);
 
-    const outputPath = path.join(__dirname, '..', 'AGENTS.md');
+    const outputPath = path.join(__dirname, '..', 'reference.md');
     fs.writeFileSync(outputPath, agentsMd);
 
     console.log(`Generated AGENTS.md (${agentsMd.length} bytes)`);

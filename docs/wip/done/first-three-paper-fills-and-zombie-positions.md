@@ -1,7 +1,7 @@
 # First Three Paper Fills — What Is Incorrect (Soak 2026-06-11)
 
 **Date:** 2026-06-11  
-**Status:** DONE — fixed in **M31** (`docs/plans/M31-zombie-positions-and-broken-lifecycle.md`). Archived under `docs/wip/done/`.  
+**Status:** DONE — fixed in **M31** (`docs/plans/archive/M31-zombie-positions-and-broken-lifecycle.md`). Archived under `docs/wip/done/`.  
 **Context:** First gate-approved paper trades after M29/M30 deploy. Operator saw three "open" positions and a global halt. **This doc records the defect analysis that M31 addressed (zombie lifecycle), not the separate live exit-enforcement gap** — see [live-exit-enforcement-gap.md](../live-exit-enforcement-gap.md).
 
 ---

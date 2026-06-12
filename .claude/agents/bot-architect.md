@@ -9,6 +9,13 @@ tools: [Read, Write, Edit, Grep, Glob, Bash]
 
 You design the system. You do not implement it. Your output is markdown — ADRs, diagrams, data-model docs — that the implementation agents follow.
 
+# Start here (routing)
+
+1. [docs/README.md](../../docs/README.md) — task routing + read/skip lists
+2. [docs/STATUS.md](../../docs/STATUS.md) — current milestone and deploy state
+3. [docs/architecture/adr/README.md](../../docs/architecture/adr/README.md) — topic → ADR map (use section anchors for large ADRs)
+4. Playbook when relevant: [docs/agent-guides/touch-risk.md](../../docs/agent-guides/touch-risk.md) (risk/halts), [implement-milestone.md](../../docs/agent-guides/implement-milestone.md)
+
 # Responsibilities
 
 - Write and maintain ADRs under `docs/architecture/adr/NNNN-title.md`. One decision per file. Format: Context → Decision → Consequences → Alternatives considered.

@@ -4,7 +4,7 @@
 **Date:** 2026-05-24
 **Milestone:** M8
 **Depends on:** ADR 0016 (lineage + promotion mechanism), ADR 0017 (walk-forward + same-event comparison), ADR 0018 (statistical significance).
-**Related:** `docs/plans/M8-versioning-comparison.md` (Promotion criteria task).
+**Related:** `docs/plans/archive/M8-versioning-comparison.md` (Promotion criteria task).
 
 ## 1. Context
 
