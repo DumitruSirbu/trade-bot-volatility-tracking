@@ -527,7 +527,12 @@ describe('ReconciliationService funding ingestion (ADR 0012 §2)', () => {
             recordFunding: jest.fn().mockResolvedValue({ id: 1 } as TransactionEntity),
         };
 
-        const riskGate = { expireStaleReservations: jest.fn(), reconcileClose: jest.fn(), recordExposureDrift: jest.fn() };
+        const riskGate = {
+            expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
+            reconcileClose: jest.fn(),
+            recordExposureDrift: jest.fn(),
+        };
         const monitor = { arm: jest.fn(), disarm: jest.fn() };
         const retainer = new SubscriptionRetainer();
         const strategyVersions = { findByNameAndVersion: jest.fn().mockResolvedValue({ id: 7 }) };

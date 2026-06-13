@@ -410,6 +410,7 @@ describe('M6 R1.2.4 — ReconciliationService case-(f) UNKNOWN_INTENT_OUTCOME', 
         } as unknown as PositionService;
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn(),
             recordExposureDrift: jest.fn(),
             evaluate: jest.fn(),
@@ -627,6 +628,7 @@ describe('M6 R1.2.5 — ReconciliationService.handleProtectiveOrderDriftIfNeeded
         } as unknown as PositionService;
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn(),
             recordExposureDrift: jest.fn(),
             evaluate: jest.fn(),

@@ -267,6 +267,7 @@ function buildReconHarness(opts: { dbPositions?: PositionEntity[]; exchangePosit
 
     const riskGate = {
         expireStaleReservations: jest.fn(),
+        listActiveReservationSlots: jest.fn().mockReturnValue([]),
         reconcileClose: jest.fn().mockResolvedValue(undefined),
     };
 

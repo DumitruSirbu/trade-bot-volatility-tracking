@@ -1654,6 +1654,7 @@ describe('9. Crash-window adversarials (ADR 0014)', () => {
     it('anti-coverage: reconciliation scheduled tick does NOT fire during boot guard', async () => {
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             isRecoveryReady: jest.fn().mockReturnValue(false), // boot not complete
             reconcileClose: jest.fn(),
             recordExposureDrift: jest.fn(),

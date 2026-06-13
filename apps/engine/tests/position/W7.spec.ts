@@ -405,7 +405,13 @@ describe('ReconciliationService — liquidation-price propagation to instrumento
         };
         const transactions = { findByClientOrderId: jest.fn(), findLatestFundingByPosition: jest.fn().mockResolvedValue(null) };
         const positionService = { transition: jest.fn(), adjustQty: jest.fn(), recordFunding: jest.fn(), finalizeRealizedPnl: jest.fn() };
-        const riskGate = { expireStaleReservations: jest.fn(), reconcileClose: jest.fn(), recordExposureDrift: jest.fn(), evaluate: jest.fn() };
+        const riskGate = {
+            expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
+            reconcileClose: jest.fn(),
+            recordExposureDrift: jest.fn(),
+            evaluate: jest.fn(),
+        };
         const monitor = { arm: jest.fn(), disarm: jest.fn() };
         const retainer = new SubscriptionRetainer();
         const strategyVersions = { findByNameAndVersion: jest.fn() };
@@ -476,7 +482,13 @@ describe('ReconciliationService — liquidation-price propagation to instrumento
         };
         const transactions = { findByClientOrderId: jest.fn(), findLatestFundingByPosition: jest.fn().mockResolvedValue(null) };
         const positionService = { transition: jest.fn(), adjustQty: jest.fn(), recordFunding: jest.fn(), finalizeRealizedPnl: jest.fn() };
-        const riskGate = { expireStaleReservations: jest.fn(), reconcileClose: jest.fn(), recordExposureDrift: jest.fn(), evaluate: jest.fn() };
+        const riskGate = {
+            expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
+            reconcileClose: jest.fn(),
+            recordExposureDrift: jest.fn(),
+            evaluate: jest.fn(),
+        };
         const monitor = { arm: jest.fn(), disarm: jest.fn() };
         const retainer = new SubscriptionRetainer();
         const haltFlag = new HaltFlagService();
@@ -538,7 +550,13 @@ describe('ReconciliationService — drift-forced snapshot (W7 item 2; ADR 0012 �
             findLastClosedBySymbol: jest.fn().mockResolvedValue(null),
         };
         const positionService = { transition: jest.fn(), adjustQty: jest.fn(), recordFunding: jest.fn(), finalizeRealizedPnl: jest.fn() };
-        const riskGate = { expireStaleReservations: jest.fn(), reconcileClose: jest.fn(), recordExposureDrift: jest.fn(), evaluate: jest.fn() };
+        const riskGate = {
+            expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
+            reconcileClose: jest.fn(),
+            recordExposureDrift: jest.fn(),
+            evaluate: jest.fn(),
+        };
         const monitor = { arm: jest.fn(), disarm: jest.fn() };
         const retainer = new SubscriptionRetainer();
         const haltFlag = new HaltFlagService();
@@ -597,7 +615,13 @@ describe('ReconciliationService — drift-forced snapshot (W7 item 2; ADR 0012 �
             positions as never,
             { findByClientOrderId: jest.fn(), findLatestFundingByPosition: jest.fn().mockResolvedValue(null) } as never,
             { transition: jest.fn(), adjustQty: jest.fn(), recordFunding: jest.fn(), finalizeRealizedPnl: jest.fn() } as never,
-            { expireStaleReservations: jest.fn(), reconcileClose: jest.fn(), recordExposureDrift: jest.fn(), evaluate: jest.fn() } as never,
+            {
+                expireStaleReservations: jest.fn(),
+                listActiveReservationSlots: jest.fn().mockReturnValue([]),
+                reconcileClose: jest.fn(),
+                recordExposureDrift: jest.fn(),
+                evaluate: jest.fn(),
+            } as never,
             { arm: jest.fn(), disarm: jest.fn() } as never,
             new SubscriptionRetainer(),
             { findByNameAndVersion: jest.fn() } as never,

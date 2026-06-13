@@ -134,6 +134,7 @@ function buildReconHarness(opts: {
 
     const riskGate = {
         expireStaleReservations: jest.fn(),
+        listActiveReservationSlots: jest.fn().mockReturnValue([]),
         reconcileClose: jest.fn().mockResolvedValue(undefined),
     };
 

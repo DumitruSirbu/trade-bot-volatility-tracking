@@ -100,6 +100,7 @@ function buildReconHarness(opts: { positions?: PositionEntity[]; exchangePositio
     };
     const riskGate = {
         expireStaleReservations: jest.fn(),
+        listActiveReservationSlots: jest.fn().mockReturnValue([]),
         reconcileClose: jest.fn().mockResolvedValue(undefined),
         recordExposureDrift: jest.fn(),
         evaluate: jest.fn().mockResolvedValue({ outcome: RiskOutcomeEnum.APPROVED, rejectReason: null, reservationId: null }),
@@ -239,6 +240,7 @@ describe('M6 R1.1.3 — case-(a) flatten emits ReconciliationOutcomeEnum.FLATTEN
         const positionService = { transition: jest.fn(), adjustQty: jest.fn(), recordFunding: jest.fn(), finalizeRealizedPnl: jest.fn() };
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn(),
             recordExposureDrift: jest.fn(),
             evaluate: jest.fn().mockResolvedValue({ outcome: RiskOutcomeEnum.APPROVED, rejectReason: null, reservationId: null }),

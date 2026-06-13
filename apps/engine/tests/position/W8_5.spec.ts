@@ -84,6 +84,7 @@ describe('ReconciliationService.scheduledTick — boot-race guard (M6 W8.5)', ()
         } as unknown as PositionService;
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn(),
             recordExposureDrift: jest.fn(),
             evaluate: jest.fn(),

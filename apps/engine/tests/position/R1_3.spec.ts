@@ -101,6 +101,7 @@ function buildFlattenHarness(insertedRowIdSeed: number): IFlattenHarness {
 
     const riskGate = {
         expireStaleReservations: jest.fn(),
+        listActiveReservationSlots: jest.fn().mockReturnValue([]),
         evaluate: jest.fn().mockResolvedValue({
             outcome: RiskOutcomeEnum.APPROVED,
             rejectReason: null,

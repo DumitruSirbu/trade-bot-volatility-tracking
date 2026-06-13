@@ -343,6 +343,7 @@ describe('ReconciliationService case (b) precise (W4b)', () => {
         } as unknown as PositionService;
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn().mockResolvedValue(undefined),
             recordExposureDrift: jest.fn().mockResolvedValue(undefined),
             evaluate: jest.fn().mockResolvedValue({
@@ -446,6 +447,7 @@ describe('ReconciliationService case (c) precise (W4b)', () => {
         } as unknown as PositionService;
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn(),
             recordExposureDrift: jest.fn().mockResolvedValue(undefined),
             evaluate: jest.fn(),
@@ -540,6 +542,7 @@ describe('ReconciliationService case (a) flatten policy (W4b)', () => {
         const positionService = { transition: jest.fn(), adjustQty: jest.fn() } as unknown as PositionService;
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn(),
             recordExposureDrift: jest.fn(),
             evaluate: jest.fn().mockResolvedValue({
