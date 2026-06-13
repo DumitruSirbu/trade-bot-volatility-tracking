@@ -20,8 +20,12 @@ import { Money, MoneyValue, parseMoney } from '../../common/utils/money';
 import { PositionEntity } from '../../position/entity';
 import { POSITION_STATE_TRANSITIONED_EVENT } from '../../position/const';
 import { PositionRepository } from '../../position/repository/PositionRepository';
-import { IOrderIntent, IOrderIntentApprovedEvent, IRiskGateContext } from '../../risk/interface';
+import { IIntentSizing, IOrderIntent, IOrderIntentApprovedEvent, IRiskGateContext } from '../../risk/interface';
+import { IProposedExit } from '../../strategy/interface';
 import { RiskGateService } from '../../risk/service';
+import { LOCAL_MONITOR_BREACH_EVENT_ID_PREFIX, ORDER_INTENT_EXPIRED_REASON_DRY_RUN, ORDER_INTENT_EXPIRED_REASON_HALTED } from '../const';
+import { BreachKindEnum } from '../enum';
+import { SharedCloseCoordinator } from './SharedCloseCoordinator';
 
 // Arm payload — M6 W3 extends the M5 seam with `side` so the breach evaluator
 // can apply side-aware comparisons without a position-row lookup (the lookup is
@@ -35,17 +39,11 @@ interface IArmedPosition {
     readonly armedAtMs: number;
 }
 
-// Pure breach-classification output — separable from the I/O-bearing handler so
-// the evaluator stays a pure function of (armedConfig, markPrice). Side-aware
-// per ADR 0011 §3:
-//
+// Breach classification (`BreachKindEnum`, execution/enum) is side-aware per ADR 0011 §3:
 //   LONG:  SL breached if mark <= SL;   TP breached if mark >= TP
 //   SHORT: SL breached if mark >= SL;   TP breached if mark <= TP
-//
-// Equality is a breach (matches exchange-side STOP_MARKET "at-or-past" semantics
-// — ADR 0011 §3 final paragraph). SL is checked before TP — survival before
-// opportunity — and on the degenerate gap-through-both case, SL wins.
-type BreachKind = 'stop_loss' | 'take_profit' | null;
+// Equality is a breach (exchange-side STOP_MARKET "at-or-past" semantics, §3 final paragraph),
+// and on the degenerate gap-through-both case SL wins — survival before opportunity.
 
 // In-memory arm/disarm seam — M5 shipped only the seam (arm/disarm/isArmed/
 // listArmed). M6 W3 (ADR 0011 §2-§4) extends this service with:
@@ -76,12 +74,6 @@ export class LocalProtectiveMonitor {
 
     private readonly armed = new Map<number, IArmedPosition>();
 
-    // breachInFlight per positionId. Set when a close intent is emitted to the
-    // gate; cleared on position.state.transitioned → CLOSED (disarm). ADR 0011
-    // §4 "Idempotency on the breach": a repeat price.update past the SL while
-    // close is mid-flight does NOT re-emit.
-    private readonly breachInFlight = new Set<number>();
-
     constructor(
         private readonly positions: PositionRepository,
         // forwardRef: RiskGateService lives in RiskModule which is imported by ExecutionModule,
@@ -90,6 +82,11 @@ export class LocalProtectiveMonitor {
         @Inject(forwardRef(() => RiskGateService))
         private readonly riskGate: RiskGateService,
         private readonly events: EventEmitter2,
+        // M33 Fix 1b (ADR 0011 §9) — the shared close-in-flight registry replaces the prior
+        // per-monitor `breachInFlight` set. It is the single dedup substrate across ALL close
+        // producers, so a same-tick collision with the time-stop enforcer or the reconciliation
+        // flatten emits exactly one close. `handleBreach` skips when the slot is already held.
+        private readonly closeCoordinator: SharedCloseCoordinator,
     ) {}
 
     arm(input: { positionId: number; symbol: string; side: PositionSideEnum; stopLossPrice: MoneyValue | null; takeProfitPrice: MoneyValue | null }): void {
@@ -110,8 +107,11 @@ export class LocalProtectiveMonitor {
             return;
         }
 
+        // M33 Fix 1b: `disarm` clears ONLY the SL/TP arm state — it does NOT release
+        // the shared close slot. `applyReduceFillToPosition` disarms BEFORE the durable CLOSED
+        // write; releasing the slot here would let a later tick emit a second close. The slot
+        // is released only on the locked outcomes (CLOSED, gate-reject, halted/dry_run expiry).
         this.armed.delete(positionId);
-        this.breachInFlight.delete(positionId);
         this.logger.log(`local monitor disarmed positionId=${positionId}`);
     }
 
@@ -126,15 +126,15 @@ export class LocalProtectiveMonitor {
     // Pure breach-classification function (ADR 0011 §3). Exposed as a public method
     // so unit tests can call it without constructing the gate/repository graph.
     // No side effects, no `Date.now()`, no I/O.
-    evaluateBreach(armed: IArmedPosition, markPrice: MoneyValue): BreachKind {
+    evaluateBreach(armed: IArmedPosition, markPrice: MoneyValue): BreachKindEnum | null {
         // SL first (ADR 0011 §3): survival before opportunity. A degenerate gap
         // through both SL and TP on a single tick resolves to SL.
         if (armed.stopLossPrice !== null && this.isStopLossBreached(armed.side, markPrice, armed.stopLossPrice)) {
-            return 'stop_loss';
+            return BreachKindEnum.STOP_LOSS;
         }
 
         if (armed.takeProfitPrice !== null && this.isTakeProfitBreached(armed.side, markPrice, armed.takeProfitPrice)) {
-            return 'take_profit';
+            return BreachKindEnum.TAKE_PROFIT;
         }
 
         return null;
@@ -175,14 +175,16 @@ export class LocalProtectiveMonitor {
     }
 
     // Disarm-on-CLOSED: the monitor stands down automatically when the position
-    // reaches a closed state. Mirrors the symmetric arm-on-open path. Also clears
-    // the breachInFlight flag so a positionId can never carry stale state forward.
+    // reaches a closed state. Mirrors the symmetric arm-on-open path. The CLOSED
+    // terminal also releases the shared close slot per the Fix 1b release table —
+    // this is the load-bearing release for the monitor's own breach closes.
     @OnEvent(POSITION_STATE_TRANSITIONED_EVENT)
     onPositionStateTransitioned(event: IPositionStateTransitionedEvent): void {
         if (event.toState !== PositionStateEnum.CLOSED) {
             return;
         }
 
+        this.closeCoordinator.release(event.positionId);
         this.disarm(event.positionId);
     }
 
@@ -198,16 +200,17 @@ export class LocalProtectiveMonitor {
     //      subsequent price tick is suppressed by the idempotency guard, and
     //      the position is structurally unprotected once halt clears.
     //
-    // The fix: when an `ORDER_INTENT_EXPIRED_EVENT` with reason='halted'
-    // matches one of our breach eventIds, clear `breachInFlight` so the next
-    // price tick re-evaluates and re-fires. The eventId is the breach
-    // factory's deterministic id `local-monitor-breach-${positionId}-${reason}`,
-    // so we can recover the positionId without an extra lookup. ADR-0011 §4
-    // "local monitor as last line of defense" applies under halt too.
+    // The fix: when an `ORDER_INTENT_EXPIRED_EVENT` with reason ∈ {'halted','dry_run'}
+    // matches one of our breach eventIds, release the shared close slot so the next
+    // price tick re-evaluates and re-fires. No live order is resting on either expiry
+    // reason (Fix 1b release table), so re-emit is correct and harmless. The eventId is
+    // the breach factory's deterministic id `local-monitor-breach-${positionId}-${reason}`,
+    // so we can recover the positionId without an extra lookup. ADR-0011 §4 "local monitor
+    // as last line of defense" applies under halt too.
     @OnEvent(ORDER_INTENT_EXPIRED_EVENT)
     onOrderIntentExpired(event: { eventId: string; reservationId: string | null; reason?: string }): void {
-        if (event.reason !== 'halted') {
-            return; // dry_run / other expiries don't unprotect the position
+        if (event.reason !== ORDER_INTENT_EXPIRED_REASON_HALTED && event.reason !== ORDER_INTENT_EXPIRED_REASON_DRY_RUN) {
+            return; // other expiries don't unprotect the position
         }
 
         const positionId = this.extractPositionIdFromBreachEventId(event.eventId);
@@ -216,13 +219,14 @@ export class LocalProtectiveMonitor {
             return; // not one of our breach intents
         }
 
-        if (!this.breachInFlight.has(positionId)) {
+        if (!this.closeCoordinator.isHeld(positionId)) {
             return;
         }
 
-        this.breachInFlight.delete(positionId);
+        this.closeCoordinator.release(positionId);
         this.logger.warn(
-            `breach intent for positionId=${positionId} expired under halt — cleared in-flight flag; next price tick will re-evaluate (ADR 0011 §4 last-line-of-defense)`,
+            `breach intent for positionId=${positionId} expired (reason=${event.reason}) — released close slot; ` +
+                `next price tick will re-evaluate (ADR 0011 §4 last-line-of-defense)`,
         );
     }
 
@@ -238,7 +242,7 @@ export class LocalProtectiveMonitor {
     // suffix (everything after the last dash) is the exitReason; the prefix
     // (everything before it) is the positionId portion of the id.
     private extractPositionIdFromBreachEventId(eventId: string): number | null {
-        const prefix = 'local-monitor-breach-';
+        const prefix = LOCAL_MONITOR_BREACH_EVENT_ID_PREFIX;
 
         if (!eventId.startsWith(prefix)) {
             return null;
@@ -267,67 +271,87 @@ export class LocalProtectiveMonitor {
     // legitimate close API per ADR 0011 §4), and on approval re-emits
     // ORDER_INTENT_APPROVED_EVENT so the existing executor reduce-family path
     // submits the close. Idempotent on positionId via `breachInFlight`.
-    private async handleBreach(armed: IArmedPosition, markPrice: MoneyValue, breach: 'stop_loss' | 'take_profit', nowMs: number): Promise<void> {
-        if (this.breachInFlight.has(armed.positionId)) {
-            // A previous tick already fired the close intent for this position.
-            // Per ADR 0011 §4 idempotency: do NOT re-emit; let the in-flight
-            // close walk through the executor → fill → CLOSED transition path.
+    private async handleBreach(armed: IArmedPosition, markPrice: MoneyValue, breach: BreachKindEnum, nowMs: number): Promise<void> {
+        // M33 Fix 1b reciprocal guard: acquire the shared close slot BEFORE any await. If a
+        // time-stop (or any other producer) already holds it this tick, skip emitting — exactly
+        // one close fires and the time-stop wins the collision (ADR 0011 §9). `tryAcquire` is a
+        // synchronous check-and-set, so it also closes the race where a second price.update tick
+        // lands between this call and the emit below (the prior `breachInFlight` semantics).
+        if (!this.closeCoordinator.tryAcquire(armed.positionId)) {
             return;
         }
 
-        const position = await this.positions.findById(armed.positionId);
+        // Slot is held synchronously above; the awaited lookup → gate → emit body runs as a
+        // floating void (matching the time-stop enforcer's pattern). executeBreachClose owns the
+        // try/catch slot-release safety net for everything past this point.
+        void this.executeBreachClose(armed, markPrice, breach, nowMs);
+    }
 
-        if (position === null) {
-            this.logger.warn(`breach detected for positionId=${armed.positionId} symbol=${armed.symbol} but position row not found - disarming and skipping`);
-            this.disarm(armed.positionId);
+    // Runs only after the close slot is held. M33 R1-Fix-A: an unexpected throw from `findById` or
+    // the gate evaluate would leak the slot forever — the position becomes structurally unprotected
+    // for this run. The try/catch releases the slot on any throw, logs with context, and returns;
+    // the next price tick re-evaluates the still-armed breach. The conditional releases inside the
+    // try body remain correct as-is.
+    private async executeBreachClose(armed: IArmedPosition, markPrice: MoneyValue, breach: BreachKindEnum, nowMs: number): Promise<void> {
+        try {
+            const position = await this.positions.findById(armed.positionId);
 
-            return;
-        }
+            if (position === null) {
+                this.logger.warn(
+                    `breach detected for positionId=${armed.positionId} symbol=${armed.symbol} but position row not found - disarming and skipping`,
+                );
+                this.closeCoordinator.release(armed.positionId);
+                this.disarm(armed.positionId);
 
-        const exitReason = breach === 'stop_loss' ? ExitReasonEnum.STOP_LOSS : ExitReasonEnum.TAKE_PROFIT;
-        const intent = this.buildCloseIntent(position, armed, markPrice, exitReason);
-        const context = this.buildDeRiskContext(markPrice, nowMs);
+                return;
+            }
 
-        // Mark in-flight BEFORE awaiting the gate. The gate call is in-process and
-        // synchronous from the event-bus perspective; the flag closes the race where
-        // a second price.update tick lands between this call and the emit below.
-        this.breachInFlight.add(armed.positionId);
+            const exitReason = breach === BreachKindEnum.STOP_LOSS ? ExitReasonEnum.STOP_LOSS : ExitReasonEnum.TAKE_PROFIT;
+            const intent = this.buildCloseIntent(position, armed, markPrice, exitReason);
+            const context = this.buildDeRiskContext(nowMs);
 
-        const decision = await this.riskGate.evaluate(intent, context);
+            const decision = await this.riskGate.evaluate(intent, context);
 
-        if (decision.outcome !== RiskOutcomeEnum.APPROVED) {
-            // De-risking is supposed to be auto-approved (ADR 0004 §2). A reject here
-            // is a contract violation — log loudly, clear the in-flight flag so the
-            // next tick has a chance to re-try (this is the safer path: the position
-            // is still breached and the local monitor is the last line of defense).
-            this.breachInFlight.delete(armed.positionId);
-            this.logger.error(
-                `gate rejected local-monitor close intent positionId=${armed.positionId} symbol=${armed.symbol} ` +
-                    `reason=${decision.rejectReason ?? 'unknown'} - leaving monitor armed for retry`,
+            if (decision.outcome !== RiskOutcomeEnum.APPROVED) {
+                // De-risking is supposed to be auto-approved (ADR 0004 §2). A reject here
+                // is a contract violation — log loudly, release the close slot so the
+                // next tick has a chance to re-try (this is the safer path: the position
+                // is still breached and the local monitor is the last line of defense).
+                this.closeCoordinator.release(armed.positionId);
+                this.logger.error(
+                    `gate rejected local-monitor close intent positionId=${armed.positionId} symbol=${armed.symbol} ` +
+                        `reason=${decision.rejectReason ?? 'unknown'} - leaving monitor armed for retry`,
+                );
+
+                return;
+            }
+
+            const approvedEvent: IOrderIntentApprovedEvent = {
+                intent,
+                // The position already holds an approved slot; pass it through so the
+                // executor's reduce-family lookup (findOpenBySymbolAndSlot) finds the row.
+                approvedSlot: this.resolveSlot(position),
+                approvedSizing: intent.sizing,
+                clampedExit: intent.proposedExit,
+                // De-risking decisions carry null reservation per ADR 0004 §2 — no exposure
+                // is being acquired. The executor's safe helpers treat null as a no-op.
+                reservationId: decision.reservationId,
+                strategyVersionId: position.strategyVersionId,
+            };
+
+            this.events.emit(ORDER_INTENT_APPROVED_EVENT, approvedEvent);
+
+            this.logger.log(
+                `local monitor BREACH positionId=${armed.positionId} symbol=${armed.symbol} side=${armed.side} ` +
+                    `kind=${breach} markPrice=${markPrice.toFixed()} - close intent emitted through gate`,
             );
-
-            return;
+        } catch (cause) {
+            this.closeCoordinator.release(armed.positionId);
+            this.logger.error(
+                `local-monitor breach handling threw for positionId=${armed.positionId} symbol=${armed.symbol}: ` +
+                    `${cause instanceof Error ? cause.message : String(cause)} - released close slot; next price tick will re-evaluate`,
+            );
         }
-
-        const approvedEvent: IOrderIntentApprovedEvent = {
-            intent,
-            // The position already holds an approved slot; pass it through so the
-            // executor's reduce-family lookup (findOpenBySymbolAndSlot) finds the row.
-            approvedSlot: this.resolveSlot(position),
-            approvedSizing: intent.sizing,
-            clampedExit: intent.proposedExit,
-            // De-risking decisions carry null reservation per ADR 0004 §2 — no exposure
-            // is being acquired. The executor's safe helpers treat null as a no-op.
-            reservationId: decision.reservationId,
-            strategyVersionId: position.strategyVersionId,
-        };
-
-        this.events.emit(ORDER_INTENT_APPROVED_EVENT, approvedEvent);
-
-        this.logger.log(
-            `local monitor BREACH positionId=${armed.positionId} symbol=${armed.symbol} side=${armed.side} ` +
-                `kind=${breach} markPrice=${markPrice.toFixed()} - close intent emitted through gate`,
-        );
     }
 
     private isStopLossBreached(side: PositionSideEnum, markPrice: MoneyValue, stopLossPrice: MoneyValue): boolean {
@@ -352,13 +376,6 @@ export class LocalProtectiveMonitor {
     private buildCloseIntent(position: PositionEntity, armed: IArmedPosition, markPrice: MoneyValue, exitReason: ExitReasonEnum): IOrderIntent {
         const closeSide = position.side === PositionSideEnum.LONG ? PositionSideEnum.SHORT : PositionSideEnum.LONG;
         const eventId = this.buildBreachEventId(armed.positionId, exitReason);
-        const sizing = {
-            qty: position.qty,
-            notional: position.qty.times(markPrice),
-            leverage: position.leverage,
-            riskPerTradeUsdt: new Money(0),
-            effectiveRiskUsdt: new Money(0),
-        };
 
         return {
             intentAction: OrderIntentActionEnum.CLOSE,
@@ -372,16 +389,34 @@ export class LocalProtectiveMonitor {
             entryPrice: position.entryPrice,
             midAtTrigger: markPrice,
             maintenanceMarginRate: new Money(0),
-            proposedExit: {
-                takeProfitPrice: armed.takeProfitPrice ?? markPrice,
-                stopLossPrice: armed.stopLossPrice ?? markPrice,
-                stopType: StopTypeEnum.ATR,
-                timeStopAtMs: 0,
-            },
+            proposedExit: this.buildCloseIntentProposedExit(armed, markPrice),
             openPosition: null,
-            sizing,
+            sizing: this.buildCloseIntentSizing(position, markPrice),
             flowType: (position.flowTypeAtEntry as FlowTypeEnum | null | undefined) ?? FlowTypeEnum.TREND_INITIATION,
             exitReason,
+        };
+    }
+
+    // Full-close sizing: the entire remaining qty, valued at the mark. Risk fields are zero — a
+    // de-risking close acquires no exposure, so it carries no per-trade risk budget (ADR 0004 §2).
+    private buildCloseIntentSizing(position: PositionEntity, markPrice: MoneyValue): IIntentSizing {
+        return {
+            qty: position.qty,
+            notional: position.qty.times(markPrice),
+            leverage: position.leverage,
+            riskPerTradeUsdt: new Money(0),
+            effectiveRiskUsdt: new Money(0),
+        };
+    }
+
+    // The gate short-circuits on intentAction === CLOSE without reading these targets, so the
+    // armed SL/TP (or the mark as a permissive fallback) is sufficient; timeStopAtMs is 0.
+    private buildCloseIntentProposedExit(armed: IArmedPosition, markPrice: MoneyValue): IProposedExit {
+        return {
+            takeProfitPrice: armed.takeProfitPrice ?? markPrice,
+            stopLossPrice: armed.stopLossPrice ?? markPrice,
+            stopType: StopTypeEnum.ATR,
+            timeStopAtMs: 0,
         };
     }
 
@@ -389,7 +424,7 @@ export class LocalProtectiveMonitor {
     // M7 backtest replay reproduces the same id — exchange-side duplicate-id guard
     // backs the in-process `breachInFlight` flag.
     private buildBreachEventId(positionId: number, exitReason: ExitReasonEnum): string {
-        return `local-monitor-breach-${positionId}-${exitReason}`;
+        return `${LOCAL_MONITOR_BREACH_EVENT_ID_PREFIX}${positionId}-${exitReason}`;
     }
 
     private resolveSlot(position: PositionEntity): PositionSlotEnum {
@@ -400,11 +435,12 @@ export class LocalProtectiveMonitor {
     // (`approveDeRisking`, ADR 0004 §2) before reading any field below. Building a
     // permissive stub keeps the monitor decoupled from the strategy-side context
     // builder; if `evaluate` ever inspects context for de-risking, this cast is
-    // the canary — the type compiler catches the contract drift first.
+    // the canary — the type compiler catches the contract drift first. The mark price
+    // is carried on the intent's `midAtTrigger`, so the context does not need it.
     // M6 R1.3.1b — `nowMs` is injected from the originating IPriceUpdateEvent's
     // `timestampMs` (exchange event time). Deterministic / replay-safe: M7
     // backtest replay re-emits the same event with the same timestamp.
-    private buildDeRiskContext(markPrice: MoneyValue, nowMs: number): IRiskGateContext {
+    private buildDeRiskContext(nowMs: number): IRiskGateContext {
         return {
             nowMs,
             utcDateString: new Date(nowMs).toISOString().slice(0, 10),
@@ -417,12 +453,6 @@ export class LocalProtectiveMonitor {
             openPositions: {} as IRiskGateContext['openPositions'],
             instruments: {} as IRiskGateContext['instruments'],
             modelDivergenceDetected: false,
-            // markPrice is parked on midAtTrigger of the intent; the context's snapshot
-            // is intentionally empty because the gate never reads it for CLOSE. The
-            // explicit `_ = markPrice` keeps the parameter from being lint-flagged as
-            // unused — its real consumer is the intent (buildCloseIntent above).
-            // (No-op reference to satisfy noUnusedParameters semantics.)
-            ...(markPrice ? {} : {}),
         };
     }
 }

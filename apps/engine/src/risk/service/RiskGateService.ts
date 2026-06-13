@@ -245,6 +245,28 @@ export class RiskGateService {
         this.ledger.expireStaleReservations(nowMs);
     }
 
+    // M34 (ADR 0004 §3) — read-only view of the DISTINCT slots held by active (PENDING +
+    // CONFIRMED) reservations in the live ledger. Consumed by the reconciliation slot-accounting
+    // invariant check. Distinct because an ADD legitimately yields a 2nd reservation on one slot;
+    // a raw count would false-positive the invariant.
+    listActiveReservationSlots(): PositionSlotEnum[] {
+        return [...new Set(this.ledger.listActive().map((reservation) => reservation.slot))];
+    }
+
+    // M34 (ADR 0004 §3) — the normal close-path slot release. The reconciliation path
+    // (reconcileClose) already releases on case-(b)/(f) closes; this wires the SAME
+    // CONFIRMED → RELEASED edge for the executor close path (time-stop, local SL/TP,
+    // FLATTEN), driven by the SlotReleaseListener on POSITION_CLOSED_EVENT. Releases ALL
+    // CONFIRMED reservations on the position's (symbol, slot) — the OPEN plus every ADD —
+    // so a position that was added to does not re-leak its slot. Idempotent no-op when no
+    // CONFIRMED reservation matches (a duplicate close, or a slot already freed by a racing
+    // reconcileClose: the ledger treats RELEASED → RELEASED as a terminal no-op).
+    releaseSlotForClosedPosition(symbol: string, slot: PositionSlotEnum): void {
+        const released = this.ledger.releaseConfirmedReservationsFor(symbol, slot);
+
+        this.logger.debug(`slot release on close: symbol=${symbol} slot=${slot} releasedReservations=${released}`);
+    }
+
     // M6 W4b (ADR 0010 §1b, §7). Case (b) primitive: the position was closed outside the
     // bot (liquidation, manual close, exchange-side SL/TP, or a crash-window-lost fill).
     // No order is placed — the close already happened. We:

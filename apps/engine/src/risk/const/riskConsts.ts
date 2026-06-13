@@ -58,6 +58,12 @@ export const MAX_SAME_DIRECTION_EXPOSURE_USDT = 600;
 
 // --- slot model (§4) ---
 
+// Architectural max concurrent open positions = the 3 slots A/B/C (ADR 0004 §4, locked). NOT a
+// tunable knob — widening it is a correlation-budget redesign (new ADR), not a parameter change
+// (M34: ≥95% of portfolio variance is undiversifiable at N ≥ 3 under ρ ≈ 0.8). Used by the M34
+// reconciliation slot-accounting invariant check (distinct occupied slots must stay ≤ this).
+export const MAX_OPEN_POSITIONS = 3;
+
 // Idiosyncratic-eligible slots; at most 2 concurrent A/B positions.
 export const MAX_IDIOSYNCRATIC_SLOTS = 2;
 

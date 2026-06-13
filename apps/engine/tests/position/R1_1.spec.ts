@@ -29,6 +29,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { Money, MoneyValue } from '../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { IExchangeClient, IPositionSnapshot } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { PositionEntity } from '../../src/position/entity';
@@ -99,6 +100,7 @@ function buildReconHarness(opts: { positions?: PositionEntity[]; exchangePositio
     };
     const riskGate = {
         expireStaleReservations: jest.fn(),
+        listActiveReservationSlots: jest.fn().mockReturnValue([]),
         reconcileClose: jest.fn().mockResolvedValue(undefined),
         recordExposureDrift: jest.fn(),
         evaluate: jest.fn().mockResolvedValue({ outcome: RiskOutcomeEnum.APPROVED, rejectReason: null, reservationId: null }),
@@ -128,6 +130,7 @@ function buildReconHarness(opts: { positions?: PositionEntity[]; exchangePositio
         instrumentor,
         snapshotWriter,
         events,
+        new SharedCloseCoordinator(),
     );
 
     return { service, positionService, riskGate, monitor, events, emitSpy };
@@ -237,6 +240,7 @@ describe('M6 R1.1.3 — case-(a) flatten emits ReconciliationOutcomeEnum.FLATTEN
         const positionService = { transition: jest.fn(), adjustQty: jest.fn(), recordFunding: jest.fn(), finalizeRealizedPnl: jest.fn() };
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn(),
             recordExposureDrift: jest.fn(),
             evaluate: jest.fn().mockResolvedValue({ outcome: RiskOutcomeEnum.APPROVED, rejectReason: null, reservationId: null }),
@@ -263,6 +267,7 @@ describe('M6 R1.1.3 — case-(a) flatten emits ReconciliationOutcomeEnum.FLATTEN
             { setLiquidationPrice: jest.fn() } as never,
             { writeNow: jest.fn().mockResolvedValue(null) } as never,
             events,
+            new SharedCloseCoordinator(),
         );
         service.setForeignPositionPolicy('flatten');
 

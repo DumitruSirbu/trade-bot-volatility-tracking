@@ -28,17 +28,24 @@ import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Interval } from '@nestjs/schedule';
 
-import { ORDER_INTENT_APPROVED_EVENT, ORDER_INTENT_UNKNOWN_EVENT } from '../../common/const';
+import { ORDER_INTENT_APPROVED_EVENT, ORDER_INTENT_EXPIRED_EVENT, ORDER_INTENT_UNKNOWN_EVENT } from '../../common/const';
 import { IOrderIntentUnknownEvent } from '../../common/interface';
 import { HaltFlagService } from '../../common/service/HaltFlagService';
 import { Money, MoneyValue, formatMoney, parseMoney } from '../../common/utils/money';
 import { AppConfigService } from '../../config/service';
-import { PROTECTIVE_CLIENT_ORDER_ID_SL_SUFFIX, PROTECTIVE_CLIENT_ORDER_ID_TP_SUFFIX } from '../../execution/const';
+import {
+    ORDER_INTENT_EXPIRED_REASON_DRY_RUN,
+    ORDER_INTENT_EXPIRED_REASON_HALTED,
+    PROTECTIVE_CLIENT_ORDER_ID_SL_SUFFIX,
+    PROTECTIVE_CLIENT_ORDER_ID_TP_SUFFIX,
+    RECONCILIATION_FLATTEN_EVENT_ID_PREFIX,
+} from '../../execution/const';
 import { LocalProtectiveMonitor } from '../../execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../execution/service/SharedCloseCoordinator';
 import { ACCOUNT_STATE_SOURCE } from '../../exchange/interface';
 import { CcxtExecutionClient } from '../../exchange/service/CcxtExecutionClient';
 import { SubscriptionRetainer } from '../../market-data/service/SubscriptionRetainer';
-import { COOLDOWN_AFTER_LOSS_MS } from '../../risk/const';
+import { COOLDOWN_AFTER_LOSS_MS, MAX_OPEN_POSITIONS } from '../../risk/const';
 import { IOrderIntent, IOrderIntentApprovedEvent, IRiskGateContext } from '../../risk/interface';
 import { RiskGateService } from '../../risk/service';
 import { StrategyVersionRepository } from '../../strategy/repository/StrategyVersionRepository';
@@ -150,6 +157,12 @@ export class ReconciliationService {
     // No schema change, no shared-contract change.
     private readonly adoptionVanishedAlerted = new Set<number>();
 
+    // M34 — per-process dedup for the slot-accounting invariant WARN. The invariant runs every
+    // 30s pass; a persistent divergence would otherwise spam an identical WARN unbounded. We log
+    // a given violation signature once, then re-arm (drop it from the set) on the first clean pass
+    // so a recurrence still surfaces. Restart drops the set — a re-emerging divergence re-alerts.
+    private readonly slotInvariantViolationsLogged = new Set<string>();
+
     constructor(
         // M11a R2a BLOCKER B1 (ADR 0032 §3 D14). All account-state reads are
         // bound to the shared `IAccountStateSource` port so PAPER mode
@@ -195,6 +208,12 @@ export class ReconciliationService {
         private readonly instrumentor: PositionInstrumentor,
         private readonly snapshotWriter: AccountSnapshotWriter,
         private readonly events: EventEmitter2,
+        // M33 Fix 1b (ADR 0011 §9) — the shared close-in-flight registry. The flatten
+        // producer acquires the position's slot before emitting a CLOSE so a concurrent
+        // time-stop or SL/TP close on the same row emits exactly one close. Lives in
+        // ExecutionModule (forwardRef-imported here, same seam as LocalProtectiveMonitor).
+        @Inject(forwardRef(() => SharedCloseCoordinator))
+        private readonly closeCoordinator: SharedCloseCoordinator,
     ) {}
 
     // Operator / boot-pipeline policy setter (ADR 0010 §1a). Live should call this
@@ -290,6 +309,63 @@ export class ReconciliationService {
             // the structural backstop.
             this.logger.error(`order.intent.unknown transition failed positionId=${event.positionId} eventId=${event.eventId}: ${this.describe(cause)}`);
         }
+    }
+
+    // M33 R1-Fix-A. A flatten that emits its CLOSE intent and then loses the executor race to a
+    // halt / dry_run boundary surfaces as `ORDER_INTENT_EXPIRED_EVENT{reason:'halted'|'dry_run'}`.
+    // The enforcer's parser (`time-stop-enforcer-`) and the monitor's parser (`local-monitor-breach-`)
+    // do NOT match the flatten eventId, so without this listener the shared close slot stays held
+    // forever and the foreign position can never be re-flattened in-run. We release ONLY our own
+    // flatten slot (matched on the `reconciliation-flatten-` eventId prefix); the next reconciliation
+    // tick re-attempts the flatten once halt clears. We do NOT release on ORDER_INTENT_UNKNOWN —
+    // reconciliation owns that row's lifecycle through `onOrderIntentUnknown` instead.
+    @OnEvent(ORDER_INTENT_EXPIRED_EVENT)
+    onOrderIntentExpired(event: { eventId: string; reservationId: string | null; reason?: string }): void {
+        if (event.reason !== ORDER_INTENT_EXPIRED_REASON_HALTED && event.reason !== ORDER_INTENT_EXPIRED_REASON_DRY_RUN) {
+            return;
+        }
+
+        const positionId = this.extractPositionIdFromFlattenEventId(event.eventId);
+
+        if (positionId === null) {
+            return;
+        }
+
+        if (!this.closeCoordinator.isHeld(positionId)) {
+            return;
+        }
+
+        this.closeCoordinator.release(positionId);
+        this.logger.warn(
+            `case-a flatten intent for positionId=${positionId} expired (reason=${event.reason}) — released close slot; ` +
+                `next reconciliation tick will re-attempt the flatten`,
+        );
+    }
+
+    // Parses a positionId out of the flatten eventId scheme `reconciliation-flatten-${positionId}-${nowMs}`.
+    // Splits from the RIGHT (the `nowMs` suffix is the trailing dash-segment) and returns null on any
+    // mismatch so an enforcer / monitor expiry never releases a reconciliation-owned slot.
+    private extractPositionIdFromFlattenEventId(eventId: string): number | null {
+        const prefix = RECONCILIATION_FLATTEN_EVENT_ID_PREFIX;
+
+        if (!eventId.startsWith(prefix)) {
+            return null;
+        }
+
+        const rest = eventId.slice(prefix.length);
+        const dashIndex = rest.lastIndexOf('-');
+
+        if (dashIndex <= 0) {
+            return null;
+        }
+
+        const positionId = Number.parseInt(rest.slice(0, dashIndex), 10);
+
+        if (!Number.isInteger(positionId) || positionId <= 0) {
+            return null;
+        }
+
+        return positionId;
     }
 
     // Periodic 30s tick — the production cadence. Honors the `running` guard so
@@ -535,6 +611,11 @@ export class ReconciliationService {
             await this.snapshotWriter.writeNow(nowMs, 'drift_resolved');
         }
 
+        // M34 (ADR 0004 §3 / ADR 0010) — slot-accounting invariant check at pass quiescence.
+        // All in-flight reconciliation updates are settled here, so a divergence now is a real
+        // leak, not a transient. Observability-only: WARN on violation, never throw.
+        await this.assertSlotAccountingInvariant();
+
         return {
             tickAtMs: nowMs,
             driftsByCase: counters,
@@ -553,6 +634,101 @@ export class ReconciliationService {
         }
 
         return false;
+    }
+
+    // M34 (ADR 0004 §3 / ADR 0010) — the standing slot-accounting detector that would have caught
+    // the M34 incident in soak. Two invariants, both observability-only (structured WARN, never
+    // throw — this is a detector, not a hard gate):
+    //
+    //   1. The DISTINCT occupied slots — union of the live ledger's active (PENDING + CONFIRMED)
+    //      reservation slots and the DB rows in OPEN / PENDING_OPEN — must be ≤ MAX_OPEN_POSITIONS.
+    //      Distinct, never raw reservation count: an ADD legitimately mints a 2nd reservation on
+    //      one slot, so a raw count would false-positive.
+    //   2. Each slot maps to at most one open DB position (a 2nd row on a slot is a real bug).
+    //
+    // Evaluated only here, at pass quiescence — never mid-fill — so the documented transient-OK
+    // windows do not fire: a PENDING reservation ahead of its DB row, a PENDING + CONFIRMED pair
+    // during an ADD/re-entry, or a CONFIRMED reservation co-existing with its CLOSED DB row in the
+    // finalize → listener-release gap. Reads the open rows fresh from the DB (the top-of-pass
+    // snapshot is stale after this pass's transitions).
+    private async assertSlotAccountingInvariant(): Promise<void> {
+        const openRows = await this.loadSlotOccupyingPositions();
+        const dbSlotCounts = this.countOpenPositionsBySlot(openRows);
+        const reservationSlots = this.riskGate.listActiveReservationSlots();
+        const distinctOccupiedSlots = new Set<PositionSlotEnum>([...reservationSlots, ...dbSlotCounts.keys()]);
+
+        const stillViolating = new Set<string>();
+
+        if (distinctOccupiedSlots.size > MAX_OPEN_POSITIONS) {
+            const signature = `max-slots:${distinctOccupiedSlots.size}:${reservationSlots.join(',')}:${[...dbSlotCounts.keys()].join(',')}`;
+            stillViolating.add(signature);
+
+            this.warnSlotInvariantOnce(
+                signature,
+                `slot-accounting invariant violated: distinctOccupiedSlots=${distinctOccupiedSlots.size} > max=${MAX_OPEN_POSITIONS} ` +
+                    `(reservationSlots=[${reservationSlots.join(',')}] dbOpenSlots=[${[...dbSlotCounts.keys()].join(',')}])`,
+            );
+        }
+
+        this.reportSlotCountViolations(dbSlotCounts, stillViolating);
+
+        this.reArmClearedSlotInvariants(stillViolating);
+    }
+
+    // The per-slot duplicate-open-row check (a 2nd open DB row on one slot is a real bug). Records
+    // each fired signature in `stillViolating` so the caller can re-arm cleared violations.
+    private reportSlotCountViolations(dbSlotCounts: Map<PositionSlotEnum, number>, stillViolating: Set<string>): void {
+        for (const [slot, count] of dbSlotCounts) {
+            if (count > 1) {
+                const signature = `dup-slot:${slot}:${count}`;
+                stillViolating.add(signature);
+
+                this.warnSlotInvariantOnce(signature, `slot-accounting invariant violated: slot=${slot} maps to ${count} open DB positions (expected ≤ 1)`);
+            }
+        }
+    }
+
+    // Dedup the WARN: log a given violation signature once, then suppress until it clears.
+    private warnSlotInvariantOnce(signature: string, message: string): void {
+        if (this.slotInvariantViolationsLogged.has(signature)) {
+            return;
+        }
+
+        this.slotInvariantViolationsLogged.add(signature);
+        this.logger.warn(message);
+    }
+
+    // Re-arm: drop any previously-logged signature that is no longer violating so a recurrence
+    // re-alerts on the next pass.
+    private reArmClearedSlotInvariants(stillViolating: Set<string>): void {
+        for (const signature of [...this.slotInvariantViolationsLogged]) {
+            if (!stillViolating.has(signature)) {
+                this.slotInvariantViolationsLogged.delete(signature);
+            }
+        }
+    }
+
+    // The DB rows that occupy a slot for the invariant: OPEN + PENDING_OPEN only (the plan's
+    // occupancy definition). RECONCILING / CLOSING / MANUAL_ADOPTED_UNMANAGED are excluded so a
+    // mid-flight or operator-owned row never trips the detector.
+    private async loadSlotOccupyingPositions(): Promise<PositionEntity[]> {
+        const rows = await this.positions.findNonTerminal();
+
+        return rows.filter((row) => row.state === PositionStateEnum.OPEN || row.state === PositionStateEnum.PENDING_OPEN);
+    }
+
+    private countOpenPositionsBySlot(rows: readonly PositionEntity[]): Map<PositionSlotEnum, number> {
+        const counts = new Map<PositionSlotEnum, number>();
+
+        for (const row of rows) {
+            if (row.positionSlot === null || row.positionSlot === undefined) {
+                continue;
+            }
+
+            counts.set(row.positionSlot, (counts.get(row.positionSlot) ?? 0) + 1);
+        }
+
+        return counts;
     }
 
     // M6 W7 (resolves W6 carry-forward #2). Walks the DB position list, looks up
@@ -790,41 +966,65 @@ export class ReconciliationService {
             return;
         }
 
-        const markPrice = parseMoney(snapshot.markPrice ?? snapshot.entryPrice ?? '0');
-        const intent = this.buildCloseIntent(position, markPrice, nowMs);
-        const context = this.buildDeRiskContext(nowMs);
-        const decision = await this.riskGate.evaluate(intent, context);
-
-        if (decision.outcome !== RiskOutcomeEnum.APPROVED) {
-            this.logger.error(
-                `case-a flatten gate rejected positionId=${position.id} ${position.symbol} reason=${decision.rejectReason ?? 'unknown'} - row remains MANUAL_ADOPTED_UNMANAGED`,
-            );
+        // M33 Fix 1b (HIGH L2): acquire the shared close slot before emitting. If a time-stop
+        // or SL/TP close already holds it for this row, skip the flatten — exactly one close
+        // fires. Release on any abort below (gate-reject); on a successful emit the slot is held
+        // until the row reaches CLOSED (released there by the shared registry's CLOSED listener).
+        if (!this.closeCoordinator.tryAcquire(position.id)) {
+            this.logger.warn(`case-a flatten skipped positionId=${position.id} ${position.symbol} - close already in flight (shared registry)`);
 
             return;
         }
 
-        const approvedEvent: IOrderIntentApprovedEvent = {
-            intent,
-            approvedSlot: position.positionSlot ?? PositionSlotEnum.A,
-            approvedSizing: intent.sizing,
-            clampedExit: intent.proposedExit,
-            reservationId: decision.reservationId,
-            strategyVersionId: position.strategyVersionId,
-        };
-        this.events.emit(ORDER_INTENT_APPROVED_EVENT, approvedEvent);
+        // M33 R1-Fix-A: once the slot is held, an unexpected throw from the gate evaluate would
+        // leak it forever — the foreign position could never be re-flattened in-run. Wrap the
+        // post-acquire body so any throw releases the slot, logs with context, and returns; the
+        // next reconciliation tick re-attempts the flatten. The conditional gate-reject release
+        // inside the try body remains correct as-is.
+        try {
+            const markPrice = parseMoney(snapshot.markPrice ?? snapshot.entryPrice ?? '0');
+            const intent = this.buildCloseIntent(position, markPrice, nowMs);
+            const context = this.buildDeRiskContext(nowMs);
+            const decision = await this.riskGate.evaluate(intent, context);
 
-        // M6 R1.1.3 (ADR 0010 §5 revised). FLATTENED outcome now in the shared
-        // enum — replaces the prior RECONCILED_MISSING placeholder. M8 analytics
-        // distinguishes "bot flattened a foreign position via case-a policy"
-        // from "DB row vanished from exchange (case-b reconciled-missing)".
-        this.emitResolved({
-            positionId: position.id,
-            driftCase: DriftCaseEnum.EXCHANGE_NOT_IN_DB,
-            outcome: ReconciliationOutcomeEnum.FLATTENED,
-            resolvedAtMs: nowMs,
-        });
+            if (decision.outcome !== RiskOutcomeEnum.APPROVED) {
+                this.closeCoordinator.release(position.id);
+                this.logger.error(
+                    `case-a flatten gate rejected positionId=${position.id} ${position.symbol} reason=${decision.rejectReason ?? 'unknown'} - row remains MANUAL_ADOPTED_UNMANAGED`,
+                );
 
-        this.logger.warn(`case-a FLATTEN positionId=${position.id} symbol=${snapshot.symbol} qty=${snapshot.qty} - close intent emitted through gate`);
+                return;
+            }
+
+            const approvedEvent: IOrderIntentApprovedEvent = {
+                intent,
+                approvedSlot: position.positionSlot ?? PositionSlotEnum.A,
+                approvedSizing: intent.sizing,
+                clampedExit: intent.proposedExit,
+                reservationId: decision.reservationId,
+                strategyVersionId: position.strategyVersionId,
+            };
+            this.events.emit(ORDER_INTENT_APPROVED_EVENT, approvedEvent);
+
+            // M6 R1.1.3 (ADR 0010 §5 revised). FLATTENED outcome now in the shared
+            // enum — replaces the prior RECONCILED_MISSING placeholder. M8 analytics
+            // distinguishes "bot flattened a foreign position via case-a policy"
+            // from "DB row vanished from exchange (case-b reconciled-missing)".
+            this.emitResolved({
+                positionId: position.id,
+                driftCase: DriftCaseEnum.EXCHANGE_NOT_IN_DB,
+                outcome: ReconciliationOutcomeEnum.FLATTENED,
+                resolvedAtMs: nowMs,
+            });
+
+            this.logger.warn(`case-a FLATTEN positionId=${position.id} symbol=${snapshot.symbol} qty=${snapshot.qty} - close intent emitted through gate`);
+        } catch (cause) {
+            this.closeCoordinator.release(position.id);
+            this.logger.error(
+                `case-a flatten threw for positionId=${position.id} ${position.symbol}: ${this.describe(cause)} - ` +
+                    `released close slot; next tick re-attempts the flatten`,
+            );
+        }
     }
 
     // Synthesize a CLOSE IOrderIntent for an adopted foreign position. Side = opposite
@@ -837,7 +1037,7 @@ export class ReconciliationService {
     // identical inputs produce identical eventIds (deterministic / replay-safe).
     private buildCloseIntent(position: PositionEntity, markPrice: MoneyValue, nowMs: number): IOrderIntent {
         const closeSide = position.side === PositionSideEnum.LONG ? PositionSideEnum.SHORT : PositionSideEnum.LONG;
-        const eventId = `reconciliation-flatten-${position.id}-${nowMs}`;
+        const eventId = `${RECONCILIATION_FLATTEN_EVENT_ID_PREFIX}${position.id}-${nowMs}`;
         const sizing = {
             qty: position.qty,
             notional: position.qty.times(markPrice),

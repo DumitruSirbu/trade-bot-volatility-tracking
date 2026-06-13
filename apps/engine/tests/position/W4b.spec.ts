@@ -43,6 +43,7 @@ import { ORDER_INTENT_APPROVED_EVENT } from '../../src/common/const';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { Money } from '../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { IExchangeClient } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { PositionEntity } from '../../src/position/entity';
@@ -342,6 +343,7 @@ describe('ReconciliationService case (b) precise (W4b)', () => {
         } as unknown as PositionService;
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn().mockResolvedValue(undefined),
             recordExposureDrift: jest.fn().mockResolvedValue(undefined),
             evaluate: jest.fn().mockResolvedValue({
@@ -374,6 +376,7 @@ describe('ReconciliationService case (b) precise (W4b)', () => {
             { setLiquidationPrice: jest.fn() } as never,
             { writeNow: jest.fn().mockResolvedValue(null) } as never,
             events,
+            new SharedCloseCoordinator(),
         );
         return { service, positionService, riskGate, monitor, events, emitSpy, haltFlag };
     }
@@ -444,6 +447,7 @@ describe('ReconciliationService case (c) precise (W4b)', () => {
         } as unknown as PositionService;
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn(),
             recordExposureDrift: jest.fn().mockResolvedValue(undefined),
             evaluate: jest.fn(),
@@ -469,6 +473,7 @@ describe('ReconciliationService case (c) precise (W4b)', () => {
             { setLiquidationPrice: jest.fn() } as never,
             { writeNow: jest.fn().mockResolvedValue(null) } as never,
             events,
+            new SharedCloseCoordinator(),
         );
         return { service, positionService, riskGate, emitSpy };
     }
@@ -537,6 +542,7 @@ describe('ReconciliationService case (a) flatten policy (W4b)', () => {
         const positionService = { transition: jest.fn(), adjustQty: jest.fn() } as unknown as PositionService;
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn(),
             recordExposureDrift: jest.fn(),
             evaluate: jest.fn().mockResolvedValue({
@@ -569,6 +575,7 @@ describe('ReconciliationService case (a) flatten policy (W4b)', () => {
             { setLiquidationPrice: jest.fn() } as never,
             { writeNow: jest.fn().mockResolvedValue(null) } as never,
             events,
+            new SharedCloseCoordinator(),
         );
         return { service, riskGate, positions, haltFlag, emitSpy };
     }

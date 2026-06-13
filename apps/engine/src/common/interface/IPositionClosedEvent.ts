@@ -1,4 +1,4 @@
-import { ExitReasonEnum, PositionSideEnum } from '@bot/shared';
+import { ExitReasonEnum, PositionSideEnum, PositionSlotEnum } from '@bot/shared';
 
 import { DecimalValue, MoneyValue } from '../utils/money';
 
@@ -22,4 +22,8 @@ export interface IPositionClosedEvent {
     readonly leverage: DecimalValue;
     readonly strategyVersionId: number;
     readonly openedAt: Date;
+    // M34 (ADR 0004 §3) — the closed position's slot, so the SlotReleaseListener can free the
+    // (symbol, slot) reservation on the normal close path. Null for legacy/adopted rows that
+    // carry no slot; the listener no-ops on null and reconciliation remains the backstop.
+    readonly positionSlot: PositionSlotEnum | null;
 }

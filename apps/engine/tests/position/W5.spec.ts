@@ -46,6 +46,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { Money } from '../../src/common/utils/money';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { POSITION_STATE_TRANSITIONED_EVENT } from '../../src/position/const';
 import { PositionEntity, TransactionEntity } from '../../src/position/entity';
@@ -526,7 +527,12 @@ describe('ReconciliationService funding ingestion (ADR 0012 §2)', () => {
             recordFunding: jest.fn().mockResolvedValue({ id: 1 } as TransactionEntity),
         };
 
-        const riskGate = { expireStaleReservations: jest.fn(), reconcileClose: jest.fn(), recordExposureDrift: jest.fn() };
+        const riskGate = {
+            expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
+            reconcileClose: jest.fn(),
+            recordExposureDrift: jest.fn(),
+        };
         const monitor = { arm: jest.fn(), disarm: jest.fn() };
         const retainer = new SubscriptionRetainer();
         const strategyVersions = { findByNameAndVersion: jest.fn().mockResolvedValue({ id: 7 }) };
@@ -548,6 +554,7 @@ describe('ReconciliationService funding ingestion (ADR 0012 §2)', () => {
             { setLiquidationPrice: jest.fn() } as never,
             { writeNow: jest.fn().mockResolvedValue(null) } as never,
             events,
+            new SharedCloseCoordinator(),
         );
 
         return { service, exchangeClient, positionService, transactions };

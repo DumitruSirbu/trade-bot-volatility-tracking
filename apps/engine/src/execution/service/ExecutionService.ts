@@ -1,4 +1,5 @@
 import {
+    ExchangeEnvironmentEnum,
     ExitReasonEnum,
     IExchangeOverfillDriftEvent,
     OrderIntentActionEnum,
@@ -43,6 +44,8 @@ import {
     ENTRY_AUDIT_PERSIST_FAILED_REASON,
     MAX_PERMANENT_RETRY_ATTEMPTS,
     MAX_REDUCE_REMAINDER_ATTEMPTS,
+    ORDER_INTENT_EXPIRED_REASON_DRY_RUN,
+    ORDER_INTENT_EXPIRED_REASON_HALTED,
     PENDING_OPEN_PROMOTE_EVENT_CLASS,
     PENDING_PROMOTE_FAILED_REASON,
     REDUCE_ON_FLAT_POSITION_REASON,
@@ -145,7 +148,11 @@ export class ExecutionService {
         if (this.haltFlag.isHalted()) {
             this.logger.warn(`halt flag set (${this.haltFlag.getReason() ?? 'no-reason'}); short-circuiting eventId=${event.intent.eventId}`);
             this.releaseReservationSafely(event.reservationId);
-            this.events.emit(ORDER_INTENT_EXPIRED_EVENT, { eventId: event.intent.eventId, reservationId: event.reservationId, reason: 'halted' });
+            this.events.emit(ORDER_INTENT_EXPIRED_EVENT, {
+                eventId: event.intent.eventId,
+                reservationId: event.reservationId,
+                reason: ORDER_INTENT_EXPIRED_REASON_HALTED,
+            });
 
             return;
         }
@@ -169,7 +176,11 @@ export class ExecutionService {
 
         this.logger.log(`dry-run: clientOrderId=${clientOrderId} plan=${plan.policy}@${formatMoney(plan.limitPrice)} audit row persisted`);
         this.releaseReservationSafely(event.reservationId);
-        this.events.emit(ORDER_INTENT_EXPIRED_EVENT, { eventId: event.intent.eventId, reservationId: event.reservationId, reason: 'dry_run' });
+        this.events.emit(ORDER_INTENT_EXPIRED_EVENT, {
+            eventId: event.intent.eventId,
+            reservationId: event.reservationId,
+            reason: ORDER_INTENT_EXPIRED_REASON_DRY_RUN,
+        });
     }
 
     private async executeLive(event: IOrderIntentApprovedEvent, plan: IOrderPlanInternal, nowMs: number): Promise<void> {
@@ -448,6 +459,11 @@ export class ExecutionService {
                 leverage: finalized.leverage,
                 strategyVersionId: finalized.strategyVersionId,
                 openedAt: finalized.openedAt,
+                // M34 (ADR 0004 §3) — carry the slot so the SlotReleaseListener can free the
+                // (symbol, slot) reservation. Read from the pre-finalize `position` row (the
+                // slot is immutable across the close finalize, and reading the in-scope row
+                // avoids depending on whether finalize re-projects the column).
+                positionSlot: position.positionSlot ?? null,
             };
             this.events.emit(POSITION_CLOSED_EVENT, closedEvent);
 
@@ -1058,6 +1074,10 @@ export class ExecutionService {
             price: fillSummary.avgFillPrice,
             qty: fillSummary.filledQty,
             fee: fillSummary.feeTotal,
+            // Open/add fills carry no realized cashflow (ADR 0012 §1). Written explicitly
+            // as Money(0) — the `transactions.cashflow` column is `numeric NOT NULL` and the
+            // decimal transformer serializes an absent property to null, rejecting the INSERT.
+            cashflow: new Money(0),
             clientOrderId: submitResult.clientOrderId,
             exchangeOrderId: submitResult.exchangeOrderId,
         });
@@ -1105,6 +1125,14 @@ export class ExecutionService {
             positionSlot: event.approvedSlot,
             correlationMode: event.intent.correlationMode,
             timeStopAt: new Date(event.clampedExit.timeStopAtMs),
+            // M33 Task 5 (GBT H3): persist the clamped SL/TP at INSERT time — not only at
+            // applyProtectiveAttachResult. The local monitor's arm is in-memory; a crash between
+            // this PENDING_OPEN insert and the protective attach would lose that arm with no
+            // persisted prices to re-arm from on boot, breaking the "guaranteed to close through
+            // declared exits" invariant for that window. Writing the clamped exits here makes every
+            // non-closed row re-armable by phase 4c (EngineBootstrapService).
+            stopLossPrice: event.clampedExit.stopLossPrice,
+            takeProfitPrice: event.clampedExit.takeProfitPrice,
             slippageModelPct: plan.slippageCapPct,
             stopGapPct: stopDistancePct,
             flowTypeAtEntry: event.intent.flowType,
@@ -1130,6 +1158,17 @@ export class ExecutionService {
 
             this.events.emit(ORDER_PROTECTIVE_FALLBACK_EVENT, fallbackEvent);
             this.logger.warn(`position ${positionRow.id} ${positionRow.symbol} on LOCAL_FALLBACK protection: ${attachResult.errorMessage ?? 'attach failed'}`);
+
+            return;
+        }
+
+        // ADR 0008 §7 — in paper mode there is no exchange matching engine to fire the
+        // STOP_MARKET / TAKE_PROFIT_MARKET orders, so an `exchange_side` attach must NOT
+        // disarm the local monitor — it stays the SL/TP enforcer (parity with backtest
+        // IntrabarStopSimulator). `protective_order_type` is still set to `exchange_side`
+        // above for audit/dashboard accuracy; only the disarm is suppressed in paper.
+        if (this.appConfig.exchangeEnv === ExchangeEnvironmentEnum.PAPER) {
+            this.logger.log(`position ${positionRow.id} ${positionRow.symbol} EXCHANGE_SIDE in paper - local monitor kept armed (ADR 0008 §7)`);
 
             return;
         }

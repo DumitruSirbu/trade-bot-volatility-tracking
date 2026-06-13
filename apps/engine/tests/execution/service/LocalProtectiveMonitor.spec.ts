@@ -24,6 +24,7 @@ import { ExecutionService } from '../../../src/execution/service/ExecutionServic
 import { ExchangeOrderSubmitter } from '../../../src/execution/service/ExchangeOrderSubmitter';
 import { FillAccumulator } from '../../../src/execution/service/FillAccumulator';
 import { LocalProtectiveMonitor } from '../../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../../src/execution/service/SharedCloseCoordinator';
 import { OrderPolicyRouter } from '../../../src/execution/service/OrderPolicyRouter';
 import { ProtectiveOrderAttacher } from '../../../src/execution/service/ProtectiveOrderAttacher';
 import { HaltFlagService } from '../../../src/common/service/HaltFlagService';
@@ -46,6 +47,7 @@ describe('LocalProtectiveMonitor — arm', () => {
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
 
         // OPERATE
@@ -60,6 +62,7 @@ describe('LocalProtectiveMonitor — arm', () => {
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
 
         expect(monitor.isArmed(999)).toBe(false);
@@ -71,6 +74,7 @@ describe('LocalProtectiveMonitor — arm', () => {
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
 
         // OPERATE
@@ -92,6 +96,7 @@ describe('LocalProtectiveMonitor — disarm', () => {
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
         monitor.arm({ positionId: 2, symbol: 'BTCUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('29500'), takeProfitPrice: new Money('31000') });
 
@@ -107,6 +112,7 @@ describe('LocalProtectiveMonitor — disarm', () => {
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
 
         // CHECK: must not throw
@@ -121,6 +127,7 @@ describe('LocalProtectiveMonitor — listArmed', () => {
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
         monitor.arm({ positionId: 10, symbol: 'BTCUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('29000'), takeProfitPrice: new Money('31000') });
         monitor.arm({ positionId: 11, symbol: 'ETHUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('1900'), takeProfitPrice: new Money('2100') });
@@ -135,6 +142,7 @@ describe('LocalProtectiveMonitor — listArmed', () => {
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
         monitor.arm({ positionId: 20, symbol: 'BTCUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('29000'), takeProfitPrice: new Money('31000') });
         monitor.disarm(20);
@@ -147,6 +155,7 @@ describe('LocalProtectiveMonitor — listArmed', () => {
             { findById: jest.fn().mockResolvedValue(null) } as never,
             { evaluate: jest.fn() } as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
         monitor.arm({ positionId: 30, symbol: 'BTCUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('29000'), takeProfitPrice: new Money('31000') });
         monitor.arm({ positionId: 31, symbol: 'ETHUSDT', side: PositionSideEnum.LONG, stopLossPrice: new Money('1900'), takeProfitPrice: new Money('2100') });
@@ -170,6 +179,7 @@ function makeExecutionService(
         { findById: jest.fn().mockResolvedValue(null) } as never,
         { evaluate: jest.fn() } as never,
         new EventEmitter2(),
+        new SharedCloseCoordinator(),
     );
 
     const policyRouter = {

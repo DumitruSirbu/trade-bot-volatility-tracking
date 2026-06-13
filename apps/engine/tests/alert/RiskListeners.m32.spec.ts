@@ -12,7 +12,7 @@
  *              neither onPositionOpened nor onPositionClosed propagates the rejection.
  */
 
-import { AlertTypeEnum, ExitReasonEnum, IAlertPayload, PositionSideEnum } from '@bot/shared';
+import { AlertTypeEnum, ExitReasonEnum, IAlertPayload, PositionSideEnum, PositionSlotEnum } from '@bot/shared';
 
 import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { RiskListeners } from '../../src/alert/listeners/RiskListeners';
@@ -53,6 +53,7 @@ function buildClosed(overrides: Partial<IPositionClosedEvent> = {}): IPositionCl
         leverage: new Money('5'),
         strategyVersionId: 2,
         openedAt: OPENED_AT,
+        positionSlot: PositionSlotEnum.A,
         ...overrides,
     };
 }

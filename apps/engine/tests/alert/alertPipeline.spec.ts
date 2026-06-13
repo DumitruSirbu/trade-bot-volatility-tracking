@@ -8,6 +8,7 @@ import {
     IModelDivergenceEvent,
     IRiskHaltEvent,
     PositionSideEnum,
+    PositionSlotEnum,
 } from '@bot/shared';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import Decimal from 'decimal.js';
@@ -389,6 +390,7 @@ describe('RiskListeners', () => {
             leverage: new Decimal('3') as never,
             strategyVersionId: 2,
             openedAt: new Date(now.getTime() - 60_000),
+            positionSlot: PositionSlotEnum.A,
         });
 
         expect(sink.published).toHaveLength(1);

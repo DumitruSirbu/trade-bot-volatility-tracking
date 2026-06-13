@@ -320,12 +320,68 @@ in the M6 plan punch list as a shared/persistence pre-engine item.
   exit-distance-config code. Persisting the SL/TP price keeps it as data,
   not derived; cleaner separation.
 
+## 9. Live time-stop enforcement + shared close-in-flight registry
+
+**Status: Implemented in M33**
+
+### PositionTimeStopEnforcer
+
+The enforcer is an event-driven service subscribed to `price.update` that handles time-stop exit enforcement for positions with configured time-stop deadlines. Core design:
+
+- **In-memory deadline index:** `Map<symbol, Map<positionId, timeStopAtMs>>` with a fast-path scalar `earliestTimeStopMs` (single comparison per tick across all symbols).
+- **Event-driven on `price.update`:** every incoming tick checks `symbol`'s deadline map; if any position has `tsMs >= timeStopAtMs`, it becomes a candidate for exit.
+- **Synchronous `SharedCloseCoordinator.tryAcquire` BEFORE any `await`:** the enforcer must acquire the close slot **synchronously** at event-processing time (before the RiskGateService evaluation starts). This is what makes time-stop WIN — the monitor's `handleBreach` runs on the same tick and finds the slot held (per `isHeld(positionId)` check), so it skips.
+- **`findTimeStopCandidatesBySymbol` for closure predicate:** the authoritative repository-layer query that identifies which PENDING_OPEN and OPEN positions have a time-stop deadline. This query is the source-of-truth for re-arming on boot and for the enforcer's tick-by-tick sweep.
+- **Gate-routed close:** constructs an `IOrderIntent` with `intentAction = OrderIntentActionEnum.CLOSE`, `eventId = time-stop-${positionId}-${tickMs}`, and routes through `RiskGateService` (no direct `ExecutionService` bypass).
+- **`exitReason = TIME_STOP`:** all closes driven by the enforcer carry this reason on the transaction row.
+
+### Collision ordering: time-stop WINS
+
+Matches the backtest contract (ADR 0015 §4.6 `IntrabarStopSimulator.shouldHitTimeStop` returning before `simulateIntrabarStop`): when a tick arrives, if the position's deadline has passed, the time-stop close intent is submitted first and acquires the close slot. The local `LocalProtectiveMonitor.handleBreach` runs on the same tick and checks `SharedCloseCoordinator.isHeld(positionId)` — finding it held, it skips. If both SL/TP and time-stop would fire on the same tick (rare; price crossed both the SL and deadline), time-stop wins because it acquired first.
+
+### SharedCloseCoordinator
+
+A single in-memory registry shared across **all gate-routed close producers** (enforcer, protective monitor, reconciliation flatten, and any future producers):
+
+```typescript
+interface SharedCloseCoordinator {
+    tryAcquire(positionId: number): boolean;  // SYNCHRONOUS, returns true if acquired
+    release(positionId: number): void;         // SYNCHRONOUS
+    isHeld(positionId: number): boolean;       // SYNCHRONOUS, read-only check
+}
+```
+
+Implementation: `Map<positionId, slot>` where a slot is held once acquired. Every producer **MUST** call `tryAcquire` before emitting a close intent. If it returns `false`, the position is already being closed by another producer on this tick; producer stands down.
+
+### Release contract (locked)
+
+Releases happen **synchronously on durable events:**
+
+- **Primary release:** `POSITION_STATE_TRANSITIONED → CLOSED` event fires (position finalized). This is the only durable trigger for release.
+- **Never on `disarm()`:** `LocalProtectiveMonitor.disarm` in LIVE/TESTNET (exchange-protection-confirmed) does not release the slot. The position remains held until the DB-persisted close writes.
+- **Never on `ORDER_INTENT_UNKNOWN_EVENT`:** reconciliation owns unknown intents; if the intent never reached the DB, the close slot is NOT released (recovery on restart will rebuild the index from `findTimeStopCandidatesBySymbol`).
+- **Gate non-APPROVED close intents:** if `RiskGateService` rejects a close intent (rare for REDUCE, but possible on policy), the producer's `tryAcquire` is released with a try/catch wrapping the gate call.
+- **Exception safety:** each producer's async body wraps the entire `await RiskGateService.evaluate` in a try/catch that **releases the slot on any unexpected throw**. This prevents a crashed producer from holding a slot forever.
+
+### Module placement
+
+`SharedCloseCoordinator` is:
+
+- A single `@Injectable()` provider in `ExecutionModule` (where the gate lives).
+- Exported via `forwardRef` to `PositionModule` (so the monitor can import it without a cycle).
+- No duplicate instances created anywhere.
+
+### W6 forward-guard
+
+When W6 (or a future milestone) replaces `LoggingFlattenCoordinator` with a real gate-routed flatten producer, that producer **MUST `tryAcquire` before emitting an `ORDER_INTENT_APPROVED_EVENT`**. The registry is the single dedup substrate across all close producers.
+
 ## See also
 
 - `docs/plans/archive/M6-position-management.md` (held-symbol blocker)
-- `docs/architecture/adr/0008-sl-tp-attach.md` §2/§3 (arm/disarm seam, fallback path)
+- `docs/architecture/adr/0008-sl-tp-attach.md` §2/§3 (arm/disarm seam, fallback path), §7 (paper mode SL/TP persistence and re-arm)
 - `docs/architecture/adr/0009-position-state-machine.md` §5 (state↔monitor coupling)
 - `docs/architecture/adr/0010-reconciliation-and-drift-policy.md` case (e) (protective drift)
 - `docs/architecture/adr/0013-position-instrumentation.md` (mark/last divergence, stop-gap)
 - `docs/architecture/adr/0014-crash-recovery.md` (boot-time re-arm sequence)
 - `docs/architecture/adr/0004-risk-management.md` §2 (close intents always route through gate)
+- `docs/architecture/adr/0015-backtest-module.md` §4.6 (live-vs-backtest fill-price divergence for time-stop exits)

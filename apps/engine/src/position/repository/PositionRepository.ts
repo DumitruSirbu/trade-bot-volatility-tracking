@@ -83,6 +83,22 @@ export class PositionRepository extends BaseRepository<PositionEntity> implement
         };
     }
 
+    // M33 Task 3a (GBT M1) — time-stop enforcement candidates for one symbol. This WHERE
+    // clause is the AUTHORITATIVE CLOSING-exclusion safety predicate: only OPEN/PENDING_OPEN
+    // rows with residual qty and a non-null deadline are eligible for a time-stop close. It is
+    // deliberately NOT derived from `findLiveRisk()` (which is `state != CLOSED AND qty > 0`
+    // and therefore INCLUDES CLOSING/RECONCILING). The intention-revealing name is mandatory so
+    // a future caller cannot reuse the broader method and re-introduce a close on a CLOSING row.
+    async findTimeStopCandidatesBySymbol(symbol: string): Promise<PositionEntity[]> {
+        return this.repository
+            .createQueryBuilder('p')
+            .where('p.symbol = :symbol', { symbol })
+            .andWhere('p.qty > 0')
+            .andWhere('p.state IN (:...states)', { states: [PositionStateEnum.OPEN, PositionStateEnum.PENDING_OPEN] })
+            .andWhere('p.time_stop_at IS NOT NULL')
+            .getMany();
+    }
+
     async findOpenBySymbol(symbol: string): Promise<PositionEntity[]> {
         return this.repository.find({ where: { symbol, state: Not(PositionStateEnum.CLOSED) } });
     }

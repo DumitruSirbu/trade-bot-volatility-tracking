@@ -76,6 +76,22 @@ export const SUBMIT_TIMEOUT_ERROR_MARKER = 'submit_network_timeout';
 // "why is amount='0'" magic disappears from ProtectiveOrderAttacher.
 export const BINANCE_CLOSE_POSITION_PLACEHOLDER_AMOUNT = '0';
 
+// --- close-producer eventId prefixes (ADR 0011 §9 shared close registry) ---
+//
+// Each close producer stamps its emitted CLOSE intent with a deterministic eventId built from
+// its own prefix + positionId. The matching `ORDER_INTENT_EXPIRED_EVENT` listener parses the
+// prefix back so a producer releases ONLY its own held slot — a monitor expiry must never
+// release a time-stop or flatten slot. Kept here as a single source of truth across the three
+// producers (enforcer / monitor / reconciliation) and their tests.
+export const TIME_STOP_ENFORCER_EVENT_ID_PREFIX = 'time-stop-enforcer-';
+export const LOCAL_MONITOR_BREACH_EVENT_ID_PREFIX = 'local-monitor-breach-';
+export const RECONCILIATION_FLATTEN_EVENT_ID_PREFIX = 'reconciliation-flatten-';
+
+// `reason` values carried on ORDER_INTENT_EXPIRED_EVENT that leave no live order resting, so the
+// owning producer releases its close slot and the next tick re-fires (Fix 1b release table).
+export const ORDER_INTENT_EXPIRED_REASON_HALTED = 'halted';
+export const ORDER_INTENT_EXPIRED_REASON_DRY_RUN = 'dry_run';
+
 // --- M31 escalation reasons + event classes (zombie-position lifecycle) ---
 //
 // `reason` values carried on ORDER_INTENT_UNKNOWN_EVENT when a reduce/close path aborts and

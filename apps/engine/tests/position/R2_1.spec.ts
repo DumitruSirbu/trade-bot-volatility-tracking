@@ -38,6 +38,7 @@ import { HaltFlagService } from '../../src/common/service/HaltFlagService';
 import { Money } from '../../src/common/utils/money';
 import { SubmitStateEnum } from '../../src/execution/enum';
 import { LocalProtectiveMonitor } from '../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 import { IPositionSnapshot } from '../../src/exchange/interface';
 import { SubscriptionRetainer } from '../../src/market-data/service/SubscriptionRetainer';
 import { POSITION_ADOPTION_VANISHED_EVENT } from '../../src/position/const';
@@ -100,7 +101,7 @@ function buildMonitorHarness(opts: { isRecoveryReady?: boolean } = {}): IMonitor
     const gate = { evaluate: evaluateSpy, isRecoveryReady: isRecoveryReadySpy } as unknown as RiskGateService;
     const events = new EventEmitter2();
     const emitSpy = jest.spyOn(events, 'emit');
-    const monitor = new LocalProtectiveMonitor(repository, gate, events);
+    const monitor = new LocalProtectiveMonitor(repository, gate, events, new SharedCloseCoordinator());
 
     return { monitor, events, emitSpy, evaluateSpy, isRecoveryReadySpy };
 }
@@ -189,7 +190,7 @@ describe('R2.1 / security 2.M.1 — halt-flag breach leak: monitor recovers afte
         expect(getEvents<IOrderIntentApprovedEvent>(h.emitSpy, ORDER_INTENT_APPROVED_EVENT)).toHaveLength(1);
     });
 
-    it('expired with reason other than halted (e.g. dry_run) does NOT clear in-flight flag', async () => {
+    it('expired with reason=dry_run releases the shared close slot (M33 Fix 1b release table)', async () => {
         const h = buildMonitorHarness({ isRecoveryReady: true });
         h.monitor.arm({
             positionId: 42,
@@ -205,10 +206,10 @@ describe('R2.1 / security 2.M.1 — halt-flag breach leak: monitor recovers afte
         h.monitor.onOrderIntentExpired({ eventId: breachEventId, reservationId: null, reason: 'dry_run' });
 
         await h.monitor.onPriceUpdate({ symbol: 'BTCUSDT', price: '29400', timestampMs: NOW_MS + 1_000 });
-        // Dry-run expiry is a normal terminal — the breach intent did its job
-        // recording the audit row; no need to re-fire (the position never moves
-        // in dry-run anyway). In-flight stays set.
-        expect(getEvents<IOrderIntentApprovedEvent>(h.emitSpy, ORDER_INTENT_APPROVED_EVENT)).toHaveLength(1);
+        // M33 Fix 1b release table: a dry_run expiry rests no live order, so the shared close
+        // slot is released and the next still-breached tick re-emits (exactly-one is enforced
+        // by the slot, not by suppressing legitimate re-fires after a no-op terminal).
+        expect(getEvents<IOrderIntentApprovedEvent>(h.emitSpy, ORDER_INTENT_APPROVED_EVENT)).toHaveLength(2);
     });
 });
 
@@ -266,6 +267,7 @@ function buildReconHarness(opts: { dbPositions?: PositionEntity[]; exchangePosit
 
     const riskGate = {
         expireStaleReservations: jest.fn(),
+        listActiveReservationSlots: jest.fn().mockReturnValue([]),
         reconcileClose: jest.fn().mockResolvedValue(undefined),
     };
 
@@ -296,6 +298,7 @@ function buildReconHarness(opts: { dbPositions?: PositionEntity[]; exchangePosit
         instrumentor,
         snapshotWriter,
         events,
+        new SharedCloseCoordinator(),
     );
 
     return { service, positions, positionService, riskGate, events, emitSpy };

@@ -26,6 +26,7 @@ import { ExecutionService } from '../../../src/execution/service/ExecutionServic
 import { ExchangeOrderSubmitter } from '../../../src/execution/service/ExchangeOrderSubmitter';
 import { FillAccumulator } from '../../../src/execution/service/FillAccumulator';
 import { LocalProtectiveMonitor } from '../../../src/execution/service/LocalProtectiveMonitor';
+import { SharedCloseCoordinator } from '../../../src/execution/service/SharedCloseCoordinator';
 import { OrderPolicyRouter } from '../../../src/execution/service/OrderPolicyRouter';
 import { ProtectiveOrderAttacher } from '../../../src/execution/service/ProtectiveOrderAttacher';
 import { HaltFlagService } from '../../../src/common/service/HaltFlagService';
@@ -72,6 +73,7 @@ function makeService(
         { findById: jest.fn().mockResolvedValue(null) } as never,
         { evaluate: jest.fn() } as never,
         new EventEmitter2(),
+        new SharedCloseCoordinator(),
     );
     const haltFlag = new HaltFlagService();
     const exchangeClient = {

@@ -5,6 +5,7 @@ import { MarketDataModule } from '../market-data/MarketDataModule';
 import { PositionModule } from '../position/PositionModule';
 import { RiskStateEntity } from './entity';
 import { RiskStateLifecycleListener } from './listener/RiskStateLifecycleListener';
+import { SlotReleaseListener } from './listener/SlotReleaseListener';
 import { RiskStateRepository } from './repository/RiskStateRepository';
 import {
     InstrumentPortAdapter,
@@ -46,6 +47,7 @@ import {
         OpenPositionsPortAdapter,
         InstrumentPortAdapter,
         RiskStateLifecycleListener,
+        SlotReleaseListener,
     ],
     exports: [RiskStateRepository, PositionSizer, RiskGateService, ReservationLedger, RiskStatePortAdapter, OpenPositionsPortAdapter, InstrumentPortAdapter],
 })

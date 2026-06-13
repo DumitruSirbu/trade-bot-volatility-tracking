@@ -24,6 +24,7 @@ import { PositionRepository } from '../../src/position/repository/PositionReposi
 import { TransactionRepository } from '../../src/position/repository/TransactionRepository';
 import { AccountSnapshotWriter, ACCOUNT_SNAPSHOT_INTERVAL_MS } from '../../src/position/service/AccountSnapshotWriter';
 import { PositionInstrumentor } from '../../src/position/service/PositionInstrumentor';
+import { SharedCloseCoordinator } from '../../src/execution/service/SharedCloseCoordinator';
 
 const NOW_MS = 1_700_000_000_000;
 
@@ -404,7 +405,13 @@ describe('ReconciliationService — liquidation-price propagation to instrumento
         };
         const transactions = { findByClientOrderId: jest.fn(), findLatestFundingByPosition: jest.fn().mockResolvedValue(null) };
         const positionService = { transition: jest.fn(), adjustQty: jest.fn(), recordFunding: jest.fn(), finalizeRealizedPnl: jest.fn() };
-        const riskGate = { expireStaleReservations: jest.fn(), reconcileClose: jest.fn(), recordExposureDrift: jest.fn(), evaluate: jest.fn() };
+        const riskGate = {
+            expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
+            reconcileClose: jest.fn(),
+            recordExposureDrift: jest.fn(),
+            evaluate: jest.fn(),
+        };
         const monitor = { arm: jest.fn(), disarm: jest.fn() };
         const retainer = new SubscriptionRetainer();
         const strategyVersions = { findByNameAndVersion: jest.fn() };
@@ -428,6 +435,7 @@ describe('ReconciliationService — liquidation-price propagation to instrumento
             instrumentor as never,
             snapshotWriter as never,
             events,
+            new SharedCloseCoordinator(),
         );
 
         await service.tick(NOW_MS);
@@ -474,7 +482,13 @@ describe('ReconciliationService — liquidation-price propagation to instrumento
         };
         const transactions = { findByClientOrderId: jest.fn(), findLatestFundingByPosition: jest.fn().mockResolvedValue(null) };
         const positionService = { transition: jest.fn(), adjustQty: jest.fn(), recordFunding: jest.fn(), finalizeRealizedPnl: jest.fn() };
-        const riskGate = { expireStaleReservations: jest.fn(), reconcileClose: jest.fn(), recordExposureDrift: jest.fn(), evaluate: jest.fn() };
+        const riskGate = {
+            expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
+            reconcileClose: jest.fn(),
+            recordExposureDrift: jest.fn(),
+            evaluate: jest.fn(),
+        };
         const monitor = { arm: jest.fn(), disarm: jest.fn() };
         const retainer = new SubscriptionRetainer();
         const haltFlag = new HaltFlagService();
@@ -497,6 +511,7 @@ describe('ReconciliationService — liquidation-price propagation to instrumento
             instrumentor as never,
             snapshotWriter as never,
             events,
+            new SharedCloseCoordinator(),
         );
 
         await service.tick(NOW_MS);
@@ -535,7 +550,13 @@ describe('ReconciliationService — drift-forced snapshot (W7 item 2; ADR 0012 �
             findLastClosedBySymbol: jest.fn().mockResolvedValue(null),
         };
         const positionService = { transition: jest.fn(), adjustQty: jest.fn(), recordFunding: jest.fn(), finalizeRealizedPnl: jest.fn() };
-        const riskGate = { expireStaleReservations: jest.fn(), reconcileClose: jest.fn(), recordExposureDrift: jest.fn(), evaluate: jest.fn() };
+        const riskGate = {
+            expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
+            reconcileClose: jest.fn(),
+            recordExposureDrift: jest.fn(),
+            evaluate: jest.fn(),
+        };
         const monitor = { arm: jest.fn(), disarm: jest.fn() };
         const retainer = new SubscriptionRetainer();
         const haltFlag = new HaltFlagService();
@@ -558,6 +579,7 @@ describe('ReconciliationService — drift-forced snapshot (W7 item 2; ADR 0012 �
             instrumentor as never,
             snapshotWriter as never,
             events,
+            new SharedCloseCoordinator(),
         );
 
         await service.tick(NOW_MS);
@@ -593,7 +615,13 @@ describe('ReconciliationService — drift-forced snapshot (W7 item 2; ADR 0012 �
             positions as never,
             { findByClientOrderId: jest.fn(), findLatestFundingByPosition: jest.fn().mockResolvedValue(null) } as never,
             { transition: jest.fn(), adjustQty: jest.fn(), recordFunding: jest.fn(), finalizeRealizedPnl: jest.fn() } as never,
-            { expireStaleReservations: jest.fn(), reconcileClose: jest.fn(), recordExposureDrift: jest.fn(), evaluate: jest.fn() } as never,
+            {
+                expireStaleReservations: jest.fn(),
+                listActiveReservationSlots: jest.fn().mockReturnValue([]),
+                reconcileClose: jest.fn(),
+                recordExposureDrift: jest.fn(),
+                evaluate: jest.fn(),
+            } as never,
             { arm: jest.fn(), disarm: jest.fn() } as never,
             new SubscriptionRetainer(),
             { findByNameAndVersion: jest.fn() } as never,
@@ -601,6 +629,7 @@ describe('ReconciliationService — drift-forced snapshot (W7 item 2; ADR 0012 �
             { setLiquidationPrice: jest.fn() } as never,
             snapshotWriter as never,
             new EventEmitter2(),
+            new SharedCloseCoordinator(),
         );
 
         await service.tick(NOW_MS);
