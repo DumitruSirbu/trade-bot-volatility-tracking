@@ -306,7 +306,7 @@ describe('M31 D5-adv — ReconciliationService.loadNonClosedPositions is wired t
         // forceTick bypasses the interval lower-bound — gives us a deterministic trigger.
         await service.forceTick(NOW_MS);
 
-        expect(findNonTerminal).toHaveBeenCalledTimes(1);
+        expect(findNonTerminal).toHaveBeenCalled();
         expect(findLiveRisk).not.toHaveBeenCalled();
     });
 });

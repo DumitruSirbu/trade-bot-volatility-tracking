@@ -1536,7 +1536,7 @@ describe('8. EngineBootstrapService adversarials', () => {
         expect(harness.riskGate.markRecoveryComplete).not.toHaveBeenCalled();
     });
 
-    it('phase 4c skips PENDING_OPEN positions with EXCHANGE_SIDE (should NOT re-arm, EXCHANGE_SIDE is alive)', () => {
+    it('phase 4c re-arms PENDING_OPEN positions with EXCHANGE_SIDE (D-PP-8: pre-attach window, no exchange protection yet)', () => {
         const exchangeSidePosition = buildPosition({
             state: PositionStateEnum.PENDING_OPEN,
             protectiveOrderType: ProtectiveOrderTypeEnum.EXCHANGE_SIDE,
@@ -1545,7 +1545,7 @@ describe('8. EngineBootstrapService adversarials', () => {
 
         harness.boot.phase4cRearmLocalMonitor([exchangeSidePosition]);
 
-        expect(harness.monitor.arm).not.toHaveBeenCalled();
+        expect(harness.monitor.arm).toHaveBeenCalledTimes(1);
     });
 
     it('phase 4c re-arms CLOSING positions with LOCAL_FALLBACK (partial-reduce still needs monitor)', () => {

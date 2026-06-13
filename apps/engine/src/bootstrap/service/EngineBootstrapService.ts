@@ -298,10 +298,10 @@ export class EngineBootstrapService implements OnApplicationBootstrap {
             return true;
         }
 
-        // PENDING_OPEN rows are never disarmed — the monitor is their only protection pre-attach
-        // (ADR 0008 §2). Exception: EXCHANGE_SIDE in live/testnet — the exchange's own attach is
-        // still alive; re-arming locally would duplicate protection and fire spurious local exits.
-        if (position.state === PositionStateEnum.PENDING_OPEN && position.protectiveOrderType !== ProtectiveOrderTypeEnum.EXCHANGE_SIDE) {
+        // PENDING_OPEN rows are never disarmed — the monitor is the only protection in the
+        // pre-attach window, in every env (ADR 0008 §2, D-PP-8). The exchange-side attach has
+        // not fired yet, so EXCHANGE_SIDE here does NOT mean "exchange already holds protection".
+        if (position.state === PositionStateEnum.PENDING_OPEN) {
             return true;
         }
 
