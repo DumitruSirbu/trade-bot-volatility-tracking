@@ -376,6 +376,7 @@ describe('2. Reconciliation adversarials', () => {
 
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn().mockResolvedValue(undefined),
             recordExposureDrift: jest.fn().mockResolvedValue(undefined),
             isRecoveryReady: jest.fn().mockReturnValue(true),
@@ -1046,6 +1047,7 @@ describe('5. Funding ingestion adversarials', () => {
 
         const riskGate = {
             expireStaleReservations: jest.fn(),
+            listActiveReservationSlots: jest.fn().mockReturnValue([]),
             reconcileClose: jest.fn().mockResolvedValue(undefined),
             recordExposureDrift: jest.fn().mockResolvedValue(undefined),
             isRecoveryReady: jest.fn().mockReturnValue(true),
@@ -1777,6 +1779,7 @@ describe('9. Crash-window adversarials (ADR 0014)', () => {
 
             const rg = {
                 expireStaleReservations: jest.fn(),
+                listActiveReservationSlots: jest.fn().mockReturnValue([]),
                 reconcileClose: jest.fn().mockResolvedValue(undefined),
                 recordExposureDrift: jest.fn().mockResolvedValue(undefined),
                 isRecoveryReady: jest.fn().mockReturnValue(true),
