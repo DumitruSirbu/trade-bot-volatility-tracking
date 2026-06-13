@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { addMoneyStrings, formatAgeMs, formatMoneyString } from '@/lib/utils';
 
-const HEADERS: readonly string[] = ['Symbol', 'Side', 'Leverage', 'Entry', 'Mark', 'Unrealized PnL', 'Age'];
+const HEADERS: readonly string[] = ['Symbol', 'Side', 'Leverage', 'Entry', 'Mark', 'SL', 'TP', 'Unrealized PnL', 'Age'];
 
 const sideVariant = (side: PositionSideEnum): 'success' | 'destructive' => (side === PositionSideEnum.LONG ? 'success' : 'destructive');
 
@@ -24,6 +24,8 @@ const PositionRowView = ({ position, nowMs, onOpen }: { position: IOpenPositionV
         <TableCell>{position.leverage}x</TableCell>
         <TableCell className="tabular-nums">{formatMoneyString(position.entryPrice, 4)}</TableCell>
         <TableCell className="tabular-nums">{formatMoneyString(position.currentPrice, 4)}</TableCell>
+        <TableCell className="tabular-nums text-destructive">{position.slPrice ? formatMoneyString(position.slPrice, 4) : '—'}</TableCell>
+        <TableCell className="tabular-nums text-green-600">{position.tpPrice ? formatMoneyString(position.tpPrice, 4) : '—'}</TableCell>
         <TableCell className="tabular-nums">{formatMoneyString(sumUnrealized(position))}</TableCell>
         <TableCell className="text-muted-foreground">{formatAgeMs(position.openedAt, nowMs)}</TableCell>
     </TableRow>
