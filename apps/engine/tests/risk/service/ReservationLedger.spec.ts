@@ -248,6 +248,118 @@ describe('ReservationLedger', () => {
         });
     });
 
+    describe('releaseConfirmedReservationsFor — M34 multi-release', () => {
+        it('incident replay: open 3 slots, confirm all, release all, 4th reservation on any slot is permitted', () => {
+            // BUILD — three positions opened and confirmed on slots A, B, C
+            const ledger = makeLedger();
+
+            for (const [id, slot] of [
+                ['r-open-a', PositionSlotEnum.A],
+                ['r-open-b', PositionSlotEnum.B],
+                ['r-open-c', PositionSlotEnum.C],
+            ] as const) {
+                ledger.reserve(buildReservation({ reservationId: id, symbol: 'HYPEUSDT', slot, state: ReservationStateEnum.PENDING }));
+                ledger.confirmReservation(id);
+            }
+
+            expect(ledger.listActive()).toHaveLength(3);
+
+            // OPERATE — normal-close all three (the bug: before M34 these were never released)
+            ledger.releaseConfirmedReservationsFor('HYPEUSDT', PositionSlotEnum.A);
+            ledger.releaseConfirmedReservationsFor('HYPEUSDT', PositionSlotEnum.B);
+            ledger.releaseConfirmedReservationsFor('HYPEUSDT', PositionSlotEnum.C);
+
+            // CHECK — ledger is now empty; a 4th reservation on any slot succeeds
+            expect(ledger.listActive()).toHaveLength(0);
+
+            ledger.reserve(buildReservation({ reservationId: 'r-new', symbol: 'HYPEUSDT', slot: PositionSlotEnum.A, state: ReservationStateEnum.PENDING }));
+            expect(ledger.listActive()).toHaveLength(1);
+        });
+
+        it('ADD multi-release: OPEN + ADD reservations on the same (symbol, slot) are both released on close', () => {
+            // BUILD — one position with two reservations: original OPEN and one ADD
+            const ledger = makeLedger();
+
+            ledger.reserve(
+                buildReservation({ reservationId: 'open-event:A', symbol: 'BTCUSDT', slot: PositionSlotEnum.A, state: ReservationStateEnum.PENDING }),
+            );
+            ledger.confirmReservation('open-event:A');
+
+            ledger.reserve(
+                buildReservation({ reservationId: 'add-event:A', symbol: 'BTCUSDT', slot: PositionSlotEnum.A, state: ReservationStateEnum.PENDING }),
+            );
+            ledger.confirmReservation('add-event:A');
+
+            expect(ledger.listActive()).toHaveLength(2);
+
+            // OPERATE — single close-path call releases both
+            const released = ledger.releaseConfirmedReservationsFor('BTCUSDT', PositionSlotEnum.A);
+
+            // CHECK — both CONFIRMED reservations freed; slot is fully empty
+            expect(released).toBe(2);
+            expect(ledger.listActive()).toHaveLength(0);
+        });
+
+        it('CONFIRMED-bias: a racing PENDING reservation on the same (symbol, slot) is NOT released by the close path', () => {
+            // BUILD — one stale CONFIRMED (the closing position) and one fresh PENDING (incoming new position)
+            const ledger = makeLedger();
+
+            ledger.reserve(buildReservation({ reservationId: 'old-open:A', symbol: 'ETHUSDT', slot: PositionSlotEnum.A, state: ReservationStateEnum.PENDING }));
+            ledger.confirmReservation('old-open:A');
+
+            // Incoming new OPEN has raced and created a PENDING before the closed-event fires
+            ledger.reserve(buildReservation({ reservationId: 'new-open:A', symbol: 'ETHUSDT', slot: PositionSlotEnum.A, state: ReservationStateEnum.PENDING }));
+
+            expect(ledger.listActive()).toHaveLength(2);
+
+            // OPERATE — close-path release for the closing position
+            const released = ledger.releaseConfirmedReservationsFor('ETHUSDT', PositionSlotEnum.A);
+
+            // CHECK — only the CONFIRMED reservation is freed; the PENDING survives
+            expect(released).toBe(1);
+            const remaining = ledger.listActive();
+            expect(remaining).toHaveLength(1);
+            expect(remaining[0].reservationId).toBe('new-open:A');
+            expect(remaining[0].state).toBe(ReservationStateEnum.PENDING);
+        });
+
+        it('idempotent double-release: second call on same (symbol, slot) returns 0 and does not error', () => {
+            // BUILD
+            const ledger = makeLedger();
+            ledger.reserve(buildReservation({ reservationId: 'r1:A', symbol: 'SOLUSDT', slot: PositionSlotEnum.A, state: ReservationStateEnum.PENDING }));
+            ledger.confirmReservation('r1:A');
+
+            // OPERATE — first release succeeds; second is a no-op
+            const firstCount = ledger.releaseConfirmedReservationsFor('SOLUSDT', PositionSlotEnum.A);
+            const secondCount = ledger.releaseConfirmedReservationsFor('SOLUSDT', PositionSlotEnum.A);
+
+            // CHECK
+            expect(firstCount).toBe(1);
+            expect(secondCount).toBe(0);
+            expect(ledger.listActive()).toHaveLength(0);
+        });
+
+        it('cross-slot isolation: releasing slot A leaves slot B reservation intact', () => {
+            // BUILD — two positions on different slots
+            const ledger = makeLedger();
+
+            ledger.reserve(buildReservation({ reservationId: 'r-a', symbol: 'BTCUSDT', slot: PositionSlotEnum.A, state: ReservationStateEnum.PENDING }));
+            ledger.confirmReservation('r-a');
+
+            ledger.reserve(buildReservation({ reservationId: 'r-b', symbol: 'BTCUSDT', slot: PositionSlotEnum.B, state: ReservationStateEnum.PENDING }));
+            ledger.confirmReservation('r-b');
+
+            // OPERATE — release only slot A
+            ledger.releaseConfirmedReservationsFor('BTCUSDT', PositionSlotEnum.A);
+
+            // CHECK — slot B reservation still active
+            const remaining = ledger.listActive();
+            expect(remaining).toHaveLength(1);
+            expect(remaining[0].reservationId).toBe('r-b');
+            expect(remaining[0].slot).toBe(PositionSlotEnum.B);
+        });
+    });
+
     describe('illegal state transitions are silently ignored (locked lifecycle)', () => {
         it('RELEASED → CONFIRMED is ignored: reservation stays RELEASED (not re-activated)', () => {
             const ledger = makeLedger();

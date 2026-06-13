@@ -6,6 +6,7 @@ Exactly **one** row may be `ACTIVE`. Status lives here only — not in plan fron
 
 | ID | Status | Summary (1 line) | ADRs | Modules |
 |----|--------|------------------|------|---------|
+| M34 | DONE | Slot-reservation leak on the normal close path (false `max_positions_reached`) | 0004, 0009, 0010 | risk, execution, position |
 | M33 | DONE | Live exit enforcement (time-stop + paper protective simulation + entry cashflow) | 0008, 0011, 0012, 0015 | execution, position, risk |
 | M32 | DONE | Dashboard closed-positions history + Telegram position notifications | 0044, 0024, 0022 | dashboard, alert |
 | M31 | DONE | Zombie positions & broken position-lifecycle | 0009, 0012, 0014 | position, risk |

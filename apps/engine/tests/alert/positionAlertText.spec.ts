@@ -1,4 +1,4 @@
-import { ExitReasonEnum, PositionSideEnum } from '@bot/shared';
+import { ExitReasonEnum, PositionSideEnum, PositionSlotEnum } from '@bot/shared';
 
 import { IPositionClosedEvent } from '../../src/common/interface/IPositionClosedEvent';
 import { IPositionOpenedEvent } from '../../src/common/interface/IPositionOpenedEvent';
@@ -35,6 +35,7 @@ function buildClosed(overrides: Partial<IPositionClosedEvent> = {}): IPositionCl
         leverage: new Money('3'),
         strategyVersionId: 3,
         openedAt: OPENED_AT,
+        positionSlot: PositionSlotEnum.A,
         ...overrides,
     };
 }

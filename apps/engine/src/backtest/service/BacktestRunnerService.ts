@@ -11,6 +11,7 @@ import {
     IStrategyParams,
     IVolatilityDetectedEvent,
     OrderPolicyEnum,
+    PositionSlotEnum,
     RegimeLabelEnum,
     classifyFlowType,
     type ITierSlippageParams,
@@ -274,6 +275,7 @@ export class BacktestRunnerService {
         const tradesBefore = runState.book.completedTrades.length;
 
         runState.sink.applyCloseFill(fill, grossPnl, ExitReasonEnum.FORCE_CLOSE);
+        this.releaseSlotReservation(runState.reservationLedger, position);
 
         if (runState.book.completedTrades.length > tradesBefore) {
             const lastIndex = runState.book.completedTrades.length - 1;
@@ -293,6 +295,14 @@ export class BacktestRunnerService {
                 counters.lowFidelity += 1;
             }
         }
+    }
+
+    // M34 (ADR 0004 §3) — backtest parity for the live close-path slot release. The backtest does
+    // NOT route through POSITION_CLOSED_EVENT (no live event bus on the replay path), so it must
+    // release synchronously here on its own per-run ledger to keep live/backtest slot accounting
+    // identical. `IBacktestPosition.slot` is the literal slot value, identical to the enum member.
+    private releaseSlotReservation(reservationLedger: ReservationLedger, position: IBacktestPosition): void {
+        reservationLedger.releaseConfirmedReservationsFor(position.symbol, position.slot as PositionSlotEnum);
     }
 
     private async loadLastBarBefore(symbol: string, toMs: number): Promise<ICandle | null> {
@@ -771,6 +781,7 @@ export class BacktestRunnerService {
         const tradesBefore = ctx.runState.book.completedTrades.length;
 
         ctx.runState.sink.applyCloseFill(fill, grossPnl, exitReason);
+        this.releaseSlotReservation(ctx.runState.reservationLedger, position);
 
         if (ctx.runState.book.completedTrades.length > tradesBefore) {
             this.patchTradeRow(ctx, position);

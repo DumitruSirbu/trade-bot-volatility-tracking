@@ -37,7 +37,7 @@ function buildGuardHarness(env: 'paper' | 'testnet' | 'live') {
     const positions = { findOpen: jest.fn().mockResolvedValue([]), findNonTerminal: jest.fn().mockResolvedValue([]) };
     const transactions = { findLatestByPositionId: jest.fn().mockResolvedValue(null) };
     const positionService = { transition: jest.fn(), finalizeRealizedPnl: jest.fn(), recordFunding: jest.fn() };
-    const riskGate = { expireStaleReservations: jest.fn() };
+    const riskGate = { expireStaleReservations: jest.fn(), listActiveReservationSlots: jest.fn().mockReturnValue([]) };
     const monitor = { arm: jest.fn(), disarm: jest.fn() };
     const retainer = new SubscriptionRetainer();
     const strategyVersions = { findByNameAndVersion: jest.fn().mockResolvedValue({ id: 1 }) };

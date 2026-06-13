@@ -38,4 +38,5 @@ For the current milestone plan, see [`docs/plans/`](plans/README.md). For deferr
 | M30 | [M30 — Idiosyncratic-edge soak gate + idiosyncrasy observability (DONE):](archive/M30.md) |
 | M31 | [M31 — Zombie positions & broken position-lifecycle (DONE):](archive/M31.md) |
 | M32 | [M32 — Dashboard closed-positions history + Telegram position alerts (DONE):](archive/M32.md) |
+| M34 | [M34 — Slot-reservation leak fix (normal-close CONFIRMED release + ADD multi-release + reconciliation slot-accounting invariant) (DONE):](archive/M34.md) |
 | M33 | [M33 — Live exit enforcement (time-stop + paper protective simulation + entry cashflow) (DONE):](archive/M33.md) |

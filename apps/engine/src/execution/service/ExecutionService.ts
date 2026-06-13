@@ -459,6 +459,11 @@ export class ExecutionService {
                 leverage: finalized.leverage,
                 strategyVersionId: finalized.strategyVersionId,
                 openedAt: finalized.openedAt,
+                // M34 (ADR 0004 §3) — carry the slot so the SlotReleaseListener can free the
+                // (symbol, slot) reservation. Read from the pre-finalize `position` row (the
+                // slot is immutable across the close finalize, and reading the in-scope row
+                // avoids depending on whether finalize re-projects the column).
+                positionSlot: position.positionSlot ?? null,
             };
             this.events.emit(POSITION_CLOSED_EVENT, closedEvent);
 

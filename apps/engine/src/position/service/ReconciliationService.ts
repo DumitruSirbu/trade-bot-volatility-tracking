@@ -45,7 +45,7 @@ import { SharedCloseCoordinator } from '../../execution/service/SharedCloseCoord
 import { ACCOUNT_STATE_SOURCE } from '../../exchange/interface';
 import { CcxtExecutionClient } from '../../exchange/service/CcxtExecutionClient';
 import { SubscriptionRetainer } from '../../market-data/service/SubscriptionRetainer';
-import { COOLDOWN_AFTER_LOSS_MS } from '../../risk/const';
+import { COOLDOWN_AFTER_LOSS_MS, MAX_OPEN_POSITIONS } from '../../risk/const';
 import { IOrderIntent, IOrderIntentApprovedEvent, IRiskGateContext } from '../../risk/interface';
 import { RiskGateService } from '../../risk/service';
 import { StrategyVersionRepository } from '../../strategy/repository/StrategyVersionRepository';
@@ -156,6 +156,12 @@ export class ReconciliationService {
     // restarts surfaces again (acceptable per the dispatch's option (c)).
     // No schema change, no shared-contract change.
     private readonly adoptionVanishedAlerted = new Set<number>();
+
+    // M34 — per-process dedup for the slot-accounting invariant WARN. The invariant runs every
+    // 30s pass; a persistent divergence would otherwise spam an identical WARN unbounded. We log
+    // a given violation signature once, then re-arm (drop it from the set) on the first clean pass
+    // so a recurrence still surfaces. Restart drops the set — a re-emerging divergence re-alerts.
+    private readonly slotInvariantViolationsLogged = new Set<string>();
 
     constructor(
         // M11a R2a BLOCKER B1 (ADR 0032 §3 D14). All account-state reads are
@@ -605,6 +611,11 @@ export class ReconciliationService {
             await this.snapshotWriter.writeNow(nowMs, 'drift_resolved');
         }
 
+        // M34 (ADR 0004 §3 / ADR 0010) — slot-accounting invariant check at pass quiescence.
+        // All in-flight reconciliation updates are settled here, so a divergence now is a real
+        // leak, not a transient. Observability-only: WARN on violation, never throw.
+        await this.assertSlotAccountingInvariant();
+
         return {
             tickAtMs: nowMs,
             driftsByCase: counters,
@@ -623,6 +634,101 @@ export class ReconciliationService {
         }
 
         return false;
+    }
+
+    // M34 (ADR 0004 §3 / ADR 0010) — the standing slot-accounting detector that would have caught
+    // the M34 incident in soak. Two invariants, both observability-only (structured WARN, never
+    // throw — this is a detector, not a hard gate):
+    //
+    //   1. The DISTINCT occupied slots — union of the live ledger's active (PENDING + CONFIRMED)
+    //      reservation slots and the DB rows in OPEN / PENDING_OPEN — must be ≤ MAX_OPEN_POSITIONS.
+    //      Distinct, never raw reservation count: an ADD legitimately mints a 2nd reservation on
+    //      one slot, so a raw count would false-positive.
+    //   2. Each slot maps to at most one open DB position (a 2nd row on a slot is a real bug).
+    //
+    // Evaluated only here, at pass quiescence — never mid-fill — so the documented transient-OK
+    // windows do not fire: a PENDING reservation ahead of its DB row, a PENDING + CONFIRMED pair
+    // during an ADD/re-entry, or a CONFIRMED reservation co-existing with its CLOSED DB row in the
+    // finalize → listener-release gap. Reads the open rows fresh from the DB (the top-of-pass
+    // snapshot is stale after this pass's transitions).
+    private async assertSlotAccountingInvariant(): Promise<void> {
+        const openRows = await this.loadSlotOccupyingPositions();
+        const dbSlotCounts = this.countOpenPositionsBySlot(openRows);
+        const reservationSlots = this.riskGate.listActiveReservationSlots();
+        const distinctOccupiedSlots = new Set<PositionSlotEnum>([...reservationSlots, ...dbSlotCounts.keys()]);
+
+        const stillViolating = new Set<string>();
+
+        if (distinctOccupiedSlots.size > MAX_OPEN_POSITIONS) {
+            const signature = `max-slots:${distinctOccupiedSlots.size}:${reservationSlots.join(',')}:${[...dbSlotCounts.keys()].join(',')}`;
+            stillViolating.add(signature);
+
+            this.warnSlotInvariantOnce(
+                signature,
+                `slot-accounting invariant violated: distinctOccupiedSlots=${distinctOccupiedSlots.size} > max=${MAX_OPEN_POSITIONS} ` +
+                    `(reservationSlots=[${reservationSlots.join(',')}] dbOpenSlots=[${[...dbSlotCounts.keys()].join(',')}])`,
+            );
+        }
+
+        this.reportSlotCountViolations(dbSlotCounts, stillViolating);
+
+        this.reArmClearedSlotInvariants(stillViolating);
+    }
+
+    // The per-slot duplicate-open-row check (a 2nd open DB row on one slot is a real bug). Records
+    // each fired signature in `stillViolating` so the caller can re-arm cleared violations.
+    private reportSlotCountViolations(dbSlotCounts: Map<PositionSlotEnum, number>, stillViolating: Set<string>): void {
+        for (const [slot, count] of dbSlotCounts) {
+            if (count > 1) {
+                const signature = `dup-slot:${slot}:${count}`;
+                stillViolating.add(signature);
+
+                this.warnSlotInvariantOnce(signature, `slot-accounting invariant violated: slot=${slot} maps to ${count} open DB positions (expected ≤ 1)`);
+            }
+        }
+    }
+
+    // Dedup the WARN: log a given violation signature once, then suppress until it clears.
+    private warnSlotInvariantOnce(signature: string, message: string): void {
+        if (this.slotInvariantViolationsLogged.has(signature)) {
+            return;
+        }
+
+        this.slotInvariantViolationsLogged.add(signature);
+        this.logger.warn(message);
+    }
+
+    // Re-arm: drop any previously-logged signature that is no longer violating so a recurrence
+    // re-alerts on the next pass.
+    private reArmClearedSlotInvariants(stillViolating: Set<string>): void {
+        for (const signature of [...this.slotInvariantViolationsLogged]) {
+            if (!stillViolating.has(signature)) {
+                this.slotInvariantViolationsLogged.delete(signature);
+            }
+        }
+    }
+
+    // The DB rows that occupy a slot for the invariant: OPEN + PENDING_OPEN only (the plan's
+    // occupancy definition). RECONCILING / CLOSING / MANUAL_ADOPTED_UNMANAGED are excluded so a
+    // mid-flight or operator-owned row never trips the detector.
+    private async loadSlotOccupyingPositions(): Promise<PositionEntity[]> {
+        const rows = await this.positions.findNonTerminal();
+
+        return rows.filter((row) => row.state === PositionStateEnum.OPEN || row.state === PositionStateEnum.PENDING_OPEN);
+    }
+
+    private countOpenPositionsBySlot(rows: readonly PositionEntity[]): Map<PositionSlotEnum, number> {
+        const counts = new Map<PositionSlotEnum, number>();
+
+        for (const row of rows) {
+            if (row.positionSlot === null || row.positionSlot === undefined) {
+                continue;
+            }
+
+            counts.set(row.positionSlot, (counts.get(row.positionSlot) ?? 0) + 1);
+        }
+
+        return counts;
     }
 
     // M6 W7 (resolves W6 carry-forward #2). Walks the DB position list, looks up

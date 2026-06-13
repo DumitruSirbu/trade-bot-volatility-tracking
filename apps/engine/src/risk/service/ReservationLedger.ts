@@ -1,3 +1,4 @@
+import { PositionSlotEnum } from '@bot/shared';
 import { Injectable, Logger } from '@nestjs/common';
 
 import { ReservationStateEnum } from '../enum';
@@ -25,6 +26,21 @@ export class ReservationLedger implements IReservationLedgerPort {
 
     releaseReservation(reservationId: string): void {
         this.transition(reservationId, ReservationStateEnum.RELEASED);
+    }
+
+    // M34 (ADR 0004 §3) — the normal close-path release primitive. CONFIRMED-only because a
+    // racing incoming OPEN may have just minted a fresh PENDING on the same (symbol, slot);
+    // freeing that would re-introduce the leak in the other direction.
+    releaseConfirmedReservationsFor(symbol: string, slot: PositionSlotEnum): number {
+        const matches = [...this.reservations.values()].filter(
+            (reservation) => reservation.symbol === symbol && reservation.slot === slot && reservation.state === ReservationStateEnum.CONFIRMED,
+        );
+
+        for (const reservation of matches) {
+            this.releaseReservation(reservation.reservationId);
+        }
+
+        return matches.length;
     }
 
     confirmReservation(reservationId: string): void {
