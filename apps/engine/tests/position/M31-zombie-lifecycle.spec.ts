@@ -271,7 +271,7 @@ describe('M31 D5-adv — ReconciliationService.loadNonClosedPositions is wired t
             finalizeRealizedPnl: jest.fn().mockResolvedValue(undefined),
             recordFunding: jest.fn().mockResolvedValue(undefined),
         };
-        const riskGate = { expireStaleReservations: jest.fn() };
+        const riskGate = { expireStaleReservations: jest.fn(), listActiveReservationSlots: jest.fn().mockReturnValue([]) };
         const monitor = { arm: jest.fn(), disarm: jest.fn() };
         const retainer = new SubscriptionRetainer();
         const strategyVersions = {
