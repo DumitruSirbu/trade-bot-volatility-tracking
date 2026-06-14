@@ -4,7 +4,7 @@ Living snapshot (~15 lines). **Single writer = scribe** at milestone close. Do n
 
 | Field | Value |
 |-------|-------|
-| **ACTIVE** | (next from queue) |
+| **ACTIVE** | **M15** — Cloud go-live & scaling (gated on soak + testnet drill) |
 | **Last DONE** | **M35** — Trade-record integrity (entry-snapshot persistence + wrong-side/sub-cost TP guards) |
 | **Deploy** | M35 engine deployed (ready) |
 | **Next queue** | M15 (gated on M11a soak + testnet drill); slot-C (soak-gated per [tech-debt.md](tech-debt.md)) |

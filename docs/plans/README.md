@@ -6,7 +6,7 @@ Exactly **one** row may be `ACTIVE`. Status lives here only — not in plan fron
 
 | ID | Status | Summary (1 line) | ADRs | Modules |
 |----|--------|------------------|------|---------|
-| M35 | ACTIVE | Trade-record integrity (entry-snapshot persistence + wrong-side/sub-cost TP geometry; MAE/MFE seed-timing) | 0013, 0011, 0004, 0003, 0043 | position, execution, strategy, risk |
+| M35 | DONE | Trade-record integrity (entry-snapshot persistence + wrong-side/sub-cost TP geometry; MAE/MFE seed-timing) | 0013, 0011, 0004, 0003, 0043 | position, execution, strategy, risk |
 | M34 | DONE | Slot-reservation leak on the normal close path (false `max_positions_reached`) | 0004, 0009, 0010 | risk, execution, position |
 | M33 | DONE | Live exit enforcement (time-stop + paper protective simulation + entry cashflow) | 0008, 0011, 0012, 0015 | execution, position, risk |
 | M32 | DONE | Dashboard closed-positions history + Telegram position notifications | 0044, 0024, 0022 | dashboard, alert |
@@ -42,7 +42,7 @@ Exactly **one** row may be `ACTIVE`. Status lives here only — not in plan fron
 | M1 | DONE | Exchange integration & market data | 0001 | exchange |
 | M0 | DONE | Foundation & scaffolding | — | foundation |
 | M11 | DEFERRED | Go-live hardening (split parent) | — | go-live |
-| M15 | DEFERRED | Cloud go-live & scaling | — | go-live |
+| M15 | ACTIVE | Cloud go-live & scaling | — | go-live |
 | M20 | DEFERRED | Pre-cloud go-live blocker hardening | — | go-live |
 | 00-overview | INDEX | Timeless design + locked decisions | — | — |
 | M9-execution-plan | DONE | M9 dispatch checklist | 0020–0025 | — |
