@@ -620,6 +620,10 @@ export class AppConfigService {
             );
         }
 
+        if (flagEnabled && isPaperEnv) {
+            this.logger.warn('PAPER_RELAX_CONSECUTIVE_LOSS_HALT is active — consecutive-loss day-halt disabled for this paper soak run.');
+        }
+
         return flagEnabled && isPaperEnv;
     }
 

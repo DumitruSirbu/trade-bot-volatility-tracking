@@ -272,13 +272,10 @@ export class EnvironmentVariables {
     @IsBoolean()
     PAPER_RELAX_MARKET_STRESS: boolean = false;
 
-    // M36 — paper-only switch mirroring PAPER_RELAX_MARKET_STRESS that relaxes the
-    // consecutive-loss halt so the paper exploration soak stops locking on a short
-    // losing streak. NEVER relaxes anything on live/testnet. OPTIONAL with a field
-    // default of false; the @Transform fires only when the key is present, so only
-    // the exact string 'true' (case-insensitive, trimmed) enables it — the string
-    // 'false', a typo, or an empty value collapses to off (fail-safe). The effective
-    // value additionally requires EXCHANGE_ENV=paper, enforced in AppConfigService.
+    // M36 — paper-only switch that relaxes the consecutive-loss halt so the paper
+    // exploration soak stops locking on a short losing streak. NEVER relaxes anything
+    // on live/testnet; the effective value additionally requires EXCHANGE_ENV=paper,
+    // enforced in AppConfigService.
     @IsOptional()
     @Transform(({ value }) => String(value).toLowerCase().trim() === 'true')
     @IsBoolean()

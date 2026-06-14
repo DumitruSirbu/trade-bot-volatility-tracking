@@ -75,19 +75,17 @@ function closePositionWithLoss(
     symbol = 'BTCUSDT',
     consecutiveLossHaltThreshold = VIRTUAL_LEDGER_CONSECUTIVE_LOSS_HALT_THRESHOLD,
 ): void {
-    ledger.tryClose(
-        {
-            eventId: `${symbol}:close:${nowMs}`,
-            nowMs,
-            riskDayUtcDate: RISK_DAY,
-            virtualOrderId,
-            exitPrice: EXIT_PRICE_LOSS,
-            closeReason: 'reverse_signal',
-            // LONG exit below entry → negative PnL (loss)
-            realizedPnl: '-1',
-        },
+    ledger.tryClose({
+        eventId: `${symbol}:close:${nowMs}`,
+        nowMs,
+        riskDayUtcDate: RISK_DAY,
+        virtualOrderId,
+        exitPrice: EXIT_PRICE_LOSS,
+        closeReason: 'reverse_signal',
+        // LONG exit below entry → negative PnL (loss)
+        realizedPnl: '-1',
         consecutiveLossHaltThreshold,
-    );
+    });
 }
 
 function buildGateInput(nowMs = T3_MS) {

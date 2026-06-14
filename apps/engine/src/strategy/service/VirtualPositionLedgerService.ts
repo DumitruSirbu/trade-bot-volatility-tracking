@@ -205,13 +205,14 @@ export class VirtualPositionLedgerService implements IVirtualPositionLedger {
         return { success: true };
     }
 
-    // `consecutiveLossHaltThreshold` is the EFFECTIVE arm threshold the caller
-    // computes (the restricted-profile const when relax is off; an unreachable
-    // sentinel when PAPER_RELAX_CONSECUTIVE_LOSS_HALT is on — M36, D4). It is an
-    // optional trailing parameter so this method stays assignable to the
-    // `IVirtualPositionLedger.tryClose(close)` contract; defaulting to the module
-    // const preserves the pre-M36 arm behaviour for any caller that omits it.
-    tryClose(close: IVirtualCloseInput, consecutiveLossHaltThreshold: number = VIRTUAL_LEDGER_CONSECUTIVE_LOSS_HALT_THRESHOLD): IVirtualMutationResult {
+    // The arm threshold rides on the close input (`consecutiveLossHaltThreshold`)
+    // so it never diverges from the per-call gate value the caller already passes
+    // to `evaluateGates` — both surfaces must read the same effective number or the
+    // durable `isHalted()` short-circuit re-introduces the halt relax intends to
+    // suppress (M36, D4).
+    tryClose(close: IVirtualCloseInput): IVirtualMutationResult {
+        const consecutiveLossHaltThreshold = close.consecutiveLossHaltThreshold ?? VIRTUAL_LEDGER_CONSECUTIVE_LOSS_HALT_THRESHOLD;
+
         if (this.processedEventIds.has(close.eventId)) {
             return { success: false, reason: 'duplicate_event_id' };
         }
@@ -284,7 +285,7 @@ export class VirtualPositionLedgerService implements IVirtualPositionLedger {
         nowMs: number,
         reason: ShadowCloseBySymbolReason,
         eventId: string,
-        consecutiveLossHaltThreshold: number = VIRTUAL_LEDGER_CONSECUTIVE_LOSS_HALT_THRESHOLD,
+        consecutiveLossHaltThreshold?: number,
     ): IVirtualClosedTradeLogEntry | null {
         const position = this.findOpenPositionBySymbol(symbol);
 
@@ -308,18 +309,16 @@ export class VirtualPositionLedgerService implements IVirtualPositionLedger {
         const realizedPnl = grossPnl.minus(exitFee);
         const riskDayUtcDate = deriveRiskDayUtcDate(nowMs);
 
-        const result = this.tryClose(
-            {
-                eventId,
-                nowMs,
-                riskDayUtcDate,
-                virtualOrderId: position.virtualOrderId,
-                exitPrice: exitPriceStr,
-                closeReason: reason,
-                realizedPnl: realizedPnl.toFixed(),
-            },
+        const result = this.tryClose({
+            eventId,
+            nowMs,
+            riskDayUtcDate,
+            virtualOrderId: position.virtualOrderId,
+            exitPrice: exitPriceStr,
+            closeReason: reason,
+            realizedPnl: realizedPnl.toFixed(),
             consecutiveLossHaltThreshold,
-        );
+        });
 
         if (!result.success) {
             this.logger.debug(`closeBySymbol tryClose declined symbol=${symbol} reason=${result.reason ?? 'unknown'}`);
@@ -348,7 +347,7 @@ export class VirtualPositionLedgerService implements IVirtualPositionLedger {
         exitPriceBySymbol: Map<string, string>,
         nowMs: number,
         eventIdPrefix: string,
-        consecutiveLossHaltThreshold: number = VIRTUAL_LEDGER_CONSECUTIVE_LOSS_HALT_THRESHOLD,
+        consecutiveLossHaltThreshold?: number,
     ): IVirtualClosedTradeLogEntry[] {
         const closed: IVirtualClosedTradeLogEntry[] = [];
         const symbols = Array.from(this.openPositions.values()).map((position) => position.symbol);

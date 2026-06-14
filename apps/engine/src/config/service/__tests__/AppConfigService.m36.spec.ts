@@ -158,7 +158,7 @@ describe('AppConfigService M36 — paperRelaxConsecutiveLossHalt boot-time misco
         expect(misconfigWarns).toHaveLength(0);
     });
 
-    it('CFG8: EXCHANGE_ENV=paper + flag=true → does NOT log a misconfig warn (intended use)', () => {
+    it('CFG8: EXCHANGE_ENV=paper + flag=true → logs the active-confirmation warn, NOT a misconfig (NEUTRALIZED) warn', () => {
         // BUILD
         const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
 
@@ -168,9 +168,13 @@ describe('AppConfigService M36 — paperRelaxConsecutiveLossHalt boot-time misco
             PAPER_RELAX_CONSECUTIVE_LOSS_HALT: true,
         });
 
-        // CHECK
-        const misconfigWarns = warnSpy.mock.calls.filter(([msg]) => /PAPER_RELAX_CONSECUTIVE_LOSS_HALT/i.test(String(msg)));
+        // CHECK — intended use must not raise the NEUTRALIZED misconfig warn, but
+        // MUST raise the active-confirmation warn so the operator sees relax is on.
+        const misconfigWarns = warnSpy.mock.calls.filter(([msg]) => /PAPER_RELAX_CONSECUTIVE_LOSS_HALT/i.test(String(msg)) && /NEUTRALIZED/i.test(String(msg)));
         expect(misconfigWarns).toHaveLength(0);
+
+        const activeWarns = warnSpy.mock.calls.filter(([msg]) => /PAPER_RELAX_CONSECUTIVE_LOSS_HALT is active/i.test(String(msg)));
+        expect(activeWarns).toHaveLength(1);
     });
 });
 

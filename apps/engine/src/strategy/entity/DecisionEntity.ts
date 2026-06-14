@@ -84,6 +84,6 @@ export class DecisionEntity {
     // consecutive-loss halt was relaxed (paper soak forced-continuation). Fences
     // these left-tail forced-continuation outcomes from cross-version A/B
     // analysis. Stamped at write time from the resolved boot flag.
-    @Column({ name: 'halt_relax_active', type: 'boolean', default: false })
+    @Column({ name: 'halt_relax_active', type: 'boolean', nullable: false, default: false })
     haltRelaxActive!: boolean;
 }

@@ -118,6 +118,7 @@ export interface IVirtualCloseInput {
     readonly exitPrice: string; // decimal; price at which the position is closed
     readonly closeReason: 'sl' | 'tp' | 'force_close' | 'intra_bar_stop' | 'reverse_signal';
     readonly realizedPnl: string; // decimal; entry-to-exit PnL before fees
+    readonly consecutiveLossHaltThreshold?: number;
 }
 
 /**
