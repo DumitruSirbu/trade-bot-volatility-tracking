@@ -9,6 +9,8 @@
 > defaults are byte-identical to pre-M36, preserving the live/backtest determinism contract
 > (ADR 0029, ADR 0032) and the trading-safety invariants in `CLAUDE.md`. This is a deliberate,
 > visible **risk-loosening for exploration data collection only** — not a change to live risk posture.
+> M36 also adds one **additive schema column** (`halt_relax_active`, D7) that tags forced-continuation
+> rows so the regime-biased outcomes they unlock are never silently pooled into cross-version analysis.
 
 ## Context
 
@@ -84,6 +86,12 @@ live or testnet boot can never see it on. A non-paper boot is byte-identical to 
   non-paper env.
 - **No risk/strategy service reads `process.env` directly** — everything routes through the typed
   getter (conventions + ADR 0042 §A3).
+- **Boot-resolved, never per-evaluate (M1).** The effective value MUST be resolved **once at boot** into
+  a private `resolvedPaperRelaxConsecutiveLossHalt` field — the exact pattern of
+  `resolvedPaperRelaxMarketStress` (`AppConfigService.ts:91`) — and never re-read per gate evaluation.
+  Reason: a mid-run toggle would leave already-written `consecutive_loss_halt` rows unresumed.
+  Consecutive-loss halts have **no auto-resume path** (unlike the breadth / same-bar stress legs, which
+  M23 can auto-resume), so re-reading the flag mid-run could strand a durable halt with no path back.
 
 ### D2 — Live gate: skip the consecutive-loss check before `persistHalt`
 
@@ -126,6 +134,29 @@ The `VIRTUAL_LEDGER_CONSECUTIVE_LOSS_HALT_THRESHOLD` const (used in `maybeArmCon
 durable `haltedUntilRiskDayUtcDate` flag is still armed on close and `evaluateGates` rejects via the
 separate `'halted'` path (defeating D3).
 
+**There are THREE reads of `haltedUntilRiskDayUtcDate` (B2) — all on the durable-arm surface.** The
+per-call sentinel in D3 does not touch any of them; this is why D4 is mandatory, not a nice-to-have:
+
+| Site | Line | Role |
+|---|---|---|
+| `isHalted()` short-circuit in `evaluateGates` | `VirtualPositionLedgerService.ts:155` | Once the flag is set, `evaluateGates` rejects with `'halted'` **before** it ever reaches the per-call `haltAfterConsecutiveLosses` check at `:161`. The D3 sentinel is therefore unreachable on any call after the arm fired. |
+| Flag read / day-key compare | `VirtualPositionLedgerService.ts:81` | Reads the stored halt date to decide whether the durable halt still applies for the current UTC risk day. |
+| Flag read / clear-on-rollover | `VirtualPositionLedgerService.ts:87-104` | Reads and rolls the flag at the UTC-day boundary. |
+
+Because `isHalted()` (`:155`) short-circuits **before** the `haltAfterConsecutiveLosses` check (`:161`),
+a sentinel on the per-call check alone is insufficient whenever the arm has already fired on a prior
+close. D4 must neutralize the **arm itself** so the flag is never set under relax.
+
+**Cold-restart replay parity (B2 — load-bearing).** The ledger rebuild on cold restart replays closes
+through `tryClose` → `maybeArmConsecutiveLossHalt` (`:364`). Today that arm reads the **module const**
+(still `2`), not the relax flag — so a ledger rebuilt from a forced-continuation paper run would
+**re-arm a halt that never existed during the live run**, diverging the rebuilt state from the live
+state. The "thread the effective threshold into the close path" fix below is exactly what makes the
+replay honor relax: the rebuild path must pass the same effective threshold (sentinel under relax) so
+the arm cannot fire on replay either. This parity is a **load-bearing acceptance test** (see Success
+criteria): replaying a forced-continuation close sequence under relax MUST reproduce the exact
+`haltedUntilRiskDayUtcDate` state the live run had (i.e. unset).
+
 **Decision — make the arming threshold a per-call input, not a skip of the arm logic.** The cleanest,
 most consistent option is to thread the *effective* consecutive-loss threshold into the ledger the
 same way `evaluateGates` already takes `haltAfterConsecutiveLosses` per call:
@@ -156,14 +187,52 @@ no new `risk_state.halt_reason` value, and no schema change. `RejectReasonEnum.C
 stays exactly as-is (still emitted in non-paper envs and whenever the flag is off). The existing
 `market_stress:<leg>` suffix machinery is untouched.
 
-### D6 — No shared-package, no migration, no new reject reason
+### D6 — No new reject reason; engine-internal gate interfaces
 
-- **No `packages/shared/` change.** No new enum value, no schema change. (`IVirtualCloseInput` /
-  `IVirtualGateInput` are engine-internal interfaces under `apps/engine/`, not shared — confirm
-  before editing; if either turns out to live in `packages/shared/`, route through
-  `bot-shared-maintainer` first per CLAUDE.md hard-rule 5.)
-- **No migration.** M36 is migration-free; the only DB interaction is the operational halt-clear at
-  deploy (see DB safety).
+- **No new reject reason.** No new `RejectReasonEnum` value, no new `risk_state.halt_reason` value
+  (D5). The `market_stress:<leg>` suffix machinery is untouched.
+- `IVirtualCloseInput` / `IVirtualGateInput` are engine-internal interfaces under `apps/engine/`, not
+  shared — confirm before editing; if either turns out to live in `packages/shared/`, route through
+  `bot-shared-maintainer` first per CLAUDE.md hard-rule 5.
+- **Migration scope updated by D7.** M36 is **no longer migration-free** — D7 adds a `halt_relax_active`
+  column to `decisions` and `shadow_decisions`. The earlier "migration-free" framing is superseded by
+  D7. The only *non-migration* DB interaction remains the operational halt-clear at deploy (see DB
+  safety).
+
+### D7 — Bias marker: `halt_relax_active` column on `decisions` + `shadow_decisions` (B1, H1)
+
+Forced-continuation outcomes are a conditional sample from the **left tail** of the regime distribution
+(every extra outcome M36 unlocks occurs, by construction, **after ≥2 consecutive losses**). Pooling them
+with natural outcomes biases win-rate, profit-factor, and loss-streak metrics, and contaminates any
+version A/B test (H1). Separately (B1), the shadow path sizes every trade off a **constant**
+`PAPER_STARTING_EQUITY_USDT` (equity never decrements — see the "W4 sizing calibration" code comment),
+so forced-continuation shadow data also sits on a sizing base that diverges from the decrementing live
+path. M36 does **not** fix the shadow equity decrement (deferred — out of scope); instead it **fences**
+this data so it is never silently pooled.
+
+**Decision:** add a boolean column `halt_relax_active` to **both** the live `decisions` table and the
+`shadow_decisions` table. It is stamped `true` for any row produced while
+`resolvedPaperRelaxConsecutiveLossHalt` is active, `false` otherwise. This is the single gate that lets
+analysis isolate (or exclude) forced-continuation rows.
+
+- **Schema change → migration required.** This adds one column to each of two tables. A migration is in
+  scope (supersedes the old D6 "migration-free" claim). DB-safety rules (backup-first, no destructive
+  ops) apply to the migration apply step.
+- **Shared-maintainer pre-check (B1/H1).** Before the engine wave, **check where the persist DTOs live**:
+  `IDecisionPersistInput` and `IShadowDecisionPersistInput`. If **either** is defined under
+  `packages/shared/`, dispatch `bot-shared-maintainer` **first** (serial, CLAUDE.md hard-rule 5) to add
+  the `haltRelaxActive` field, then run the engine wave. If both are engine-internal, no shared dispatch
+  is needed — state which it was in the orchestrator's verification note.
+- **Default & backfill.** New column defaults to `false`; pre-M36 rows are `false` (they were produced
+  under the active halt, so they are by definition not forced-continuation). No backfill query needed.
+
+**Analysis constraint (hard — B1/H1).** This column is the gate for **all** cross-version comparisons.
+Forced-continuation rows (`halt_relax_active = true`) **MUST NOT** be used in cross-version win-rate,
+profit-factor, or loss-streak comparisons, nor in any version A/B test, without isolating on this
+marker — either excluded outright or analysed as a separate cohort. In particular: **forced-continuation
+`shadow_decisions` rows MUST NOT be used in cross-version win-rate or profit-factor comparisons without
+isolating on the bias marker**, because their constant-equity sizing base (B1) diverges from the live
+path's decrementing base, making any pooled A/B comparison rest on mismatched equity bases.
 
 ## Out of scope
 
@@ -172,12 +241,25 @@ stays exactly as-is (still emitted in non-paper envs and whenever the flag is of
 - **Market-stress relaxation** — that is M25 / `PAPER_RELAX_MARKET_STRESS`; M36 does not touch
   `StressHaltEvaluator`, the stress legs, or M23 auto-resume.
 - **Cooldown-after-loss** (`COOLDOWN_AFTER_LOSS_MS`), overtrading caps, exposure caps, slot model.
+  Cooldown stays **fully active** under relax — see Operational notes (M2).
+- **Shadow equity-decrement fix** (B1) — the shadow path sizes off a constant
+  `PAPER_STARTING_EQUITY_USDT` (the "W4 sizing calibration" deferred item). M36 does **not** fix it; it
+  fences the affected data via the D7 bias marker instead.
 - **Dashboard / UI** — no new surface. (A read-only note may be added later if an operator needs to
   *see* the relax state; defer unless asked.)
 - **Shared-package changes** — none (D6).
 - **Changing the live default of `2`** — `CONSECUTIVE_LOSS_HALT_COUNT`,
   `VIRTUAL_LEDGER_CONSECUTIVE_LOSS_HALT_THRESHOLD`, and `SHADOW_GATE_HALT_AFTER_CONSECUTIVE_LOSSES`
   all stay `2`. M36 only adds a paper-gated *opt-out*, never re-tunes the live threshold.
+
+## Operational notes
+
+- **Cooldown becomes the de-facto rate limiter (M2).** `COOLDOWN_AFTER_LOSS_MS` (15 min per-symbol, via
+  `isCooldownActive`) stays **fully active** under relax — M36 does not touch it. With the
+  consecutive-loss day-halt removed, the per-symbol cooldown becomes the **de-facto inter-trade rate
+  limiter** on same-symbol re-entry. Any analysis of forced-continuation inter-trade spacing must
+  account for this 15-min floor: it reflects a **risk parameter**, not a signal property, and will show
+  up as a hard lower bound on re-entry spacing in the collected data.
 
 ## Paper-gating semantics (lock before QA)
 
@@ -191,6 +273,11 @@ stays exactly as-is (still emitted in non-paper envs and whenever the flag is of
 - **Daily/weekly loss windows untouched** in every env.
 - **Typed config only.** The flag is read via `AppConfigService`; no risk/strategy service reads
   `process.env` directly. `validateEnv` covers the new var; string `"false"` is not truthy.
+- **UTC-day boundary resets the streak; relax has no cross-day effect (M3).** The consecutive-loss
+  streak resets at **UTC midnight** regardless of M36 — both `findClosedOnUtcDay` and
+  `countConsecutiveLossesInRiskDay` key on the UTC date string. The relaxation is scoped to "no
+  consecutive-loss halt **this** UTC day"; it has no cross-day accumulation effect and cannot carry a
+  streak across the day boundary.
 
 ## Change set
 
@@ -201,12 +288,16 @@ stays exactly as-is (still emitted in non-paper envs and whenever the flag is of
 | `apps/engine/` | `src/risk/service/RiskGateService.ts` (`checkLossWindows`: skip the `isConsecutiveLossHalt`/`persistHalt` block when relax active; daily/weekly checks unchanged) | D2, D5 |
 | `apps/engine/` | `src/strategy/const/strategyConsts.ts` (add `SHADOW_GATE_CONSECUTIVE_LOSS_RELAX_SENTINEL`) | D3 |
 | `apps/engine/` | `src/strategy/service/ShadowStrategyOrchestratorService.ts` (choose sentinel vs `SHADOW_GATE_HALT_AFTER_CONSECUTIVE_LOSSES` for `haltAfterConsecutiveLosses`, and thread the effective arm threshold) | D3, D4 |
-| `apps/engine/` | `src/strategy/service/VirtualPositionLedgerService.ts` (`maybeArmConsecutiveLossHalt` compares against the effective threshold from the close input, not the bare const) | D4 |
+| `apps/engine/` | `src/strategy/service/VirtualPositionLedgerService.ts` (`maybeArmConsecutiveLossHalt` compares against the effective threshold from the close input, not the bare const; cold-restart replay path passes the same effective threshold) | D4 |
+| `packages/shared/` **or** `apps/engine/` | `IDecisionPersistInput` + `IShadowDecisionPersistInput` (add `haltRelaxActive` field) — **shared-maintainer pre-check**: if either lives in `packages/shared/`, route through `bot-shared-maintainer` first | D7 |
+| `apps/engine/` (migration) | new migration adding `halt_relax_active boolean NOT NULL DEFAULT false` to `decisions` **and** `shadow_decisions` | D7 |
+| `apps/engine/` | live `decisions` persist + `shadow_decisions` persist paths (stamp `halt_relax_active = resolvedPaperRelaxConsecutiveLossHalt` on each written row) | D7 |
 | config | `.env.example` (document `PAPER_RELAX_CONSECUTIVE_LOSS_HALT` with the paper-only, default-off caveat, alongside `PAPER_RELAX_MARKET_STRESS`) | D1 |
-| `apps/engine/` (tests) | risk-gate + shadow-ledger + config specs (relax on/off; non-paper + testnet unchanged; daily/weekly still halt; durable arm bypassed under relax; `validateEnv` for the new var) | QA |
+| `apps/engine/` (tests) | risk-gate + shadow-ledger + config specs (relax on/off; non-paper + testnet unchanged; daily/weekly still halt; durable arm bypassed under relax; cold-restart replay parity; `halt_relax_active` stamping; `validateEnv` for the new var) | QA |
 | docs | `docs/plans/README.md` (add M36 row); `docs/plans/M36.md` (this file) | scribe (README row added with this plan) |
 
-No `packages/shared/` change, no migration, no new reject reason (D6).
+A migration **is** in scope (D7: `halt_relax_active` on `decisions` + `shadow_decisions`). No new reject
+reason (D6). `packages/shared/` is touched **only if** the persist DTOs live there (D7 pre-check).
 
 ## Dispatch waves (per CLAUDE.md / dev-qa-cycle — ≤5 items/files per dispatch)
 
@@ -215,11 +306,18 @@ No `packages/shared/` change, no migration, no new reject reason (D6).
 > pass is a short **ADR 0042 amendment** rather than a new ADR.
 
 1. **Serial — `bot-architect`**: amend **ADR 0042** (paper exploration profile) to add the
-   consecutive-loss relax leg: the two-condition gate (D1), the live-gate skip-before-persist (D2, D5),
-   the shadow two-surface bypass (D3 sentinel + D4 durable-arm threshold), and the explicit statement
-   that **daily/weekly loss windows and live defaults are unchanged**. Record the per-surface relax
-   table (the three rows above) so the bypass cannot silently miss the durable arm.
-2. **Parallel after the ADR** (two independent ≤5-file dispatches; they touch disjoint files):
+   consecutive-loss relax leg: the two-condition gate (D1, boot-resolved per M1), the live-gate
+   skip-before-persist (D2, D5), the shadow two-surface bypass (D3 sentinel + D4 durable-arm threshold,
+   including the three `haltedUntilRiskDayUtcDate` read sites and cold-restart replay parity), the D7
+   bias marker + analysis constraint, and the explicit statement that **daily/weekly loss windows and
+   live defaults are unchanged**. Record the per-surface relax table (the three rows above) so the
+   bypass cannot silently miss the durable arm.
+1a. **Serial — shared-maintainer pre-check (D7).** Before the engine wave, determine where
+   `IDecisionPersistInput` and `IShadowDecisionPersistInput` are defined. **If either lives in
+   `packages/shared/`**, dispatch **`bot-shared-maintainer`** (serial, before engine) to add the
+   `haltRelaxActive` field per CLAUDE.md hard-rule 5. **If both are engine-internal**, skip this step and
+   note that explicitly in the orchestrator verification — no shared dispatch needed.
+2. **Parallel after the ADR (and after 1a if it ran)** (independent ≤5-file dispatches; disjoint files):
    - **`bot-engine-nestjs` Dispatch A (config plumbing, D1):** add `PAPER_RELAX_CONSECUTIVE_LOSS_HALT`
      to `EnvironmentVariables` + the typed getter/resolver on `AppConfigService` — strict boolean
      parse, default-off, non-paper neutralization warning.
@@ -228,6 +326,10 @@ No `packages/shared/` change, no migration, no new reject reason (D6).
      arm threshold; `VirtualPositionLedgerService.maybeArmConsecutiveLossHalt` reads the effective
      threshold. (If A and B share the `AppConfigService` getter and would collide, run them serial
      A→B instead.)
+   - **`bot-engine-nestjs` Dispatch C (bias marker, D7):** add the migration
+     (`halt_relax_active boolean NOT NULL DEFAULT false` on `decisions` + `shadow_decisions`); stamp the
+     column on both persist paths from `resolvedPaperRelaxConsecutiveLossHalt`; wire the
+     `haltRelaxActive` field into the persist inputs. (Serial after 1a if the DTO is shared.)
    - **`devops`** (parallel, independent file): document `PAPER_RELAX_CONSECUTIVE_LOSS_HALT` in
      `.env.example` with the paper-only / default-off caveat.
 3. **Serial — `bot-qa-engineer`**: paired tests per fix item (see Success criteria).
@@ -242,10 +344,14 @@ No `packages/shared/` change, no migration, no new reject reason (D6).
    this plan.**
 
 Orchestrator verifies the actual diff after every wave and **explicitly confirms**: (a) the relaxation
-is `EXCHANGE_ENV=paper`-gated and default-off — a non-paper/testnet boot is byte-identical to pre-M36;
-(b) **both** shadow surfaces (per-call `evaluateGates` and the durable `maybeArmConsecutiveLossHalt`)
-are neutralized under relax; (c) daily/weekly loss windows still halt in every env; (d) no
-`packages/shared/` change, no migration, no new reject reason.
+is `EXCHANGE_ENV=paper`-gated, default-off, and **boot-resolved** (M1) — a non-paper/testnet boot is
+byte-identical to pre-M36; (b) **both** shadow surfaces (per-call `evaluateGates` and the durable
+`maybeArmConsecutiveLossHalt`, including all three `haltedUntilRiskDayUtcDate` reads and the cold-restart
+replay path) are neutralized under relax; (c) daily/weekly loss windows still halt in every env;
+(d) the D7 migration adds `halt_relax_active` to **both** `decisions` and `shadow_decisions`, the column
+is stamped from `resolvedPaperRelaxConsecutiveLossHalt` on both persist paths, and the
+shared-maintainer pre-check result (DTO shared vs engine-internal) is recorded; (e) no new reject
+reason.
 
 ## Success criteria / acceptance tests
 
@@ -264,6 +370,15 @@ are neutralized under relax; (c) daily/weekly loss windows still halt in every e
   `'halted'`. (This is the load-bearing test for D4 — proves the second surface is neutralized.)
 - **Shadow relax off:** the shadow ledger halts at 2 losses exactly as today (both the per-call gate
   and the durable arm).
+- **Cold-restart replay parity (D4 — load-bearing, B2):** replaying a forced-continuation close
+  sequence through the ledger rebuild (`tryClose` → `maybeArmConsecutiveLossHalt`) under relax MUST
+  reproduce the **exact** `haltedUntilRiskDayUtcDate` the live run had — i.e. **unset**. The rebuild
+  must read the effective (sentinel) threshold, not the module const, so a rebuilt ledger never re-arms
+  a halt that did not exist live.
+- **`halt_relax_active` stamping (D7):** rows written while
+  `resolvedPaperRelaxConsecutiveLossHalt` is active are stamped `halt_relax_active = true` on **both**
+  `decisions` and `shadow_decisions`; rows written with relax off (or in non-paper envs) are stamped
+  `false`. The column exists on both tables after migration and defaults to `false`.
 - **Env validation:** `validateEnv.spec.ts` covers `PAPER_RELAX_CONSECUTIVE_LOSS_HALT`; string
   `"false"` / typos / empty collapse to off; the typed getter neutralizes the flag (with a warning)
   when set under a non-paper env.
@@ -279,8 +394,24 @@ are neutralized under relax; (c) daily/weekly loss windows still halt in every e
 - **Default-off, paper-gated.** No live impact: a live or testnet boot can never see the flag on (the
   resolver returns `false` and logs a neutralization warning), so live risk posture is unchanged.
 - **Rollback is a config flip.** Removing `PAPER_RELAX_CONSECUTIVE_LOSS_HALT` (or setting it to
-  anything but `true`) from the paper `.env` and restarting restores the 2-loss halt immediately — no
-  migration to revert, no schema to undo.
+  anything but `true`) from the paper `.env` and restarting restores the 2-loss halt immediately. The
+  D7 `halt_relax_active` column is **additive and inert** (default `false`, written only on the persist
+  path) — it does not need to be reverted to restore the halt; the soak DB simply stops stamping `true`
+  once relax is off.
+- **Loss bound under relax (H2).** `DAILY_LOSS_LIMIT_USDT` ($50) is checked only on **closed** PnL at
+  **entry time**, not intraday. With up to 3 concurrent slots open when the day crosses −$50, each
+  in-flight position can still realize its full stop-to-liquidation loss before the gate fires at the
+  next entry. The worst-case realized daily loss is therefore bounded by:
+
+  ```
+  worstCaseDailyLoss = −DAILY_LOSS_LIMIT_USDT − (openSlots × maxSingleTradeRealizedLoss)
+  ```
+
+  At paper scale (3× leverage, ~$15–30 notional/trade, ~80% liquidation buffer) the overshoot beyond
+  −$50 is **low tens of dollars** — not a blowup. This bound is **acceptable for the paper account**.
+  Note: there is **no intraday unrealized-loss circuit breaker** — the daily gate is closed-PnL and
+  entry-time only. This is unchanged by M36; M36 only removes the consecutive-loss day-halt that
+  previously also capped same-day exposure indirectly.
 - **Backtest unaffected.** The backtest path reads `riskConsts`/`strategyConsts` directly and never
   sets the paper env flag, so M7 replay determinism (ADR 0029, 0032) is preserved.
 - **Worst case if mis-deployed to live** is bounded: even if the flag were somehow set under a live
@@ -289,10 +420,15 @@ are neutralized under relax; (c) daily/weekly loss windows still halt in every e
 
 ## DB safety (HARD — CLAUDE.md invariants #8/#9)
 
-**M36 is migration-free.** The only DB interaction is operational: after deploy, optionally **clear a
-stale `consecutive_loss_halt`** for the current UTC day so a pre-M36 halt does not mask the relaxation.
-This is a scoped `risk_state` update via the existing `clearHaltForDate` / dashboard Resume path —
-**not** a destructive op, no `-v`, no down/revert, no `TRUNCATE`/`DELETE`.
+**M36 has ONE additive migration (D7)** — `halt_relax_active boolean NOT NULL DEFAULT false` added to
+`decisions` and `shadow_decisions`. It is purely additive (new nullable-with-default column), touches no
+existing data, and has no destructive step. Apply it under standard DB safety: **`pg_dump` first**, show
+the path, confirm, then apply — **no** `-v`, no `down`/`revert` in the live soak, no `TRUNCATE`/`DELETE`.
+
+The other DB interaction is operational: after deploy, optionally **clear a stale
+`consecutive_loss_halt`** for the current UTC day so a pre-M36 halt does not mask the relaxation. This is
+a scoped `risk_state` update via the existing `clearHaltForDate` / dashboard Resume path — **not** a
+destructive op, no `-v`, no down/revert, no `TRUNCATE`/`DELETE`.
 
 - **Backup first:** before the engine restart **and** before any `clearHaltForDate`, take a routine
   `pg_dump`
@@ -306,16 +442,21 @@ This is a scoped `risk_state` update via the existing `clearHaltForDate` / dashb
 
 ## Post-deploy steps
 
-1. Take `pg_dump` before the engine restart (prune to 2-deep retention); show the user the path.
-2. Apply the paper `.env` change (`PAPER_RELAX_CONSECUTIVE_LOSS_HALT=true`); **engine restart** (no
-   migration).
+1. Take `pg_dump` before the engine restart **and before the D7 migration** (prune to 2-deep
+   retention); show the user the path and confirm before applying.
+2. **Apply the D7 migration** (`halt_relax_active` on `decisions` + `shadow_decisions`) — additive,
+   after the backup. Then apply the paper `.env` change (`PAPER_RELAX_CONSECUTIVE_LOSS_HALT=true`);
+   **engine restart**.
 3. **Evidence-gated `clearHaltForDate`** for the current UTC day if it is halted on
    `consecutive_loss_halt` (after backup, with user confirmation). Not a routine habit.
 4. **10-min live smoke** per `feedback-milestone-app-smoke` — confirm the engine stays running and a
    cleared consecutive-loss halt does not immediately re-assert on the next tick.
 5. **Outcome-rate confirmation (24–48h):** confirm the soak no longer day-halts after 2 losses and that
    labeled outcomes accrue at a higher daily rate vs the prior 7 days (the 128 previously-blocked
-   attempts is the baseline). Read-only DB querying.
+   attempts is the baseline). Read-only DB querying. **When querying, remember the D7 analysis
+   constraint:** rows with `halt_relax_active = true` are forced-continuation (left-tail, conditional)
+   samples and must be excluded from — or cohorted separately in — any cross-version win-rate /
+   profit-factor / A-B comparison.
 
 ## References
 
