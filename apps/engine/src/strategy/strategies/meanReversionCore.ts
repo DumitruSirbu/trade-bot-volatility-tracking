@@ -1,4 +1,4 @@
-import { DeviationSideEnum, PositionSideEnum, RegimeLabelEnum, SkipReasonEnum, StopTypeEnum } from '@bot/shared';
+import { DeviationSideEnum, IVolatilityDetectedEvent, PositionSideEnum, RegimeLabelEnum, SkipReasonEnum, StopTypeEnum } from '@bot/shared';
 
 import {
     BAND_REENTRY_LOWER_PCT_B,
@@ -48,6 +48,10 @@ export function evaluateMeanReversion(input: IStrategyInput): ISignal {
 
     if (!isExhaustionConfirmed(input)) {
         return skip(SkipReasonEnum.NO_EXHAUSTION_CONFIRMATION);
+    }
+
+    if (isDegenerateReversionGeometry(event, tradeSide)) {
+        return skip(SkipReasonEnum.DEGENERATE_VWAP_GEOMETRY);
     }
 
     return buildOpenSignal({
@@ -143,9 +147,25 @@ function buildMeanReversionExit(input: IStrategyInput, tradeSide: PositionSideEn
     };
 }
 
+// Degenerate VWAP geometry: VWAP sits on (or past) the SAME side of entry as the deviation,
+// so the TP target — drawn from entry toward VWAP — lands on the wrong side of entry and the
+// position can be "taken profit" at a loss. SHORT needs vwap < referencePrice; LONG needs
+// vwap > referencePrice. Skip when that invariant is violated rather than emit a doomed exit.
+function isDegenerateReversionGeometry(event: IVolatilityDetectedEvent, tradeSide: PositionSideEnum): boolean {
+    const vwap = new Money(event.vwapSession);
+    const referencePrice = reconstructReferencePrice(event);
+
+    if (tradeSide === PositionSideEnum.LONG) {
+        return vwap.lessThanOrEqualTo(referencePrice);
+    }
+
+    return vwap.greaterThanOrEqualTo(referencePrice);
+}
+
 // TP target sits between the deviated price and VWAP, offset by half the deviation toward
 // VWAP for conservatism: target = vwap + (price - vwap) × OFFSET. Pure decimal math.
 function computeMeanReversionTakeProfit(input: IStrategyInput) {
+    // Caller guarantees vwapSession is on the deviated side of entry (non-degenerate geometry check in evaluateMeanReversion).
     const { event } = input;
 
     const vwap = new Money(event.vwapSession);

@@ -1,4 +1,5 @@
 import { PositionSlotEnum } from '@bot/shared';
+import { IMarketSnapshot } from '@bot/shared';
 
 import { IProposedExit } from '../../strategy/interface';
 import { IIntentSizing } from './IIntentSizing';
@@ -20,5 +21,12 @@ export interface IOrderIntentApprovedEvent {
     // (LocalProtectiveMonitor breach-close producer) emits this event for the
     // CLOSE path; the field stays non-null on every opening approval. (ADR 0011 §4)
     readonly reservationId: string | null;
+    /**
+     * Evaluation-time market snapshot (gate-verdict-stamped). Frozen at signal time — NOT a
+     * fill-time re-read — so backtest replay reproduces identical entry-analysis columns.
+     * Present on opening approvals; absent on close/reduce/flatten events (entrySnapshot is
+     * never written for de-risking paths).
+     */
+    readonly entrySnapshot?: IMarketSnapshot;
     readonly strategyVersionId: number;
 }

@@ -2,6 +2,7 @@ import {
     ExchangeEnvironmentEnum,
     ExitReasonEnum,
     IExchangeOverfillDriftEvent,
+    IMarketSnapshot,
     OrderIntentActionEnum,
     OrderPolicyEnum,
     PositionSideEnum,
@@ -11,6 +12,7 @@ import {
     QtyAdjustmentReasonEnum,
     StrategyDirectionEnum,
     TransactionTypeEnum,
+    VwapAnchorTypeEnum,
 } from '@bot/shared';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
@@ -29,7 +31,7 @@ import {
 } from '../../common/const';
 import { IOrderIntentUnknownEvent, IPositionClosedEvent, IPositionOpenedEvent } from '../../common/interface';
 import { HaltFlagService } from '../../common/service';
-import { formatMoney, Money, MoneyValue } from '../../common/utils/money';
+import { DecimalValue, formatMoney, Money, MoneyValue } from '../../common/utils/money';
 import { AppConfigService } from '../../config/service';
 import { EXCHANGE_CLIENT, IExchangeClient } from '../../exchange/interface';
 import { PositionEntity } from '../../position/entity';
@@ -1136,7 +1138,51 @@ export class ExecutionService {
             slippageModelPct: plan.slippageCapPct,
             stopGapPct: stopDistancePct,
             flowTypeAtEntry: event.intent.flowType,
+            ...this.mapEntrySnapshotColumns(event.entrySnapshot),
         });
+    }
+
+    // The entry-time analysis columns are written ONCE, at open, from the
+    // evaluation-time snapshot frozen on the approval event (NOT a fill-time re-read) so
+    // backtest replay reproduces identical rows. Absent on close/reduce/flatten approvals
+    // and on the ADD recovery-fallback (entrySnapshot is undefined there), where the mapper
+    // returns an empty object and leaves the columns untouched.
+    private mapEntrySnapshotColumns(snapshot: IMarketSnapshot | undefined): Partial<{
+        vwapAtEntry: MoneyValue;
+        atrAtEntry: MoneyValue;
+        vwapDeviationAtEntry: DecimalValue;
+        idiosyncrasyAtEntry: DecimalValue;
+        signalScoreAtEntry: DecimalValue;
+        openInterestAtEntry: MoneyValue;
+        oiChange5mAtEntry: DecimalValue;
+        fundingAnnualizedAtEntry: DecimalValue;
+        bookDepth10bpsAtEntry: MoneyValue;
+        spreadAtEntryPct: DecimalValue;
+        vwapAnchorType: VwapAnchorTypeEnum;
+        symbolUniverseAgeHours: DecimalValue;
+    }> {
+        if (snapshot === undefined) {
+            return {};
+        }
+
+        try {
+            return {
+                vwapAtEntry: new Money(snapshot.vwap_session),
+                atrAtEntry: new Money(snapshot.atr_14),
+                vwapDeviationAtEntry: new Money(snapshot.vwap_deviation_pct),
+                idiosyncrasyAtEntry: new Money(snapshot.idiosyncrasy_score),
+                signalScoreAtEntry: new Money(snapshot.signal_score),
+                openInterestAtEntry: new Money(snapshot.open_interest),
+                oiChange5mAtEntry: new Money(snapshot.open_interest_change_5m_pct),
+                fundingAnnualizedAtEntry: new Money(snapshot.funding_rate_annualized),
+                bookDepth10bpsAtEntry: new Money(snapshot.book_depth_10bps_usdt),
+                spreadAtEntryPct: new Money(snapshot.bid_ask_spread_pct),
+                vwapAnchorType: snapshot.vwap_anchor_type,
+                symbolUniverseAgeHours: new Money(snapshot.symbol_universe_age_hours),
+            };
+        } catch {
+            return {};
+        }
     }
 
     private async applyProtectiveAttachResult(

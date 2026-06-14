@@ -268,6 +268,7 @@ describe('V1MeanReversionStrategy', () => {
             const confirmed = buildConfirmedInput({
                 event: buildEvent({
                     side: DeviationSideEnum.BELOW,
+                    vwapDeviationPct: -1.5, // negative deviation for BELOW — valid LONG geometry (vwap > referencePrice)
                     bollingerPctB: 0.3, // > 0.2 → re-entered (confirmed)
                     volumeRatio: 2.5,
                     openInterestChange5mPct: 0.5,
@@ -460,6 +461,7 @@ describe('V1MeanReversionStrategy', () => {
             const input = buildConfirmedInput({
                 event: buildEvent({
                     side: DeviationSideEnum.BELOW,
+                    vwapDeviationPct: -1.5, // negative deviation for BELOW — valid LONG geometry (vwap > referencePrice)
                     regimeLabel: RegimeLabelEnum.TRENDING_UP,
                     bollingerPctB: 0.3,
                     openInterestChange5mPct: -1.0,

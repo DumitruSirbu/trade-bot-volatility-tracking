@@ -326,7 +326,7 @@ export class StrategyService implements OnModuleInit {
         await this.recordGateDecision(event, stampedSnapshot, signal, intent, decision);
 
         if (isApprovedOpening(decision)) {
-            this.emitApproval(intent, decision);
+            this.emitApproval(intent, decision, stampedSnapshot);
         }
     }
 
@@ -386,13 +386,14 @@ export class StrategyService implements OnModuleInit {
         return { ...withCount, position_slot: decision.approvedSlot };
     }
 
-    private emitApproval(intent: IOrderIntent, decision: IApprovedRiskDecision): void {
+    private emitApproval(intent: IOrderIntent, decision: IApprovedRiskDecision, entrySnapshot: IMarketSnapshot): void {
         const payload: IOrderIntentApprovedEvent = {
             intent,
             approvedSlot: decision.approvedSlot,
             approvedSizing: decision.approvedSizing,
             clampedExit: decision.clampedExit,
             reservationId: decision.reservationId,
+            entrySnapshot,
             strategyVersionId: this.activeStrategyVersionId,
         };
 

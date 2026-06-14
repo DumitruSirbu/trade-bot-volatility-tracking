@@ -1,5 +1,7 @@
 import { CoinTierEnum } from '@bot/shared';
 
+import { Money } from '../../common/utils/money';
+
 // Risk-gate constants (ADR 0004 §2/§3/§6/§8). All risk lives OUTSIDE the strategy: these
 // are operator-level config, NOT strategy_versions.params (ADR 0004 Conflicts #1). No inline
 // magic numbers in risk code (conventions §Constants Placement).
@@ -245,6 +247,10 @@ export const LIQUIDATION_SAFETY_BUFFER_FACTOR = 0.8;
 // so the SL-inside-liquidation guarantee never under-protects. The liquidation distance is
 // entryPrice x (1/leverage - maintenanceMarginRate); a higher rate => smaller safe distance.
 export const DEFAULT_MAINTENANCE_MARGIN_RATE = 0.005;
+
+// --- cost-aware exit-geometry guard (M35 Finding 3) ---
+
+export const RISK_TAKER_FEE_RATE = new Money('0.0004');
 
 // --- isolated margin default (§13) ---
 

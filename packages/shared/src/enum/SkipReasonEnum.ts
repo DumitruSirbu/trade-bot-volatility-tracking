@@ -3,6 +3,7 @@ export enum SkipReasonEnum {
     REGIME_SUPPRESSED = 'regime_suppressed',
     MARKET_STRESS = 'market_stress',
     NO_EXHAUSTION_CONFIRMATION = 'no_exhaustion_confirmation',
+    DEGENERATE_VWAP_GEOMETRY = 'degenerate_vwap_geometry',
     OUT_OF_SCOPE = 'out_of_scope',
     IDIOSYNCRATIC_TRAP = 'idiosyncratic_trap',
     FLOW_ROUTED_SKIP = 'flow_routed_skip',
