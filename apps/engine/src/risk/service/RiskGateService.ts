@@ -32,6 +32,7 @@ import {
     MARKET_STRESS_RESUME_ELIGIBLE_LEGS,
     MAX_LEVERAGE,
     RESERVATION_TTL_MS,
+    RISK_TAKER_FEE_RATE,
     SAME_BAR_RESUME_CLEAR_TICKS,
     TIER3_VALIDATED_VERSION_IDS,
     TIER_SPREAD_CEILING_PCT,
@@ -465,6 +466,14 @@ export class RiskGateService {
 
         if (clampedExit === null) {
             return this.rejected(intent, RejectReasonEnum.SL_OUTSIDE_LIQUIDATION);
+        }
+
+        if (this.isWrongSideTakeProfit(intent)) {
+            return this.rejected(intent, RejectReasonEnum.TP_WRONG_SIDE);
+        }
+
+        if (this.isTakeProfitBelowCost(intent, context)) {
+            return this.rejected(intent, RejectReasonEnum.TP_BELOW_COST);
         }
 
         return this.reserveAndApprove(intent, context, state, slot.slot, clampedExit, ledger);
@@ -1119,6 +1128,35 @@ export class RiskGateService {
         }
 
         return stop.lessThanOrEqualTo(intent.entryPrice);
+    }
+
+    // A LONG's TP must sit ABOVE entry; a SHORT's TP must sit BELOW. Wrong-side TP would require
+    // adverse price movement to trigger — guaranteed-losing geometry. Reject rather than clamp
+    // (matches the stop-side convention; preserves live/backtest parity).
+    private isWrongSideTakeProfit(intent: IOrderIntent): boolean {
+        const tp = intent.proposedExit.takeProfitPrice;
+        const isLong = intent.tradeSide === PositionSideEnum.LONG;
+
+        if (isLong) {
+            return tp.lessThanOrEqualTo(intent.entryPrice);
+        }
+
+        return tp.greaterThanOrEqualTo(intent.entryPrice);
+    }
+
+    // A valid-side TP that cannot clear round-trip costs is a structural loser — reject rather than allow a guaranteed-losing entry.
+    private isTakeProfitBelowCost(intent: IOrderIntent, context: IRiskGateContext): boolean {
+        const rawSlippage = context.snapshot.estimated_slippage_pct;
+
+        if (!Number.isFinite(rawSlippage) || rawSlippage < 0) {
+            return true;
+        }
+
+        const slippageFraction = new Money(rawSlippage).dividedBy(100);
+        const roundTripCostDistance = intent.entryPrice.times(RISK_TAKER_FEE_RATE.times(2).plus(slippageFraction.times(2)));
+        const tpDistance = intent.proposedExit.takeProfitPrice.minus(intent.entryPrice).abs();
+
+        return tpDistance.lessThanOrEqualTo(roundTripCostDistance);
     }
 
     private tightenStop(intent: IOrderIntent, safeDistance: MoneyValue): IProposedExit {

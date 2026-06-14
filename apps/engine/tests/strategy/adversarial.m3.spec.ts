@@ -597,6 +597,7 @@ describe('M3 adversarial — surface 4: v1 exhaustion confirmation boundary tigh
         const input = buildInput({
             event: buildEvent({
                 side: DeviationSideEnum.BELOW,
+                vwapDeviationPct: -1.5, // negative deviation for BELOW (price below VWAP) — valid LONG geometry
                 bollingerPctB: 0.21,
                 volumeRatio: 2.5,
                 openInterestChange5mPct: 0.5,

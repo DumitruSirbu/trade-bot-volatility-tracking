@@ -883,6 +883,7 @@ describe('RiskGateService', () => {
                 sizing: buildSizing({ leverage: new Money('1') }),
                 proposedExit: buildProposedExit({
                     stopLossPrice: new Money('20000'), // 10000 away
+                    takeProfitPrice: new Money('31000'), // above entry (correct side for LONG)
                     timeStopAtMs: NOW_MS + 30 * 60_000,
                 }),
                 tradeSide: PositionSideEnum.LONG,

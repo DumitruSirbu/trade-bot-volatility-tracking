@@ -6,6 +6,7 @@ For the current milestone plan, see [`docs/plans/`](plans/README.md). For deferr
 
 | ID | Outcome |
 |----|---------|
+| M35 | [M35 — Trade-record integrity (entry-snapshot persistence + wrong-side/sub-cost TP guards) (DONE):](archive/M35.md) |
 | M0 | [M0 — Foundation & scaffolding](archive/M0.md) |
 | M1 | [M1 — Exchange & market data](archive/M1.md) |
 | M2 | [M2 — Persistence & data model](archive/M2.md) |

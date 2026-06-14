@@ -234,7 +234,7 @@ enough, skip frontmatter entirely.
 
 | Field | Value |
 |-------|-------|
-| **ACTIVE** | **M33** — Live exit enforcement ([M33-live-exit-enforcement.md](../../plans/M33-live-exit-enforcement.md)); source [live-exit-enforcement-gap.md](../live-exit-enforcement-gap.md) |
+| **ACTIVE** | **M33** — Live exit enforcement ([M33-live-exit-enforcement.md](../../plans/archive/M33-live-exit-enforcement.md)); source [live-exit-enforcement-gap.md](../live-exit-enforcement-gap.md) |
 | **Last DONE** | **M32** — Dashboard closed positions + Telegram alerts |
 | **Deploy** | M32 engine restart pending; M33 not started (no code landed) |
 | **Next queue** | M15 (gated on M11a soak + testnet drill); slot-C (soak-gated per [tech-debt.md](../../tech-debt.md)) |
@@ -459,4 +459,4 @@ added Phase 0 (resident-context audit, the largest token win), a write protocol 
 guards, the `0024` ADR-collision fix, deep ADR anchors, and pushed back on mutable `status:`
 frontmatter across 42 files. Original phases preserved and renumbered.
 
-**Related:** This initiative does not block M33. M33 agents should continue using [M33-live-exit-enforcement.md](../../plans/M33-live-exit-enforcement.md) and [live-exit-enforcement-gap.md](../live-exit-enforcement-gap.md) until the new routing docs exist.
+**Related:** This initiative does not block M33. M33 agents should continue using [M33-live-exit-enforcement.md](../../plans/archive/M33-live-exit-enforcement.md) and [live-exit-enforcement-gap.md](../live-exit-enforcement-gap.md) until the new routing docs exist.
