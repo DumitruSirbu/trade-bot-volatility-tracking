@@ -919,6 +919,14 @@ export class RiskGateService {
             return RejectReasonEnum.WEEKLY_LOSS_LIMIT;
         }
 
+        // M36 (D5): in paper-soak relax mode the consecutive-loss day-halt is skipped
+        // entirely — no isConsecutiveLossHalt evaluation and no persistHalt, so no
+        // consecutive_loss_halt row is written. Placed AFTER the daily/weekly checks so
+        // those hard limits always evaluate; only the streak halt is relaxed.
+        if (this.appConfig.paperRelaxConsecutiveLossHalt) {
+            return null;
+        }
+
         if (await this.isConsecutiveLossHalt(context)) {
             await this.persistHalt(context, state, RejectReasonEnum.CONSECUTIVE_LOSS_HALT);
 

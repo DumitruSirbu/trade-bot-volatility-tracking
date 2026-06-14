@@ -60,6 +60,11 @@ export const REASON_MOMENTUM_FOLLOW = 'momentum_follow';
 // internal arming threshold for the durable halt flag.
 export const VIRTUAL_LEDGER_CONSECUTIVE_LOSS_HALT_THRESHOLD = 2;
 
+// Paper-relax sentinel passed as haltAfterConsecutiveLosses / arm threshold when
+// PAPER_RELAX_CONSECUTIVE_LOSS_HALT is active — an unreachable streak count so
+// neither the per-call gate nor the durable arm can fire (M36, D3/D4).
+export const SHADOW_GATE_CONSECUTIVE_LOSS_RELAX_SENTINEL = Number.MAX_SAFE_INTEGER;
+
 // --- M11a W2 — ShadowStrategyOrchestratorService (ADR 0029 §2.2) ---
 
 // Discriminator prefix for the `shadow_decisions.shadow_version` text column.

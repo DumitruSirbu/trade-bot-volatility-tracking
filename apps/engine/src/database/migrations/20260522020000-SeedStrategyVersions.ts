@@ -35,7 +35,7 @@ const BASE_PARAMS = {
     require_oi_available: true,
     oi_rising_skip: true,
     consecutive_loss_halt: 2,
-    max_trades_per_symbol_per_day: 2,
+    max_trades_per_symbol_per_day: 10,
     max_trades_per_bar_universe: 1,
     stress_btc_1m_shock_pct: 1.0,
     stress_eth_1m_shock_pct: 1.2,

@@ -167,15 +167,15 @@ describe('Migration round-trip (integration — requires Postgres)', () => {
             status: string;
         }[];
 
-        // After all migrations the corrective migration chain produces:
-        //   v0 (id=1): 'shadow'  — demoted by CorrectActiveStrategyStatus
-        //   v1 (id=2): 'active'  — ensured by EnsureActiveStrategyVersion
-        //   v2 (id=3): 'shadow'  — promoted by PromoteShadowStrategyVersions
-        //   v3 (id=4): 'shadow'  — promoted by PromoteShadowStrategyVersions
+        // After all migrations the paper-soak profile produces:
+        //   v0 (id=1): 'shadow'
+        //   v1 (id=2): 'shadow'  — demoted when v2 momentum promoted (M25)
+        //   v2 (id=3): 'active'  — matches ACTIVE_STRATEGY_VERSION_ID=3
+        //   v3 (id=4): 'shadow'
         expect(rows).toHaveLength(4);
         expect(rows[0]).toMatchObject({ version: 0, direction: 'mean_reversion', status: 'shadow' });
-        expect(rows[1]).toMatchObject({ version: 1, direction: 'mean_reversion', status: 'active' });
-        expect(rows[2]).toMatchObject({ version: 2, direction: 'momentum', status: 'shadow' });
+        expect(rows[1]).toMatchObject({ version: 1, direction: 'mean_reversion', status: 'shadow' });
+        expect(rows[2]).toMatchObject({ version: 2, direction: 'momentum', status: 'active' });
         expect(rows[3]).toMatchObject({ version: 3, direction: 'hybrid', status: 'shadow' });
     });
 

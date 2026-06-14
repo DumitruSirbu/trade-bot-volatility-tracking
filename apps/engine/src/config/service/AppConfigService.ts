@@ -70,6 +70,7 @@ export class AppConfigService {
     private readonly resolvedRevokedJtiMaxRows: number;
     private readonly resolvedMarketStressAutoResumeEnabled: boolean;
     private readonly resolvedPaperRelaxMarketStress: boolean;
+    private readonly resolvedPaperRelaxConsecutiveLossHalt: boolean;
 
     constructor(private readonly configService: ConfigService<EnvironmentVariables, true>) {
         this.resolvedAuthHmacSecret = this.resolveAuthHmacSecret();
@@ -89,6 +90,7 @@ export class AppConfigService {
         this.resolvedRevokedJtiMaxRows = this.parsePositiveIntEnv(REVOKED_JTI_MAX_ROWS_ENV, REVOKED_JTI_MAX_ROWS_DEFAULT);
         this.resolvedMarketStressAutoResumeEnabled = this.resolveMarketStressAutoResumeEnabled();
         this.resolvedPaperRelaxMarketStress = this.resolvePaperRelaxMarketStress();
+        this.resolvedPaperRelaxConsecutiveLossHalt = this.resolvePaperRelaxConsecutiveLossHalt();
     }
 
     get nodeEnv(): NodeEnvEnum {
@@ -148,6 +150,15 @@ export class AppConfigService {
     // invalid-inputs guard or the breadth leg (§2).
     get paperRelaxMarketStress(): boolean {
         return this.resolvedPaperRelaxMarketStress;
+    }
+
+    // M36 — effective paper-only consecutive-loss-halt relax switch. True ONLY when
+    // both EXCHANGE_ENV=paper AND PAPER_RELAX_CONSECUTIVE_LOSS_HALT=true (the same
+    // two-condition gate as paperRelaxMarketStress) — a live/testnet boot can never
+    // see it on, so a non-paper boot is byte-identical to pre-M36. Resolved once at
+    // boot, constant within a run, so the gate's determinism invariant holds.
+    get paperRelaxConsecutiveLossHalt(): boolean {
+        return this.resolvedPaperRelaxConsecutiveLossHalt;
     }
 
     // M25 (ADR 0042 §3) — optional paper override for the idiosyncratic-slot
@@ -586,6 +597,26 @@ export class AppConfigService {
                 `PAPER_RELAX_MARKET_STRESS=true but EXCHANGE_ENV=${this.exchangeEnv} (not paper) — the flag has been NEUTRALIZED ` +
                     '(non-breadth stress legs stay active, identical to pre-M25). If this is intentional (e.g. a copied .env under ' +
                     'inspection), no action needed; if not, check EXCHANGE_ENV.',
+            );
+        }
+
+        return flagEnabled && isPaperEnv;
+    }
+
+    // M36 — same two-condition gate as resolvePaperRelaxMarketStress: the relax is
+    // effective only when EXCHANGE_ENV=paper AND the flag is true. Does NOT derive
+    // on-by-default in paper — relaxing the consecutive-loss halt requires an
+    // explicit paper opt-in. The schema field is already coerced to a strict
+    // boolean (exact 'true'), defaulting to false when absent.
+    private resolvePaperRelaxConsecutiveLossHalt(): boolean {
+        const flagEnabled = this.configService.get('PAPER_RELAX_CONSECUTIVE_LOSS_HALT', { infer: true });
+        const isPaperEnv = this.exchangeEnv === ExchangeEnvironmentEnum.PAPER;
+
+        if (flagEnabled && !isPaperEnv) {
+            this.logger.warn(
+                `PAPER_RELAX_CONSECUTIVE_LOSS_HALT=true but EXCHANGE_ENV=${this.exchangeEnv} (not paper) — the flag has been ` +
+                    'NEUTRALIZED (the consecutive-loss halt stays active, identical to pre-M36). If this is intentional (e.g. a ' +
+                    'copied .env under inspection), no action needed; if not, check EXCHANGE_ENV.',
             );
         }
 

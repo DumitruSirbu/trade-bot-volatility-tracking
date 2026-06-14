@@ -498,17 +498,15 @@ describe('Repository integration tests (require Postgres with migrations run)', 
             }
         });
 
-        it('v1 is the only active version after all migrations (v0=shadow, v2–v3=shadow)', async () => {
-            // After EnsureActiveStrategyVersion20260622000000 the configured live
-            // strategy (id=2, version=1) holds status='active'; v0 was demoted to
-            // 'shadow' by CorrectActiveStrategyStatus, and v2–v3 were promoted to
-            // 'shadow' by PromoteShadowStrategyVersions.
+        it('v2 momentum is the only active version after all migrations (paper soak)', async () => {
+            // PromoteMomentumStrategyVersionActive aligns status='active' with
+            // ACTIVE_STRATEGY_VERSION_ID=3 (strategy_versions_id=3, version column=2).
             const active = await strategyVersionRepo.findActive();
             const activeVersionNumbers = active.map((v) => v.version);
 
-            expect(activeVersionNumbers).toContain(1);
+            expect(activeVersionNumbers).toContain(2);
             expect(activeVersionNumbers).not.toContain(0);
-            expect(activeVersionNumbers).not.toContain(2);
+            expect(activeVersionNumbers).not.toContain(1);
             expect(activeVersionNumbers).not.toContain(3);
         });
 
