@@ -157,6 +157,7 @@ the arm cannot fire on replay either. This parity is a **load-bearing acceptance
 criteria): replaying a forced-continuation close sequence under relax MUST reproduce the exact
 `haltedUntilRiskDayUtcDate` state the live run had (i.e. unset).
 
+
 **Decision — make the arming threshold a per-call input, not a skip of the arm logic.** The cleanest,
 most consistent option is to thread the *effective* consecutive-loss threshold into the ledger the
 same way `evaluateGates` already takes `haltAfterConsecutiveLosses` per call:
