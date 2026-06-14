@@ -5,86 +5,312 @@ modules: [execution, position, risk]
 
 # M33 — Live exit enforcement (time-stop + paper protective simulation + entry cashflow)
 
-**Status:** DONE (2026-06-13)  
-**Type:** Bug-fix milestone. Engine-only. **No schema migration**. **No `packages/shared/` change**.  
-**Source defect doc:** `docs/wip/done/live-exit-enforcement-gap.md`  
-**Outcome:** See `docs/milestone-log/archive/M33.md`
+**Status:** PLANNED — architect design wave; no code landed.
+**Type:** Bug-fix milestone. Engine-only. **No schema migration** (see §Milestone scope). **No `packages/shared/` change** (confirmed in §Files expected to change).
+**Source defect doc:** `docs/wip/live-exit-enforcement-gap.md`
+**Owns ADR amendments:** 0011 (new §9 — live time-stop enforcer, event-driven, gate-routed; plus a shared close-in-flight registry consulted by all close producers), 0008 (new §7 — paper + `exchange_side` does not disarm the local layer; the disarm is exchange-protection-confirmed-only in LIVE/TESTNET), 0012 (§5 — entry-transaction `cashflow` is always written, never defaulted), **0015 §4.6 (amend — live time-stop fill is mark-price + taker slippage at the first-crossing tick, NOT slippage-free `bar.open`; bound the expected per-exit divergence; AND note that the live decision **timestamp** may lead backtest by up to one bar interval for mid-bar deadlines — fail direction is earlier exit, more conservative, never a missed exit — Composer A3)**. One **new ADR is NOT required** — all four fixes/amendments are changes to existing locked contracts plus reaffirmations of their invariants.
 
 ---
 
-## Brief
+## Goal
 
-Three linked enforcement gaps in live/paper mode prevented positions from closing via their declared exits (SL, TP, time-stop):
+Every position that opens in live or paper mode must be guaranteed to close via its declared exits — stop loss, take profit, or time stop — without manual intervention. Live/paper enforcement **decisions** reproduce the backtest reference (`BacktestRunnerService.checkPositionExit`): the same exit reason fires on the same event, evaluated against event time with no `Date.now()`. **Fill price is NOT claimed to match the backtest** — backtest closes a time-stop at slippage-free `bar.open` at the 5-min bar boundary, whereas the live `REDUCE_MARKET` closes at the first-crossing live tick quote with adverse taker slippage. These are structurally different prices; the enforcer is **event-time deterministic** but the realized fill diverges from backtest by up to one taker slippage tier per time-stop exit. That divergence is documented in the ADR-0015 §4.6 amendment and is acceptable for the soak gate. Today three independent gaps break the close guarantee: (1) no live component compares `now` to `positions.time_stop_at` and emits a gated CLOSE, so a position whose SL/TP never trigger is held forever; (2) under `EXCHANGE_ENV=paper` a successful `exchange_side` protective attach **disarms** `LocalProtectiveMonitor`, but paper mode has no exchange matching engine to fire the simulated SL/TP, so the position sits in an exit vacuum; (3) `recordEntryTransaction` omits `cashflow` and the open-fill audit `INSERT` fails, leaving positions with zero `transactions` rows. M33 closes all three over existing columns, with no migration and no shared-package change.
 
-1. **Missing live time-stop enforcer** — no component compared `now` to `positions.time_stop_at` and emitted a gated CLOSE. Positions with passing deadlines were held indefinitely.
-2. **Paper + `exchange_side` exit vacuum** — after exchange-side protective attach success, `LocalProtectiveMonitor` was disarmed, but paper had no exchange matching engine to fire the simulated SL/TP orders.
-3. **Entry transaction `cashflow` null** (audit gap) — `recordEntryTransaction` omitted `cashflow`, causing entry-fill rows to fail insertion due to NOT NULL column.
+This is a **survival-class enforcement fix** (`dev-qa-cycle.md` §Why: "no position is ever held past its declared exit"). Adversarial QA on idempotency (no double-close across overlapping price ticks and the reconciliation tick) and on paper/live parity is the bar for done.
+
+---
+
+## Problem decomposition
+
+Three sub-problems. Each verified against source read for this plan; file + line citations are to that read.
+
+### Sub-problem 1 (P0) — Missing live time-stop enforcer
+
+**Root cause.** No scheduler, monitor, or reconciliation tick in the live/paper path compares `now` to `positions.time_stop_at` and emits a CLOSE. `LocalProtectiveMonitor` (`apps/engine/src/execution/service/LocalProtectiveMonitor.ts`) only evaluates SL/TP breaches (`evaluateBreach`, `:129`); it has no time-stop branch. `ReconciliationService` (`apps/engine/src/position/service/ReconciliationService.ts`) runs a 30s `@Interval` tick (`:300`) but only does drift reconciliation, never a time-stop sweep. `ExecutionService` stamps `timeStopAt` on the row at open (`ExecutionService.ts:1107`) but nothing reads it back. The strategy proposes `timeStopAtMs` (ADR 0003 §3); the gate validates it on open; **no layer enforces it** — the exact M4/M6 scope gap the WIP names.
+
+**Affected file(s)/class(es).** New enforcer in the execution module (owning class proposed in §Design decisions). Reads a new repository candidate query `PositionRepository.findTimeStopCandidatesBySymbol` (Task 3a — encodes the `OPEN`/`PENDING_OPEN` + qty>0 + non-null-deadline safety predicate; NOT the broader `findLiveRisk()` at `:43`, which includes `CLOSING`). Routes through `RiskGateService.evaluate` (`apps/engine/src/risk/service/RiskGateService.ts`). Emits `ORDER_INTENT_APPROVED_EVENT` so the existing `ExecutionService` reduce-family path submits the close — identical to `LocalProtectiveMonitor.handleBreach` (`LocalProtectiveMonitor.ts:270-331`).
+
+**Backtest reference implementation.** `BacktestRunnerService.shouldHitTimeStop` (`BacktestRunnerService.ts:724-730`): `bar.openTimeMs >= position.timeStopAtMs`, checked **before** the intrabar SL/TP simulation and **returning unconditionally** when true (`checkPositionExit`, `:700-708`: the time-stop branch `return`s before `simulateIntrabarStop` is ever called), then `closePosition(..., 'time_stop', ...)` (`:705`). **Locked ordering: when `time_stop_at` is crossed, time-stop WINS — regardless of whether SL/TP would also have triggered on that tick.** M33's live enforcer must match this: the deadline takes precedence over the SL/TP breach on a same-tick collision (see §Design decisions — the prior draft's SL/TP-priority resolution was inverted vs the reference and is removed).
+
+### Sub-problem 2 (P0) — Paper + `exchange_side` exit vacuum
+
+**Root cause.** ADR 0008 §2 step 4 disarms `LocalProtectiveMonitor` once both exchange-side SL+TP acks arrive (`ExecutionService.applyProtectiveAttachResult`, `ExecutionService.ts:1114-1138`). In LIVE/TESTNET that is correct — the exchange's `STOP_MARKET`/`TAKE_PROFIT_MARKET` orders now hold protection. Under `EXCHANGE_ENV=paper`, the soak runs `EXECUTION_MODE=live` (so opens take the full `executeLive` → attach path and write the live `positions`/`transactions` tables — confirmed by M31 §Defect 2), but **there is no exchange matching engine** to fire those protective orders. The `PaperExecutionClient` (`apps/engine/src/paper-mode/service/PaperExecutionClient.ts`) substitutes only the order-command client; `StreamingFillAdapter` (`apps/engine/src/paper-mode/service/StreamingFillAdapter.ts`) simulates open fills but does not replay protective-order triggers against the live tape. Net: in paper, after the disarm, neither layer watches price — SL/TP never fire even when mark crosses the level.
+
+**Affected file(s)/class(es).** `ExecutionService.applyProtectiveAttachResult` (`:1114`) — the disarm site. `LocalProtectiveMonitor` already has the complete, gate-routed breach evaluator (§3/§4 of ADR 0011) — the fix is to **not disarm it in paper**, so the existing event-driven evaluator keeps watching the persisted SL/TP. This is parity with backtest `IntrabarStopSimulator` (`ctx.runState.fillSim.simulateIntrabarStop`, `BacktestRunnerService.ts:712`) by reusing the same `evaluateBreach` decimal comparison the monitor already runs.
+
+**Backtest reference implementation.** `BacktestRunnerService.checkPositionExit` → `simulateIntrabarStop` (`:712`) evaluates SL/TP against the bar's tick path every bar. The live/paper analogue already exists: `LocalProtectiveMonitor.onPriceUpdate` (`LocalProtectiveMonitor.ts:157`) runs the same side-aware decimal breach check per `price.update`. Keeping it armed in paper makes paper SL/TP enforcement identical to the local-fallback path that backtest parity is already proven against (ADR 0011 §2 "backtest parity").
+
+### Sub-problem 3 (P1 — audit, not stuck-state root cause) — Entry transaction `cashflow` null
+
+**Root cause.** `recordEntryTransaction` (`ExecutionService.ts:1048-1069`) calls `transactions.recordTerminal({ positionId, type, side, price, qty, fee, clientOrderId, exchangeOrderId })` — it **omits `cashflow`**. The `transactions.cashflow` column is `numeric NOT NULL` (`TransactionEntity.ts:46`); the TypeORM `default: '0'` is a DDL-level default that does not apply because the decimal transformer serializes the absent property to `null` in the `INSERT`, so the row is rejected with `null value in column "cashflow"`. The reduce/close path already does it right: `cashflow = isReduceOrCloseType(txType) ? computeFillCashflow(...) : new Money(0)` (`ExecutionService.ts:401-403`). Open/add fills carry no realized cashflow (ADR 0012 §1), so the correct value is `new Money(0)`.
+
+**Affected file(s)/class(es).** `ExecutionService.recordEntryTransaction` (`:1048`) — one added field. Fail-loud wrapping already exists (`recordEntryTransactionOrEscalate`, `:1017`, from M31), so a regression of this kind now escalates instead of silently dropping the audit row — but the row should never fail in the first place.
+
+**Backtest reference implementation.** N/A — backtest writes its own ledger (`BacktestPnLLedger`), not the live `transactions` table. The parity reference is the live **reduce path** in the same service (`:401-403`).
+
+---
 
 ## Design decisions
 
-### 1. Event-driven time-stop enforcer (`PositionTimeStopEnforcer`)
+### Fix 1 — Live time-stop enforcer (`PositionTimeStopEnforcer`)
 
-- **Subscribed to `price.update`:** every tick, check if any open position's `timeStopAtMs` deadline has passed.
-- **In-memory deadline index:** `Map<symbol, Map<positionId, timeStopAtMs>>` with a scalar `earliestTimeStopMs` fast-path (one comparison per tick across all symbols).
-- **Synchronous `SharedCloseCoordinator.tryAcquire` before any `await`:** the enforcer acquires a slot synchronously before submitting to `RiskGateService`, ensuring time-stop WINS over concurrent `LocalProtectiveMonitor.handleBreach` on the same tick.
-- **Gate-routed close intent:** constructs an `IOrderIntent` with `intentAction = CLOSE`, `eventId = time-stop-${positionId}-${tickMs}`, routes through `RiskGateService.evaluate` (no direct `ExecutionService` bypass). Emits `exitReason = TIME_STOP`.
+- **Owning class/service.** New `PositionTimeStopEnforcer` in `apps/engine/src/execution/service/` — same module as `LocalProtectiveMonitor`, because it shares the exact pattern (price-driven, gate-routed, emits `ORDER_INTENT_APPROVED_EVENT`) and must sit beside the SL/TP monitor so the two evaluators are reviewed together. It is **not** added to `ReconciliationService` (that tick uses `Date.now()` and is drift-only; mixing a deadline sweep into it muddies SRP and breaks determinism).
+- **ADR.** Amends **ADR 0011** with a new §9 ("Live time-stop enforcement + shared close-in-flight registry"): the time-stop is enforced by an event-driven enforcer that, on each `price.update`, closes any live-risk position whose `time_stop_at <= eventTimestampMs`, routing the CLOSE through `RiskGateService.evaluate` exactly as the SL/TP monitor does, and **all close producers acquire a slot in the shared `SharedCloseCoordinator` registry before emitting** (see Fix 1b). No new ADR.
+- **Collision ordering — time-stop WINS (matches the locked backtest reference), with synchronous arbitration.** `BacktestRunnerService.checkPositionExit` evaluates `shouldHitTimeStop` first and `return`s before `simulateIntrabarStop` is ever called. The live path must reproduce this **decision**: when `time_stop_at` is crossed, the time-stop close fires regardless of whether SL/TP would also have triggered on that tick.
+  - **The arbitration MUST be decided before any `await` (GBT H1).** `prependListener` only orders **listener invocation**; it does NOT serialize async completion. If the enforcer's handler runs first but then `await`s a DB read (`findLiveRisk`) before acquiring the slot, the monitor's handler can run during that suspension, acquire the slot, and SL/TP wins despite the prepend — the race the prior draft missed. The fix: the enforcer determines due-ness and **acquires the coordinator slot synchronously, before its first `await`**. This is made possible by the **in-memory deadline index** (below): the enforcer's due-check (`event.timestampMs >= deadline AND state ∈ {OPEN, PENDING_OPEN}`) reads in-memory state and `coordinator.tryAcquire(positionId)` is a synchronous set operation — both complete in the same synchronous tick of the enforcer's handler, before any DB round-trip. Only **after** the slot is held does the enforcer `await` the qty re-read and the gate. `LocalProtectiveMonitor.handleBreach` then finds the slot held and skips. The prior draft's `isBreachInFlight` cross-check that gave SL/TP priority is **removed** — it was inverted vs the reference.
+- **Data-flow: detection → risk gate → execution → lifecycle → DB.**
+  1. **Detection — synchronous, in-memory-first.** `@OnEvent(PRICE_UPDATE_EVENT)` handler. The enforcer maintains a small **in-memory deadline index** (`Map<symbol, Map<positionId, timeStopAtMs>>`, plus a scalar `earliestTimeStopMs`) armed at open and updated on lifecycle events. On each tick: **synchronously** check `event.timestampMs >= earliestTimeStopMs`; if not, return immediately (no DB read — Gemini 3.1 / Composer A4: avoids a `SELECT` on every one of hundreds-per-second ticks). If the cheap guard passes, look up the symbol's due positionIds **from the index** (still synchronous), and for each due positionId `coordinator.tryAcquire(positionId)` **before any `await`** (the GBT H1 synchronous-arbitration requirement). A position is **due** when all hold: a non-null deadline; `event.timestampMs >= deadline`; **and `state ∈ {OPEN, PENDING_OPEN}`** (HIGH L1 — exclude `CLOSING`/`RECONCILING`). The in-memory index carries the state needed for the synchronous check; the authoritative re-validation against the DB happens in step 3 after the slot is held.
+     - **Repository safety predicate (GBT M1).** Where the enforcer does read the DB (step 3 re-read, and the index-rebuild on boot), it uses a dedicated, intention-revealing method — `PositionRepository.findTimeStopCandidatesBySymbol(symbol)` encoding `symbol = :symbol AND qty > 0 AND state IN (OPEN, PENDING_OPEN) AND time_stop_at IS NOT NULL` — **not** a raw `findLiveRisk()` filtered in the service. This keeps the `CLOSING`-exclusion safety predicate at the repository layer so a future caller cannot accidentally reuse `findLiveRisk()` (which is `state != CLOSED AND qty > 0` and **does** include `CLOSING`) and re-introduce the HIGH L1 bug.
+     - **Determinism:** the deadline is compared against the **event timestamp** (`IPriceUpdateEvent.timestampMs`), never `Date.now()` — so M7 backtest replay (which re-emits `price.update` with the bar's event time) reproduces the same time-stop **decision** (the realized fill price still diverges by one taker slippage tier per the Goal / ADR-0015 §4.6 amendment).
+  2. **PENDING_OPEN promote.** A due row still in `PENDING_OPEN` is promoted `PENDING_OPEN → OPEN` before the close intent is built — reusing the M31 `promotePendingOpenBeforeClose` pattern in `ExecutionService.applyReduceFillToPosition` (the close lands as a reduce-family terminal whose source row may be `pending_open`; ADR 0009 §6.3 generalized two-step). The enforcer does NOT add a second promote site — it emits the standard CLOSE intent and the M31-safe reduce path performs the promote. The enforcer's job is only to ensure it does not skip a `PENDING_OPEN` row at the due-check (it is an eligible source state above).
+  3. **Qty re-read (MEDIUM Q1).** Immediately before building the close sizing, re-read the current qty via `PositionRepository.findById(positionId)` — `findLiveRisk()` was loaded once at tick start and a partial reduce between load and emit would make the close qty stale. This mirrors `LocalProtectiveMonitor.handleBreach`'s fresh `findById` at breach time (`LocalProtectiveMonitor.ts:278`). If the re-read row is no longer due-eligible (closed, qty<=0, or state ∉ {OPEN, PENDING_OPEN}), abort the emit and release the registry slot.
+  4. **Risk gate.** Build a CLOSE `IOrderIntent` (`intentAction = CLOSE`, `tradeSide` = opposite of position side, full **re-read** remaining qty, `exitReason = ExitReasonEnum.TIME_STOP`, deterministic `eventId = time-stop-enforcer-${positionId}`) and a minimal de-risk `IRiskGateContext` keyed on `event.timestampMs` — both mirror `LocalProtectiveMonitor.buildCloseIntent` / `buildDeRiskContext` (`LocalProtectiveMonitor.ts:352-427`). Call `riskGate.evaluate(intent, context)`. De-risking is auto-approved (ADR 0004 §2); a reject is a contract violation → log error, release the registry slot, retry next tick (same posture as `handleBreach`, `:298-310`).
+  5. **Execution.** On approval emit `ORDER_INTENT_APPROVED_EVENT` with the position's existing slot/sizing → the unchanged `ExecutionService` reduce-family path submits the `REDUCE_MARKET` close.
+  6. **Lifecycle.** Close fill drives `PENDING_OPEN → OPEN → CLOSING → CLOSED` (M31 promote-safe path) with `exit_reason = time_stop`; `POSITION_CLOSED_EVENT` fires; `RiskStateLifecycleListener` recomputes `risk_state`; `LocalProtectiveMonitor.onPositionStateTransitioned` disarms (`:180`).
+  7. **DB.** `positions.state = closed`, `exit_reason = 'time_stop'`, `closed_at`, `realized_pnl` set; a `close` transaction row booked.
+- **Idempotency: how double-fire is prevented (BLOCKER L1 / HIGH L2 resolved via Fix 1b).** The enforcer acquires the position's slot in the **shared `SharedCloseCoordinator`** registry (Fix 1b) **synchronously, before its first `await`** (GBT H1), and releases it per the locked release table (Fix 1b). The slot is the single in-memory "a CLOSE intent is already in flight for this positionId" fact that the monitor, the enforcer, and the reconciliation-flatten producer all consult — so a same-tick collision between any two producers emits exactly one close. The deterministic `eventId` backs the in-memory slot with the executor duplicate-id guard, but the registry is the load-bearing dedup (the executor guard does NOT catch two closes with different `eventId`s — the exact double-close BLOCKER L1 names). Release is per-outcome (see the Fix 1b table): on `CLOSED`, gate-reject, and `halted`/`dry_run` expiry matching the enforcer's own `time-stop-enforcer-${positionId}` prefix (NOT the monitor's `local-monitor-breach-` parser; NOT `ORDER_INTENT_UNKNOWN_EVENT`, which means reconciliation owns the row).
+- **Paper vs live parity.** The enforcer is mode-agnostic: it reads the in-memory deadline index + `findTimeStopCandidatesBySymbol` and `price.update`, all of which exist identically in live, paper, and backtest. No `EXCHANGE_ENV` branch. In paper the close fills via `StreamingFillAdapter`; in live via the exchange; in backtest via `closePosition`. Same enforcer code, same deadline **decision**, same event time (fill price diverges per the Goal).
 
-**Collision ordering (locked):** when a tick arrives, if the enforcer's `tryAcquire` succeeds, the monitor finds the slot held and skips (via `isHeld(positionId)` check). Time-stop always takes precedence on the same tick.
+### Fix 1b — Shared close-in-flight registry (`SharedCloseCoordinator`) — resolves BLOCKER L1 + HIGH L2
 
-### 2. Paper mode SL/TP persistence and re-arm
+- **Owning class/service.** New `SharedCloseCoordinator` in `apps/engine/src/execution/service/` — a tiny in-memory registry (`Set<number>` of positionIds with a CLOSE intent in flight) with `tryAcquire(positionId): boolean` (atomic check-and-set; returns false if already held), `release(positionId): void`, and `isHeld(positionId): boolean`. No DB, no events of its own.
+- **Why a shared registry, not per-producer flags.** The prior draft's asymmetric `isBreachInFlight` check was one-directional: the enforcer checked the monitor, but `LocalProtectiveMonitor.handleBreach` had **no reciprocal guard**, so the enforcer could emit a close and, before the fill landed, SL/TP could cross and the monitor would fire a **second** close with a different `eventId` (executor dedup misses it — BLOCKER L1). A single registry that **every** close producer must `tryAcquire` before emitting makes the dedup symmetric and total.
+- **Close producers that MUST consult the registry (write + read before emitting a CLOSE intent).** Enumerated against the **actual current emit sites** (the prior "identify during implementation" wording was too vague for a binding safety invariant — GBT H4 / Composer A2):
+  1. `PositionTimeStopEnforcer` (Fix 1) — acquire before the gate call; release on reject/abort.
+  2. `LocalProtectiveMonitor.handleBreach` (`:270`) — replace the internal `breachInFlight` set with `tryAcquire`/`isHeld` against the shared registry; if the slot is already held (e.g. time-stop won this tick), skip emitting (this is the reciprocal guard the prior draft lacked).
+  3. `ReconciliationService.flattenAdoptedForeignPosition` (emits `ORDER_INTENT_APPROVED_EVENT` for a foreign-position close, `:814`) — **the one concrete gate-routed flatten-like producer that exists today.** It lives in `PositionModule`, not `ExecutionModule`, so the registry must be exported from a module both can import without worsening the existing `ExecutionModule`/`PositionModule` edge — see "Module placement" below. It must `tryAcquire` before emit and `release` on abort.
+  4. **Kill-switch FLATTEN is OUT OF SCOPE for the registry wiring in M33.** The control-plane `FLATTEN_COORDINATOR` is wired to `LoggingFlattenCoordinator` (`apps/engine/src/control/interface/IFlattenCoordinator.ts:36-42`), which **only logs — it does not emit any CLOSE intent today** (the real gate-routed flatten is deferred to W6). There is therefore no kill-switch close to dedup yet. Note in ADR 0011 §9 that when W6 replaces `LoggingFlattenCoordinator` with a real gate-routed flatten producer, that producer MUST acquire the coordinator before emitting; D-FL tests until then run against the reconciliation flatten path (item 3) or a test-double `IFlattenCoordinator` with real gate-routed emits.
+- **Module placement.** `SharedCloseCoordinator` is a leaf provider with no dependencies. Place it where both `ExecutionModule` (enforcer + monitor) and `PositionModule` (`ReconciliationService`) can inject it without a new cycle — either in a small shared/common engine module that both already import, or in whichever of the two is already imported by the other. The implementer confirms the import direction before wiring; **do NOT duplicate the provider** (two instances = two registries = the double-close the registry exists to prevent). If a clean single-provider placement is not reachable without a new module cycle, STOP and escalate to the architect.
+- **Release semantics — explicit state table (GBT H2 / Composer A1 / Gemini 3.2).** Releasing only on `CLOSED` + gate-reject + `halted` expiry is incomplete: an approved-but-failed close, a dry-run expiry, or an unknown/reconciling terminal would leave the slot held forever and make the position permanently uncloseable. Releasing too broadly (e.g. on generic `disarm()`) can double-emit while a close is still resolving. The coordinator release contract is therefore pinned per outcome:
 
-In `EXCHANGE_ENV=paper`, `ExecutionService.applyProtectiveAttachResult` no longer disarms `LocalProtectiveMonitor` after a successful exchange-side attach. The monitor remains armed and continues to evaluate SL/TP breaches via `price.update`, in parity with backtest `IntrabarStopSimulator`.
+  | Outcome / event | Release the slot? | Rationale |
+  |---|---|---|
+  | `POSITION_STATE_TRANSITIONED → CLOSED` | **Yes** | Terminal; the close completed. |
+  | Gate returns non-APPROVED on the de-risk close | **Yes** | No order was submitted; retry on the next tick is correct. |
+  | `ORDER_INTENT_EXPIRED_EVENT`, `reason='halted'` (matching producer eventId prefix) | **Yes** | No order resting; ADR 0011 §4 last-line-of-defense retry. |
+  | `ORDER_INTENT_EXPIRED_EVENT`, `reason='dry_run'` (matching prefix) | **Yes** | No live order; retry is harmless and correct. |
+  | `ORDER_INTENT_UNKNOWN_EVENT` (matching prefix — non-clean reduce terminal / reconciling) | **No** | An order may still be resolving and reconciliation now owns the row; re-emit would double-submit. The slot is released only when reconciliation drives the row to `CLOSED` (or a subsequent terminal that does). |
+  | Generic `LocalProtectiveMonitor.disarm(positionId)` | **No** | `applyReduceFillToPosition` calls `disarm` **before** the durable `CLOSED` write; releasing here lets a later tick emit a second close. `disarm` clears only the monitor's SL/TP arm state — it does **not** touch the shared registry. |
 
-**Restart re-arm (Option A):** SL/TP prices are persisted at `createPositionFromFill` time (alongside `timeStopAt`, before the protective attach), closing a pre-attach crash window. On boot, `phase4cRearmLocalMonitor` re-arms `PENDING_OPEN` rows (all envs) and paper `exchange_side` rows from persisted prices. LIVE/testnet `exchange_side` rows are not re-armed (the exchange holds protection).
+  The enforcer and the monitor each release **only their own** slots, keyed on their respective eventId prefixes (`time-stop-enforcer-` / `local-monitor-breach-`); the reconciliation flatten releases on its own emit's abort/terminal. **Open gap acknowledged:** an approved close whose execution throws inside `ExecutionService.onOrderIntentApproved` (`:113-116`) with no subsequent expiry/unknown/closed event would still leak the slot. Mitigate with a release on any reduce-family terminal event matching the producer prefix; if none of the enumerated events fires, the slot is recovered on the next restart (in-memory registry resets). Add **D-CO-3-adv** (below) to pin the approved-then-execution-throw path.
+- **Durability.** In-memory only; reset on restart is acceptable — the durable layer is the DB position state (a `CLOSING`/`CLOSED` row plus the executor's `clientOrderId` idempotency on the close transaction). The registry prevents the **same-run** double-emit; boot reconciliation (ADR 0014) handles a close that was in flight across a restart.
+- **ADR.** Folded into the ADR 0011 §9 amendment (the registry is the dedup substrate for all gate-routed closes; the release table above is part of the locked contract).
 
-### 3. Entry cashflow explicit zero
+### Fix 2 — Paper protective simulation (do not disarm the local layer in paper)
 
-`ExecutionService.recordEntryTransaction` now explicitly passes `cashflow: new Money(0)` in the `recordTerminal` call (matching the reduce path's pattern). Closes the NOT NULL insertion failure.
+- **Owning class/service.** `ExecutionService.applyProtectiveAttachResult` (`:1114`) — the disarm site. The watching logic itself is **not re-implemented**: `LocalProtectiveMonitor`'s existing event-driven `evaluateBreach` loop is the simulator. We change **whether we disarm**, not how we watch.
+- **ADR.** Amends **ADR 0008** with a new §7 ("Paper mode: exchange-side attach does not disarm the local layer"): in `EXCHANGE_ENV=paper`, an `exchange_side` attach success **keeps `LocalProtectiveMonitor` armed** because there is no exchange matching engine to fire the protective orders; the local monitor is the SL/TP enforcer in paper, in parity with backtest `IntrabarStopSimulator`. In LIVE/TESTNET the disarm is unchanged (the exchange holds protection). `protective_order_type` still flips to `exchange_side` for audit/dashboard accuracy — only the disarm is suppressed.
+- **Decision: keep armed, do not re-arm at runtime.** The plan explicitly does **not** re-arm a fresh monitor entry or build a second simulation path at runtime (the WIP's "either keep local monitor armed … or simulate exchange stop triggers" — we choose the first, less invasive option). The monitor is already armed synchronously at open (ADR 0008 §2 step 2, before attach). Fix 2 is a single guard: in paper mode, the `exchange_side` success branch skips `localProtectiveMonitor.disarm(positionId)`. The in-memory arm holds the `stop_loss_price`/`take_profit_price` the monitor was armed with at open.
+- **Restart re-arm — HIGH L3 (in scope, Option A).** The runtime arm is in-memory and is lost on restart. Boot phase 4c (`EngineBootstrapService.phase4cRearmLocalMonitor`) currently re-arms only `LOCAL_FALLBACK` rows, and a paper `exchange_side` row has **null `stop_loss_price`/`take_profit_price` on the row** (they are never persisted — ADR 0011 §7 chose option (a) but the live writer was never wired for the `exchange_side` path), so after any restart a paper `exchange_side` position has only time-stop as an exit until it closes. **Decision: pull SL/TP persistence into scope (Option A).** Persist `stop_loss_price` and `take_profit_price` on the position row at protective-attach time, and widen phase 4c to re-arm paper `exchange_side` rows from the persisted prices. This makes paper SL/TP survive a restart and removes the go-live gap rather than deferring it. See Task 5. (The columns already exist per ADR 0011 §7 / the M6 migration — confirm during implementation; if absent, this becomes a shared+migration item and the implementer STOPs to escalate, since the plan is otherwise migration-free.)
+- **Data-flow.** Open fill → `arm(positionId, SL, TP)` (unchanged) → persist SL/TP on the row at attach (Task 5) → exchange-side attach acks → `applyProtectiveAttachResult`: if `EXCHANGE_ENV=paper`, **skip disarm**, set `protective_order_type='exchange_side'`. Thereafter every `price.update` runs `LocalProtectiveMonitor.onPriceUpdate` → `evaluateBreach` → gate-routed CLOSE (existing path). On restart, phase 4c re-arms from the persisted SL/TP. Detection → gate → execution → lifecycle → DB is the already-proven ADR 0011 §4 flow.
+- **Idempotency.** `LocalProtectiveMonitor`'s emit is now gated by the shared `SharedCloseCoordinator` (Fix 1b), so a paper SL/TP close cannot collide with a time-stop or FLATTEN close on the same position. No per-monitor flag remains.
+- **Paper vs live parity.** This is the parity fix: live disarms (exchange protects), paper stays armed (local monitor protects), and paper survives restart (Task 5 persistence). Both close at the same mark-price level via the same `evaluateBreach`; the only difference is which layer fires the order — exactly the ADR 0008 §3 fallback semantics, now made the default in paper.
 
-### 4. Shared close-in-flight registry (`SharedCloseCoordinator`)
+### Fix 3 — Entry transaction `cashflow`
 
-All gate-routed close producers (enforcer, monitor, reconciliation, future flatten) use a single `SharedCloseCoordinator` to prevent concurrent double-close on the same position per tick. `tryAcquire` is synchronous and must be called before emitting the intent. Releases happen on:
+- **Owning class/service.** `ExecutionService.recordEntryTransaction` (`:1048`).
+- **ADR.** Amends **ADR 0012 §5** with a one-line clarification: entry (open/add) transactions are written with `cashflow = 0` explicitly (not relying on a DDL default), so the open-fill audit row is never rejected. No new ADR.
+- **Data-flow.** Add `cashflow: new Money(0)` to the `recordTerminal` payload at `:1054`. Open/add fills carry no realized cashflow (ADR 0012 §1); `0` is correct and matches the reduce path's non-close branch (`:403`).
+- **Idempotency.** Unchanged — `recordTerminal` is already idempotent on `clientOrderId` (`TransactionRepository.ts:61-78`).
+- **Paper vs live parity.** Both modes run `recordEntryTransaction` on the live table (paper soak uses `EXECUTION_MODE=live`); the one-line fix is mode-agnostic.
+- **Scope discipline.** This is **one line**. No reorder of arm/attach/record (ADR 0008 §2 untouched), no new event, no helper extraction. Do not scope-creep.
 
-- **Primary:** `POSITION_STATE_TRANSITIONED → CLOSED` event (durable close).
-- **Exception safety:** try/catch wrapping the gate call releases on unexpected throw.
-- **Never on disarm:** the monitor's disarm does not release the slot.
-- **Never on unknown intents:** reconciliation owns the slot until a durable event writes.
+---
 
-## ADR amendments (locked)
+## Key constraints (binding)
 
-- **ADR 0008 §7 (new):** Paper mode SL/TP persistence and re-arm logic.
-- **ADR 0011 §9 (new):** Live time-stop enforcer + shared close-in-flight registry.
-- **ADR 0012 §1c (new):** Explicit zero cashflow for entry transactions.
-- **ADR 0015 §4.6.1 (new subsection):** Live-vs-backtest fill-price divergence for time-stop exits (acceptable, documented).
+- **Time-stop watcher routes through `RiskGateService` — no direct exchange/execution bypass.** The enforcer never calls `ExecutionService` or the exchange client; it emits `ORDER_INTENT_APPROVED_EVENT` only after `riskGate.evaluate` approves (ADR 0011 §4, ADR 0008 §6 reviewer must-fix).
+- **Time-stop WINS on a same-tick collision** — matches the locked backtest reference (`shouldHitTimeStop` returns before `simulateIntrabarStop`). Enforced via the shared registry: the enforcer acquires the close slot and the monitor skips when it is held.
+- **One shared close-in-flight registry** (`SharedCloseCoordinator`) is the single dedup substrate for ALL gate-routed closes (time-stop, SL/TP, reconciliation-flatten). No producer emits a CLOSE without `tryAcquire`. This is the only thing preventing a double-close between two producers with different `eventId`s. Its **release contract is a locked per-outcome table** (Fix 1b) — never release on generic `disarm()`, never release on `ORDER_INTENT_UNKNOWN_EVENT` (reconciliation owns the row).
+- **Time-stop arbitration is decided synchronously, before any `await`** — `prependListener` orders invocation but not async completion; the enforcer acquires the coordinator slot from the in-memory deadline index in the same synchronous tick, before its first DB read (GBT H1).
+- **Enforcer acts only on `OPEN`/`PENDING_OPEN` rows** — never `CLOSING`/`RECONCILING`. The `CLOSING`-exclusion predicate lives in `PositionRepository.findTimeStopCandidatesBySymbol` (repository-level safety, not a service-level filter on `findLiveRisk()`).
+- **Paper SL/TP simulation does NOT re-arm the full local monitor at runtime.** The monitor is already armed at open; Fix 2 only suppresses the paper disarm. Restart re-arm is handled by persisting SL/TP on the row (Task 5) + widening phase 4c.
+- **Entry `cashflow` fix is one line.** No scope creep.
+- **Determinism (decision, not fill price).** The enforcer compares `time_stop_at` to the `price.update` **event timestamp**, never `Date.now()` — so live and backtest reproduce the same time-stop **decision**. The realized fill price diverges from backtest by up to one taker slippage tier (ADR-0015 §4.6 amendment).
+- **No new shared types.** All fixes use existing interfaces (`IOrderIntent`, `IRiskGateContext`, `IPriceUpdateEvent`, `ExitReasonEnum.TIME_STOP`). SL/TP persistence (Task 5) uses existing nullable `positions.stop_loss_price`/`take_profit_price` columns — no migration.
+
+---
+
+## Implementation tasks (ordered, grouped by dispatch wave)
+
+Per `docs/best-practices/dev-qa-cycle.md`: ≤5 files per engine dispatch, paired tests per fix item, reviewer continuity, orchestrator verifies every diff.
+
+### Wave 1 — `bot-shared-maintainer`
+
+**None.** Confirmed: `ExitReasonEnum.TIME_STOP` already exists in `@bot/shared` (used by `BacktestRunnerService.closePosition(..., 'time_stop', ...)` and referenced in ADR 0011 §5 cooldown table). `IPriceUpdateEvent`, `IOrderIntent`, `IRiskGateContext` are all present. No shared-package dispatch. (If the engine implementer discovers `TIME_STOP` is missing from the live `ExitReasonEnum` union, STOP and route a one-value add through `bot-shared-maintainer` before proceeding — but the grep for this plan found it in use.)
+
+### Wave 2 — `bot-engine-nestjs`
+
+#### Task 1 — Entry transaction `cashflow` (Fix 3)
+- **File:** `apps/engine/src/execution/service/ExecutionService.ts`, `recordEntryTransaction` (`:1048-1069`).
+- **Change:** add `cashflow: new Money(0)` to the `recordTerminal` payload (`:1054`). One line.
+- **Paired test:** `ExecutionService.recordEntryTransaction.spec.ts` — `records an open transaction with cashflow=0 (no NOT-NULL rejection)`.
+
+#### Task 2 — Paper protective simulation (Fix 2)
+- **File:** `apps/engine/src/execution/service/ExecutionService.ts`, `applyProtectiveAttachResult` (`:1114-1138`).
+- **Change:** in the `exchange_side` success branch, guard the `localProtectiveMonitor.disarm(positionId)` call: skip it when `appConfig.exchangeEnv === ExchangeEnvironmentEnum.PAPER` (the accessor `get exchangeEnv(): ExchangeEnvironmentEnum` already exists on `AppConfigService` at `config/service/AppConfigService.ts:128`; `ExchangeEnvironmentEnum` is already imported there — no new accessor and no raw `process.env` read). Add a code comment citing ADR 0008 §7. `protective_order_type` still set to `exchange_side`.
+- **Paired test:** `ExecutionService.applyProtectiveAttachResult.spec.ts` — `paper mode keeps LocalProtectiveMonitor armed after exchange_side attach success` and `live mode disarms after exchange_side attach success (unchanged)`.
+
+#### Task 3 — `SharedCloseCoordinator` registry + wire the monitor and reconciliation-flatten to it (Fix 1b — BLOCKER L1 / HIGH L2)
+- **File (new):** `apps/engine/src/execution/service/SharedCloseCoordinator.ts` (+ register so BOTH `ExecutionModule` and `PositionModule` can inject the **single** instance — confirm import direction; do not duplicate the provider; escalate if a clean single-provider placement requires a new module cycle. See "Module placement" in Fix 1b).
+- **File (edit):** `apps/engine/src/execution/service/LocalProtectiveMonitor.ts` — replace the internal `breachInFlight` set (`:83`) with `SharedCloseCoordinator`: `handleBreach` calls `coordinator.tryAcquire(positionId)` and **skips emitting if it returns false** (the reciprocal guard the prior draft lacked — if a time-stop already holds the slot this tick, the monitor does not fire a second close). Release wiring follows the Fix 1b release table: release on `CLOSED`, gate-reject, and `halted`/`dry_run` expiry matching the `local-monitor-breach-` prefix; **`disarm()` must NOT release the shared slot** (it clears only the monitor's SL/TP arm state — GBT H2: `applyReduceFillToPosition` disarms before the durable `CLOSED` write).
+- **File (edit):** `apps/engine/src/position/service/ReconciliationService.ts` — `flattenAdoptedForeignPosition` (emits `ORDER_INTENT_APPROVED_EVENT`, `:814`): add `coordinator.tryAcquire` before the emit and `release` on its abort/terminal. This is the **concrete** flatten producer (the kill-switch `LoggingFlattenCoordinator` is a logging stub that emits nothing — out of scope until W6; see Fix 1b item 4).
+- **Change:** `SharedCloseCoordinator` is a tiny `@Injectable()` with `tryAcquire(positionId): boolean` (check-and-set; false if already held), `release(positionId): void`, `isHeld(positionId): boolean`. In-memory `Set<number>`; no DB, no events.
+- **Paired tests:** `SharedCloseCoordinator.spec.ts` — `tryAcquire returns false on a held slot`, `release frees the slot`; plus the cross-producer collision + release-table tests in §Tests required (D-TS-5, D-CO series, D-FL series).
+
+> Replaces the prior asymmetric `isBreachInFlight` accessor. The registry is the single dedup substrate; do NOT also keep a per-producer flag.
+
+#### Task 3a — `PositionRepository.findTimeStopCandidatesBySymbol` (GBT M1)
+- **File (edit):** `apps/engine/src/position/repository/PositionRepository.ts` — add `findTimeStopCandidatesBySymbol(symbol: string): Promise<PositionEntity[]>` encoding `symbol = :symbol AND qty > 0 AND state IN (OPEN, PENDING_OPEN) AND time_stop_at IS NOT NULL`. Keeps the `CLOSING`-exclusion safety predicate at the repository layer (a future caller cannot accidentally reuse `findLiveRisk()`, which includes `CLOSING`, and re-introduce HIGH L1). Used by the enforcer's step-3 re-read and the boot index rebuild.
+- **Paired test:** `PositionRepository.findTimeStopCandidatesBySymbol.spec.ts` — `excludes CLOSING and qty=0 rows; includes OPEN/PENDING_OPEN with a non-null deadline`.
+
+#### Task 4 — `PositionTimeStopEnforcer` (Fix 1)
+- **File (new):** `apps/engine/src/execution/service/PositionTimeStopEnforcer.ts` (+ register in `apps/engine/src/execution/ExecutionModule.ts` and `apps/engine/src/execution/service/index.ts` — mechanical registration, does not count against the file cap per file-cap-pragmatism).
+- **Change:** new `@Injectable()` service:
+  - **In-memory deadline index.** `Map<symbol, Map<positionId, timeStopAtMs>>` + scalar `earliestTimeStopMs`, armed on `POSITION_OPENED_EVENT` (or at attach) and updated/pruned on `POSITION_STATE_TRANSITIONED_EVENT`. Rebuilt on boot from `PositionRepository.findTimeStopCandidatesBySymbol` across held symbols (or the equivalent all-symbol candidate query). This is the **lightweight** index (not the full MEDIUM L1 optimization) — it exists to (a) skip the per-tick DB read and (b) enable synchronous slot acquisition before any `await` (GBT H1).
+  - `@OnEvent(PRICE_UPDATE_EVENT, { prependListener: true }) onPriceUpdate(event)`: **synchronously** `if (event.timestampMs < earliestTimeStopMs) return;` (fast-path; no DB). Otherwise, for each due positionId on `event.symbol` from the index (due = deadline crossed AND `state ∈ {OPEN, PENDING_OPEN}`), call `coordinator.tryAcquire(positionId)` **before any `await`**; if it returns false, skip (a close is already in flight). Only after acquiring does the handler `await` the rest (qty re-read + gate) via `enforceTimeStop`.
+  - **Mechanism note (verified against `@nestjs/event-emitter` 3.1.0 via context7):** `@OnEvent` accepts `OnEventOptions = OnOptions & { prependListener?: boolean }`; eventemitter2 fires listeners in registration order and Nest module-init order across providers is NOT guaranteed, so `{ prependListener: true }` deterministically places the enforcer's handler ahead of the monitor's. **`prependListener` alone is insufficient** — it orders invocation but not async completion; the synchronous acquire-before-`await` above is what actually guarantees time-stop-WINS (GBT H1). Pin BOTH with D-TS-5-adv.
+  - `enforceTimeStop` (runs only after the slot is held): **re-read qty via `findTimeStopCandidatesBySymbol`/`findById` (MEDIUM Q1)** and re-validate due-eligibility against the DB (closed / qty<=0 / state ∉ {OPEN, PENDING_OPEN} → `coordinator.release` and abort); build CLOSE intent (`exitReason = ExitReasonEnum.TIME_STOP`, `eventId = time-stop-enforcer-${positionId}`, full re-read qty) and de-risk context keyed on `event.timestampMs`; `await riskGate.evaluate`; on approval emit `ORDER_INTENT_APPROVED_EVENT`; on reject `coordinator.release` + log error. The M31 `PENDING_OPEN → OPEN` promote happens downstream in `applyReduceFillToPosition` (the enforcer does not add a promote site).
+  - **Release wiring (per the Fix 1b release table):** `@OnEvent(POSITION_STATE_TRANSITIONED_EVENT)` → `coordinator.release` on `toState === CLOSED`; `@OnEvent(ORDER_INTENT_EXPIRED_EVENT)` → release on `reason ∈ {'halted','dry_run'}` whose eventId matches the **enforcer's own** `time-stop-enforcer-${positionId}` prefix (a dedicated parser, NOT `LocalProtectiveMonitor.extractPositionIdFromBreachEventId`); do **NOT** release on `ORDER_INTENT_UNKNOWN_EVENT` (reconciliation owns the row). Index entries are pruned on `CLOSED`.
+  - **Decimal-only money (GBT M3).** All monetary fields in the close intent (`qty`, `notional`, mark/exit) use `Money`/`MoneyValue` exclusively — never JS `number`. State it in the shared `buildDeRiskCloseIntent` helper's contract.
+  - Reuse `LocalProtectiveMonitor`'s intent/context builders by extracting the shared close-intent construction into a small pure helper module (`buildDeRiskCloseIntent`) parameterized on `exitReason` + `eventId` **only if** it does not exceed the file cap; otherwise duplicate the minimal builder with a comment cross-referencing the monitor.
+- **Paired tests:** see §Tests required (D-TS series).
+
+#### Task 5 — Persist SL/TP at position insert + widen boot re-arm (Fix 2 restart — HIGH L3, Option A)
+- **File (edit):** `apps/engine/src/execution/service/ExecutionService.ts` + `apps/engine/src/position/repository/PositionRepository.ts` (`createOpen`) — persist `stop_loss_price` and `take_profit_price` (from `event.clampedExit`) on the **initial position row at `createPositionFromFill` / `createOpen` time, alongside `timeStopAt`** — NOT only at `applyProtectiveAttachResult` (GBT H3). Persisting only at attach leaves a pre-attach crash window: a crash between row-insert (`PENDING_OPEN`, monitor armed in-memory) and attach loses the in-memory arm with no persisted prices to re-arm from, so the Goal's "guaranteed to close through declared exits" would be false for that window. Writing the clamped exits at insert makes every non-closed row re-armable. Columns already exist (nullable `positions.stop_loss_price` / `take_profit_price`, `PositionEntity.ts:48-52`) — **no migration**.
+- **File (edit):** `apps/engine/src/bootstrap/service/EngineBootstrapService.ts` — `phase4cRearmLocalMonitor`: widen the re-arm to include **`PENDING_OPEN` and paper `exchange_side` rows** (in addition to the existing `LOCAL_FALLBACK` re-arm), arming from the persisted `stop_loss_price`/`take_profit_price`. **Read the current `qty` from the DB row when re-arming (Gemini 3.4 / Composer A6)** — a position partially reduced before the restart must re-arm against its remaining qty, not the original open size (the monitor's `handleBreach` already re-reads qty via `findById` at breach time, so the armed struct holds prices only; the test must still pin that a post-restart breach close uses current row qty). Keep the existing qty>0 + non-closed guards (M31). In LIVE/TESTNET, `exchange_side` rows are still NOT re-armed (the exchange holds protection) — gate the `exchange_side` widening on `EXCHANGE_ENV=paper`; the `PENDING_OPEN` widening applies in all envs (the monitor is the only protection during `PENDING_OPEN` regardless of env, ADR 0008 §2).
+- **Paired tests:** `ExecutionService.persistSltp.spec.ts` — `createOpen persists stop_loss_price and take_profit_price on the initial PENDING_OPEN row`; `EngineBootstrapService.phase4cRearmLocalMonitor.spec.ts` — `paper exchange_side row is re-armed from persisted SL/TP on boot`, `PENDING_OPEN row is re-armed in all envs`, `live exchange_side row is NOT re-armed`, `re-arm uses current DB qty after a pre-restart partial reduce`.
+
+> Wave 2 now touches: `ExecutionService.ts`, `LocalProtectiveMonitor.ts`, `SharedCloseCoordinator.ts` (new), `PositionTimeStopEnforcer.ts` (new), `EngineBootstrapService.ts`, `PositionRepository.ts` (Task 3a), `ReconciliationService.ts` (reconciliation-flatten wiring), plus mechanical module/barrel edits. This exceeds the ≤5-file soft cap, so **split into two engine sub-waves with a mini-review between** (per `dev-qa-cycle.md` §1.1): **Wave 2a** — Tasks 1, 2, 3, 3a (cashflow, paper disarm guard, shared registry + monitor/reconciliation-flatten wiring + the candidate repository method); **Wave 2b** — Tasks 4, 5 (enforcer + in-memory deadline index, SL/TP persistence at insert + boot re-arm). 2b depends on 2a's registry and repository method. The mini-review between 2a and 2b MUST confirm the coordinator release table is fully wired (no slot can leak or release early) before the enforcer is added as a fourth producer.
+
+### Wave 3 — `bot-qa-engineer`
+Adversarial QA on: time-stop-WINS same-tick collision **with a delayed enforcer `await`** (proves synchronous arbitration, not just listener order — GBT H1), the full coordinator release table (no early release on `disarm`, no release on UNKNOWN/reconciling, release on CLOSED/gate-reject/halted/dry-run — D-CO series), reconciliation-flatten + enforcer collision (one close), enforcer-vs-`CLOSING`-row exclusion at the repository layer, qty-staleness re-read, restart-with-past-deadline AND restart-while-close-in-flight (one exchange close — D-TS-14/15), `PENDING_OPEN`-past-deadline promote, SL/TP-persisted-at-insert + pre-attach-crash re-arm, event-time determinism (frozen-clock backtest reproduces the live **decision**), paper-disarm parity + paper/PENDING_OPEN restart re-arm with current qty, halt-expiry recovery, and the `cashflow` boundary. Pairs each Wave-2 task with a failure-mode test.
+
+### Wave 4 — Parallel reviewers
+`bot-review-security` + `bot-review-logic` + `bot-review-clean-code` + `bot-review-quant`. Quant must confirm: (a) collision ordering matches the backtest reference (time-stop checked first, returns before SL/TP — time-stop WINS); (b) the documented live-vs-backtest fill-price divergence (one taker slippage tier per time-stop exit) AND the decision-timestamp ≤1-bar lead are correctly bounded in the ADR-0015 §4.6 amendment, conservative fail direction. Logic must confirm: no order path bypasses the gate; the shared registry makes double-close impossible across ALL live producers (monitor, enforcer, reconciliation-flatten); the coordinator **release table** is complete (no leak → uncloseable, no early release → double-close); and **time-stop arbitration is decided synchronously before any `await`** (not merely listener-ordered — GBT H1). Security must confirm the enforcer cannot fire on a flat/closed/`CLOSING` row (repository-level predicate) and the coordinator slot cannot be released by a non-owning producer. Reviewer continuity across rounds per `dev-qa-cycle.md`.
+
+### Wave 5 — `bot-scribe`
+Amend ADR 0011 (§9 — enforcer + shared registry, including the locked coordinator release table, the synchronous-arbitration requirement, and the W6 kill-switch-flatten forward-guard), ADR 0008 (§7 — paper no-disarm; SL/TP persisted at insert closing the pre-attach window), ADR 0012 (§5 — cashflow), **ADR 0015 (§4.6 — live time-stop fill = mark-price + slippage at first-crossing tick, NOT `bar.open`; per-exit fill divergence bound; decision-timestamp may lead backtest by ≤1 bar interval, conservative fail direction)**; close `docs/wip/live-exit-enforcement-gap.md` (move to `docs/wip/done/`); update `docs/milestone-log.md` and `docs/work-log.md`; log the deferred MEDIUM tech-debt (deadline-index hardening — MEDIUM L1; reconciliation-tick fallback for stale-feed symbols — MEDIUM Q2) in `docs/tech-debt.md`.
+
+---
 
 ## Files expected to change
 
-**Engine only (no shared, no migration):**
-- `apps/engine/src/execution/service/PositionTimeStopEnforcer.ts` (new, ~127 lines)
-- `apps/engine/src/execution/service/SharedCloseCoordinator.ts` (new, ~43 lines)
-- `apps/engine/src/execution/service/ExecutionService.ts` (recordEntryTransaction: add cashflow; applyProtectiveAttachResult: paper disarm condition)
-- `apps/engine/src/position/service/LocalProtectiveMonitor.ts` (paper disarm suppression)
-- `apps/engine/src/position/repository/PositionRepository.ts` (findTimeStopCandidatesBySymbol: new query)
-- `apps/engine/src/boot/` (phase4cRearmLocalMonitor: add SL/TP re-arm logic)
-- `apps/engine/src/execution/listener/` (exception handlers for coordinator releases)
+| File | Change type | Owner agent |
+|------|-------------|-------------|
+| `apps/engine/src/execution/service/ExecutionService.ts` | Edit — `cashflow` (Task 1) + paper disarm guard (Task 2) + SL/TP persist at attach (Task 5) | `bot-engine-nestjs` |
+| `apps/engine/src/execution/service/LocalProtectiveMonitor.ts` | Edit — relocate in-flight to `SharedCloseCoordinator`; reciprocal skip when slot held (Task 3) | `bot-engine-nestjs` |
+| `apps/engine/src/execution/service/SharedCloseCoordinator.ts` | New — shared close-in-flight registry (Task 3) | `bot-engine-nestjs` |
+| `apps/engine/src/execution/service/PositionTimeStopEnforcer.ts` | New — live time-stop enforcer (Task 4) | `bot-engine-nestjs` |
+| `apps/engine/src/bootstrap/service/EngineBootstrapService.ts` | Edit — widen phase 4c re-arm to `PENDING_OPEN` + paper `exchange_side` rows; read current qty (Task 5) | `bot-engine-nestjs` |
+| `apps/engine/src/position/repository/PositionRepository.ts` | Edit — `createOpen` persists SL/TP (Task 5) + `findTimeStopCandidatesBySymbol` (Task 3a) | `bot-engine-nestjs` |
+| `apps/engine/src/position/service/ReconciliationService.ts` | Edit — `tryAcquire` before `flattenAdoptedForeignPosition` emit (Task 3, HIGH L2) | `bot-engine-nestjs` |
+| `apps/engine/src/execution/ExecutionModule.ts` (+ `PositionModule.ts` if coordinator placed there) | Edit — register coordinator + enforcer; export coordinator to the flatten producer's module (mechanical) | `bot-engine-nestjs` |
+| `apps/engine/src/execution/service/index.ts` | Edit — barrel exports (mechanical) | `bot-engine-nestjs` |
+| `apps/engine/src/execution/service/*.spec.ts` + `bootstrap/service/*.spec.ts` (new + existing) | New/Edit — paired tests | `bot-qa-engineer` |
+| `docs/architecture/adr/0011-local-sltp-fallback-and-held-symbols.md` | Edit — new §9 | `bot-scribe` |
+| `docs/architecture/adr/0008-sl-tp-attach.md` | Edit — new §7 | `bot-scribe` |
+| `docs/architecture/adr/0012-funding-and-pnl.md` | Edit — §5 clarification | `bot-scribe` |
+| `docs/architecture/adr/0015-backtest-module.md` | Edit — §4.6 live time-stop fill-price divergence | `bot-scribe` |
 
-**ADRs:**
-- `docs/architecture/adr/0008-sl-tp-attach.md` (§7)
-- `docs/architecture/adr/0011-local-sltp-fallback-and-held-symbols.md` (§9)
-- `docs/architecture/adr/0012-funding-and-pnl.md` (§1c)
-- `docs/architecture/adr/0015-backtest-module.md` (§4.6.1)
+**No migration. No `packages/shared/` change.** Confirmed by grep: `ExitReasonEnum.TIME_STOP`, `IPriceUpdateEvent`, `IOrderIntent`, `IRiskGateContext`, `PositionRepository.findLiveRisk()` all exist, and the SL/TP persistence (Task 5) writes existing nullable `positions.stop_loss_price`/`take_profit_price` columns (`PositionEntity.ts:48-52`).
 
-## Dispatch
+---
 
-Wave 1 (architect): ADR amendments 0008/0011/0012/0015 locked.  
-Wave 2 (bot-engine-nestjs): Implementation of enforcer/coordinator/re-arm/cashflow.  
-Wave 3 (bot-qa-engineer): Adversarial QA on idempotency, same-tick collision, paper/live parity.  
-Wave 4 (reviewers × 4): Security, logic, clean-code, quant.  
+## Tests required
 
-## Definition of Done
+All must pass before merge. Each fix item ships a happy-path + adversarial pair (`dev-qa-cycle.md` §2).
 
-- All three sub-problems resolved (enforcer, paper, cashflow).
-- 0 blockers, 0 highs on reviewer pass.
-- 27+ new adversarial tests covering D-TS, D-CO, D-FL, D-PP, D-CF series.
-- Live smoke: position closing at its time-stop deadline on the first post-deploy tick, `exitReason = TIME_STOP`.
-- ADR amendments locked.
+### Fix 1 — `PositionTimeStopEnforcer`
+- **D-TS-1 (happy):** a live-risk position with `time_stop_at` in the past receives a `price.update` whose `timestampMs >= time_stop_at` → exactly one `ORDER_INTENT_APPROVED_EVENT` emitted with a CLOSE intent, `exitReason = TIME_STOP`, full remaining qty, opposite side; gate was called and approved.
+- **D-TS-2 (not yet due):** `price.update.timestampMs < time_stop_at` → no intent emitted.
+- **D-TS-3 (determinism / event-time):** the enforcer compares against `event.timestampMs`, NOT `Date.now()` — assert by feeding a `price.update` whose `timestampMs` is past the deadline while a frozen system clock is before it → close fires (proves backtest replay reproduces the live close).
+- **D-TS-4 (idempotency — burst):** three consecutive past-deadline ticks for the same position → exactly one close intent (shared registry slot dedupes).
+- **D-TS-5-adv (time-stop WINS the collision — BLOCKER Q1 / L1; arbitration-before-await — GBT H1):** on the same tick a position is BOTH past `time_stop_at` AND its SL/TP would breach → the **time-stop** close fires (`exitReason = TIME_STOP`), the monitor's `handleBreach` finds the slot already held by the enforcer and emits **nothing**; exactly one close, with the time-stop reason. **Must assert two distinct properties:** (a) the enforcer's listener is invoked before the monitor's (`prependListener`); AND (b) **inject an artificial `await` delay into any DB call the enforcer makes after the price tick and prove the monitor STILL cannot win** — i.e. the slot was acquired synchronously from the in-memory index before the enforcer's first `await`, so the suspended enforcer does not let the monitor acquire first. Without the delayed-await assertion the test can pass while the live race remains (GBT H1).
+- **D-TS-6-adv (CLOSING-state row — HIGH L1):** a row in `CLOSING` state past its deadline (mid-close, fill not landed) → enforcer emits nothing (due-check excludes states ∉ {OPEN, PENDING_OPEN}).
+- **D-TS-7-adv (flat/closed row):** a `closed` or `qty=0` row is never returned by `findTimeStopCandidatesBySymbol` → enforcer emits nothing even with a past `time_stop_at`.
+- **D-TS-8 (null deadline):** a row with `time_stop_at IS NULL` is excluded by `findTimeStopCandidatesBySymbol` → enforcer never fires, regardless of price.
+- **D-TS-9-adv (qty staleness — MEDIUM Q1):** a partial reduce lands between the index/candidate load and the emit → the enforcer re-reads qty (via `findTimeStopCandidatesBySymbol`/`findById`) after acquiring the slot and the close intent carries the **current** remaining qty, not the stale snapshot; if the re-read shows qty<=0/closed, it releases the slot and aborts.
+- **D-TS-10-adv (PENDING_OPEN promote):** a `PENDING_OPEN` row past its deadline → the close intent is emitted and the downstream `applyReduceFillToPosition` promotes `PENDING_OPEN → OPEN` before closing (M31 pattern), ending `CLOSED` with `exit_reason='time_stop'`; no zombie left.
+- **D-TS-11-adv (gate reject):** gate returns non-APPROVED → registry slot released, error logged, next tick re-evaluates (no stuck suppression).
+- **D-TS-12-adv (halt-expiry recovery):** an in-flight time-stop close expires under halt (`ORDER_INTENT_EXPIRED_EVENT`, `reason='halted'`) → the enforcer's own `time-stop-enforcer-` parser matches, releases the registry slot; next past-deadline tick re-fires (ADR 0011 §4 last-line-of-defense). Asserts the enforcer does NOT use the monitor's `local-monitor-breach-` parser.
+- **D-TS-13 (lifecycle clear):** `POSITION_STATE_TRANSITIONED_EVENT → CLOSED` releases the registry slot for that positionId.
+- **D-TS-14-adv (restart with past deadline — BLOCKER L1):** after a simulated restart (registry empty, index rebuilt from `findTimeStopCandidatesBySymbol`), a position past its deadline receives its first `price.update` → exactly one close fires, not two (the DB `CLOSING`/`CLOSED` state + executor `clientOrderId` idempotency back the in-memory registry; assert no second emit on the next tick).
+- **D-TS-15-adv (restart while a close is already in flight — GBT M2 / Composer A1):** the process restarts **after** a close intent was submitted but **before** the row is durable `CLOSING`/`CLOSED`. The rebuilt index re-includes the row; on the first tick the enforcer re-emits, but the deterministic `eventId`/`clientOrderId` + exchange/order reconciliation prevents a duplicate live close → exactly one close at the exchange. Pins that durable state + executor idempotency back the registry across the restart boundary (the registry alone cannot, since it reset).
+- **Integration:** end-to-end through the executor — a paper open whose SL/TP never trigger reaches `closed` with `exit_reason='time_stop'`, a `close` transaction row, and `risk_state.open_exposure` recomputed to 0 after the close (via `RiskStateLifecycleListener`).
+
+### Fix 1b — `SharedCloseCoordinator` release contract (BLOCKER L1 / Composer A1 / GBT H2 / Gemini 3.2)
+- **D-CO-1-adv (no early release on disarm):** a closing fill calls `LocalProtectiveMonitor.disarm(positionId)` (which `applyReduceFillToPosition` does **before** the durable `CLOSED` write) → the shared coordinator slot is **NOT** released; a subsequent `price.update` tick before `CLOSED` cannot acquire the slot and emit a second close.
+- **D-CO-2-adv (no release on UNKNOWN/reconciling):** a time-stop close reaches a non-clean reduce terminal (`ORDER_INTENT_UNKNOWN_EVENT`, reconciliation now owns the row) → the slot is **held** (not released); no re-emit double-submits while reconciliation resolves. The slot frees only when the row later reaches `CLOSED`.
+- **D-CO-3-adv (release on dry_run / halted expiry by prefix):** an expiry with `reason ∈ {'halted','dry_run'}` whose eventId matches the producer prefix releases that producer's slot; an expiry whose eventId does NOT match leaves the slot untouched (no cross-producer release).
+- **D-CO-4-adv (release on CLOSED + gate-reject):** `POSITION_STATE_TRANSITIONED → CLOSED` and a gate non-APPROVED both release the slot (terminal / no-order-submitted).
+
+### Fix 1b — `SharedCloseCoordinator` / flatten collision (BLOCKER L1 / HIGH L2)
+- **D-FL-1-adv (reconciliation-flatten + enforcer collision — HIGH L2):** `ReconciliationService.flattenAdoptedForeignPosition` and a time-stop both target the same position → whichever acquires the registry slot first emits; the other finds it held and emits nothing → exactly one close. (Runs against the **concrete** reconciliation flatten producer; the kill-switch `LoggingFlattenCoordinator` emits nothing and is out of scope until W6.)
+- **D-FL-2-adv (monitor + reconciliation-flatten collision):** an SL/TP breach and a reconciliation flatten target the same position → one close (registry is the single substrate across all three live producers).
+- **D-FL-3 (W6 forward-guard, documentation-pinned):** assert via ADR 0011 §9 that any future real kill-switch flatten producer (W6 replacing `LoggingFlattenCoordinator`) MUST `tryAcquire` before emitting — no test asset until W6 lands; recorded so the W6 implementer cannot miss it.
+
+### Fix 2 — Paper protective simulation
+- **D-PP-1 (happy, paper):** `EXCHANGE_ENV=paper` + `exchange_side` attach success → `LocalProtectiveMonitor.isArmed(positionId)` stays **true**; `protective_order_type='exchange_side'`.
+- **D-PP-2 (parity, live):** `EXCHANGE_ENV` live/testnet + `exchange_side` attach success → monitor **disarmed** (unchanged ADR 0008 §2 behavior).
+- **D-PP-3 (paper SL fires):** after a paper `exchange_side` attach, a `price.update` crossing the SL → `LocalProtectiveMonitor` emits the gate-routed CLOSE via the shared registry (proves the armed monitor is the paper enforcer).
+- **D-PP-4-adv (local_fallback unaffected):** `local_fallback` attach in paper still leaves the monitor armed (no regression — it was never disarmed in that branch).
+- **D-PP-5 (SL/TP persisted at attach — Task 5):** a paper `exchange_side` attach writes `stop_loss_price` and `take_profit_price` onto the position row.
+- **D-PP-6 (paper restart re-arm — HIGH L3):** boot phase 4c re-arms a paper `exchange_side` qty>0 non-closed row from its persisted SL/TP → `LocalProtectiveMonitor.isArmed(positionId)` is true after boot. **Also assert (Composer A6 / Gemini 3.4):** after a pre-restart partial reduce, a post-restart breach close uses the **current** DB row qty, not the original open qty.
+- **D-PP-7-adv (live restart NOT re-armed):** boot phase 4c does NOT re-arm a live/testnet `exchange_side` row (the exchange holds protection) — parity guard on the paper-gated widening.
+- **D-PP-8 (PENDING_OPEN re-arm, all envs — HIGH L3 pre-attach window):** boot phase 4c re-arms a `PENDING_OPEN` qty>0 row from its persisted SL/TP in any env (the row's exits were persisted at insert per Task 5, closing the pre-attach crash window — GBT H3).
+- **D-PP-9 (SL/TP persisted at insert — GBT H3):** `createOpen` writes `stop_loss_price`/`take_profit_price` on the initial `PENDING_OPEN` row (before attach), so a crash before attach still leaves re-armable exits.
+
+### Fix 3 — Entry transaction `cashflow`
+- **D-CF-1 (happy):** an open fill records exactly one `transactions` row with `cashflow = 0` and no NOT-NULL rejection.
+- **D-CF-2-adv (no scope creep):** arm/attach/record ordering is unchanged — `localProtectiveMonitor.arm` is still invoked before `recordEntryTransaction` (ADR 0008 §2 pinned by this assertion).
+
+---
+
+## Non-goals
+
+- **Do NOT change `time_stop_minutes`** (or any strategy param). The deadline is the strategy's; M33 only enforces it.
+- **No dashboard-only workarounds.** The fix is in the engine enforcement path, not a UI flatten button.
+- **No manual SQL as the permanent close mechanism.** Operator one-off flatten of the two current stuck rows (PYTH #4, OPN #5) is a deploy step, not the fix.
+- **No change to the exchange attach flow** (`ProtectiveOrderAttacher`, ADR 0008 §1–§3 submit sequence). Fix 2 only suppresses the **disarm** in paper; the attach itself is untouched.
+- **No building a second paper SL/TP simulation path** at runtime. The already-armed monitor is reused at runtime; restart re-arm is handled by persisting SL/TP (Task 5) + widening phase 4c.
+- **No arm/attach/record reorder** (ADR 0008 §2 stays as written). Fix 3 is one line.
+- **No migration, no `packages/shared/` change** (unless the implementer finds `ExitReasonEnum.TIME_STOP` missing, or the `positions.stop_loss_price`/`take_profit_price` columns absent — escalate first; both were confirmed present for this plan).
+- **A lightweight in-memory deadline index IS in scope** (Task 4) — a `Map<symbol, Map<positionId, deadline>>` + `earliestTimeStopMs` scalar to skip the per-tick DB read and enable synchronous slot acquisition (GBT H1, Gemini 3.1, Composer A4). The **fuller optimization** (symbol-sharded eviction, lock-free hot-path tuning) remains deferred (MEDIUM L1 tech-debt) — M33 ships only the minimal index needed for correctness + cheap fast-path.
+- **No reconciliation-tick deadline fallback** for stale-feed/halted/delisted symbols in M33 — the enforcer is `price.update`-driven, so a symbol with no ticks is not swept (MEDIUM Q2 tech-debt; deferred to a future milestone).
+
+---
+
+## Out of scope / follow-on tech-debt
+
+- **Deadline index hardening (MEDIUM L1).** M33 ships a **minimal** in-memory deadline index (Task 4) for correctness (synchronous arbitration) and a cheap fast-path (`earliestTimeStopMs` guard). The follow-on hardening — symbol-sharded eviction, index/DB consistency self-heal on drift, and hot-path profiling under a relaxed (>3) slot cap — is deferred. File as MEDIUM. (The minimal index itself is in M33 scope, not deferred.)
+- **Reconciliation-tick fallback for stale-feed symbols (MEDIUM Q2).** The enforcer fires only on `price.update`. A position on a symbol whose feed goes stale (delisted, halted, WS gap) receives no ticks and is never swept — its deadline is not enforced until ticks resume. Follow-on: a `ReconciliationService`-tick deadline sweep (using event/reconciliation time, with its own determinism caveat) as a backstop for feedless symbols. File as MEDIUM; deferred to a future milestone.
+
+---
+
+## Post-deploy checklist
+
+Ordered. Engine-only, no migration.
+
+1. **pg_dump** (CLAUDE.md hard-rule 9): `docker compose exec postgres pg_dump -U trade_bot trade_bot | gzip > backups/backup_$(date +%Y%m%d_%H%M).sql.gz`; prune to 2 most recent (`ls -t backups/backup_*.sql.gz | tail -n +3 | xargs rm -f`). Show the operator the path; get explicit confirmation.
+2. **Clear the two current stuck rows** (PYTH #4, OPN #5) via the operator flatten/close path (not raw SQL as the permanent fix) so the slots free up. This is a one-time operational step, independent of the code fix.
+3. **Merge M33** after both reviewer convergence (zero blockers/highs, majority mediums — CLAUDE.md hard-rule 6).
+4. **Restart the engine** (no migration). Confirm boot completes (`engine boot pipeline COMPLETE`), no module-cycle error (the enforcer injects `RiskGateService` via the same `forwardRef` seam the monitor uses, and both the enforcer and the monitor inject `SharedCloseCoordinator` — watch for a DI cycle at boot). Confirm phase 4c re-arms any paper `exchange_side` rows from persisted SL/TP.
+5. **10-min live smoke** (memory: milestone-app-smoke): confirm `PositionTimeStopEnforcer` + `SharedCloseCoordinator` are registered, no errors on `price.update`, no spurious close on rows whose `time_stop_at` is in the future, no double-close log lines. **Confirm the deadline fast-path is active:** the enforcer must NOT issue a `findTimeStopCandidatesBySymbol`/DB query on every tick — verify (debug log or query counter) that ticks with `event.timestampMs < earliestTimeStopMs` short-circuit synchronously with no DB read (Gemini 3.1: a per-tick `SELECT` at hundreds-of-ticks-per-second would saturate the loop).
+
+### 24–48h monitoring signal per bug
+
+- **Fix 1 (time-stop):** on the next paper open that does not hit SL/TP, confirm it reaches `state='closed'`, `exit_reason='time_stop'` at (or shortly after) `time_stop_at` — query `SELECT positions_id, symbol, time_stop_at, closed_at, exit_reason FROM positions WHERE exit_reason='time_stop' ORDER BY closed_at DESC`. Log line `time-stop close emitted positionId=...` appears. **No** live-risk row should ever show `now - time_stop_at` growing unbounded again.
+- **Fix 2 (paper SL/TP):** confirm at least one paper position with `protective_order_type='exchange_side'` closes via `exit_reason IN ('stop_loss','take_profit')` (proves the armed-in-paper monitor fired). Confirm `LocalProtectiveMonitor armed positionId=...` is **not** followed by `disarmed` until the close, for paper `exchange_side` rows.
+- **Fix 3 (cashflow):** confirm every new open fill has a matching `open` `transactions` row — `SELECT p.positions_id FROM positions p LEFT JOIN transactions t ON t.position_id=p.positions_id AND t.type='open' WHERE p.opened_at > :deploy_ts AND t.id IS NULL` returns **zero rows**. No `entry transaction persist failed ... null value in column "cashflow"` log lines after restart.
+
+---
+
+## Success criteria (measurable)
+
+- **Fix 1:** every live-risk position with a past `time_stop_at` that has not hit SL/TP closes with `exit_reason='time_stop'` and a `close` transaction row; the close fires on the `price.update` **event time** (backtest reproduces the same time-stop **decision**, verified by D-TS-3; the realized fill price diverges by up to one taker slippage tier per ADR-0015 §4.6 — NOT claimed to match `bar.open`). On a same-tick SL/TP+time-stop collision, the close carries `exit_reason='time_stop'` (time-stop wins, D-TS-5-adv).
+  - **Stale-feed caveat (MEDIUM Q2):** the "no unbounded `now() - time_stop_at`" property holds **only for symbols with an active price feed**. A position on a halted/delisted/feedless symbol is not swept by the enforcer (no `price.update` ticks) and requires the deferred reconciliation-tick fallback — it is NOT a success-criteria failure for M33.
+- **Fix 2:** paper positions with `protective_order_type='exchange_side'` close via SL/TP when mark crosses the level (`exit_reason IN ('stop_loss','take_profit')`), proving the local monitor stays armed in paper; live/testnet rows still disarm (D-PP-2); and a paper `exchange_side` position re-arms from persisted SL/TP after a restart (D-PP-6). **Go-live gate (HIGH L3, resolved in-scope):** paper `exchange_side` rows MUST have `stop_loss_price`/`take_profit_price` persisted on the row and phase 4c MUST re-arm them — this milestone is not cleared as a live gate until D-PP-5/D-PP-6 pass.
+- **Fix 3:** every open fill produces exactly one `open` `transactions` row with `cashflow=0`; zero `cashflow` NOT-NULL rejections in logs; the one-legged-audit detector (M31 query 2) finds no NEW one-legged positions.
+- **No double-close, ever:** across overlapping time-stop + SL/TP + reconciliation-flatten closes on the same position, exactly one close transaction (D-TS-5-adv with delayed-await, D-FL-1/2-adv, D-TS-14/15-adv restart cases, D-CO-1..4 release table); the shared `SharedCloseCoordinator` is the single in-flight substrate, time-stop arbitration is decided synchronously before any `await`, and the gate is the sole approval point for every close (no execution/exchange bypass). The coordinator slot can neither leak (uncloseable position) nor release early (double-close) per the locked release table.
+- **Zero blockers, zero highs, majority of mediums resolved** at milestone close.
