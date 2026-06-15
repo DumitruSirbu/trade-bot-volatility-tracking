@@ -597,6 +597,14 @@ export class RiskGateService {
             return null;
         }
 
+        // M36 (D5) — a consecutive_loss_halt row written before relax was enabled (same
+        // UTC day, mid-day restart with a changed env) would otherwise day-lock here before
+        // checkLossWindows ever runs the D2 skip. Treat that day-row as not halted so the
+        // relax guard governs. Scoped to the loss-streak reason only — stress legs are untouched.
+        if (this.appConfig.paperRelaxConsecutiveLossHalt && this.isConsecutiveLossHaltReason(day.haltReason)) {
+            return null;
+        }
+
         // M27 — an already-halted-day reject carries the persisted halt_reason verbatim
         // (the day-row is the source of truth here; the gate does NOT re-classify the leg).
         const dayHaltVerdict: IRejectVerdict = { reason: RejectReasonEnum.GLOBAL_HALT, haltReasonDetail: day.haltReason };
@@ -669,6 +677,12 @@ export class RiskGateService {
         }
 
         return MARKET_STRESS_RESUME_ELIGIBLE_LEGS.has(leg);
+    }
+
+    // M36 (D5) — a day-row halt reason is the consecutive-loss halt when it equals the bare
+    // enum value (loss-based reasons are written unsuffixed by buildPersistedHaltReason).
+    private isConsecutiveLossHaltReason(haltReason: string | null): boolean {
+        return haltReason === RejectReasonEnum.CONSECUTIVE_LOSS_HALT;
     }
 
     // M23/M28 (ADR 0004 §6d/§6e). Clear the persisted day-halt (preserving the PnL/exposure/trade
@@ -917,6 +931,12 @@ export class RiskGateService {
 
         if (weeklyPnl.lessThanOrEqualTo(context.limits.weeklyLossLimitUsdt.negated())) {
             return RejectReasonEnum.WEEKLY_LOSS_LIMIT;
+        }
+
+        // M36 (D5): placed AFTER the daily/weekly checks so those hard limits always
+        // evaluate; only the consecutive-loss streak halt is relaxed in paper-soak mode.
+        if (this.appConfig.paperRelaxConsecutiveLossHalt) {
+            return null;
         }
 
         if (await this.isConsecutiveLossHalt(context)) {

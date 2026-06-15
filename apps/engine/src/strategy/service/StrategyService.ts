@@ -481,6 +481,7 @@ export class StrategyService implements OnModuleInit {
             notional: geometry?.notional ?? null,
             leverage: geometry?.leverage ?? null,
             haltReasonDetail: geometry?.haltReasonDetail ?? null,
+            haltRelaxActive: this.config.paperRelaxConsecutiveLossHalt,
             action,
             reason,
         });

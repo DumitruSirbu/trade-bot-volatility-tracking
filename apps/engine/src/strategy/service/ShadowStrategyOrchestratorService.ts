@@ -25,6 +25,7 @@ import { TickAggregateRepository } from '../../market-data/repository/TickAggreg
 import {
     SHADOW_FILL_DEFAULT_POLICY,
     SHADOW_FILL_LATENCY_MS,
+    SHADOW_GATE_CONSECUTIVE_LOSS_RELAX_SENTINEL,
     SHADOW_GATE_HALT_AFTER_CONSECUTIVE_LOSSES,
     SHADOW_GATE_MARGIN_MODE,
     SHADOW_GATE_MAX_OPEN_POSITIONS,
@@ -135,6 +136,17 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
         private readonly tickAggregates: TickAggregateRepository,
         private readonly moduleRef: ModuleRef,
     ) {}
+
+    // M36 (D3/D4): the effective consecutive-loss halt threshold the shadow path
+    // applies to BOTH the per-call gate (`haltAfterConsecutiveLosses`) AND the
+    // durable arm inside `tryClose`. Returns the unreachable sentinel under
+    // PAPER_RELAX_CONSECUTIVE_LOSS_HALT so neither surface can fire; otherwise the
+    // restricted-profile const. Read once per call site so the gate input and the
+    // close path never diverge (the trap: the durable arm short-circuits
+    // `evaluateGates` via `isHalted()`, so both must use the same value).
+    private get effectiveConsecutiveLossHaltThreshold(): number {
+        return this.config.paperRelaxConsecutiveLossHalt ? SHADOW_GATE_CONSECUTIVE_LOSS_RELAX_SENTINEL : SHADOW_GATE_HALT_AFTER_CONSECUTIVE_LOSSES;
+    }
 
     async onModuleInit(): Promise<void> {
         const activeId = this.config.activeStrategyVersionId;
@@ -250,7 +262,14 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
 
         if (isReverseClose) {
             const closePrice = reconstructReferencePrice(stampedEvent).toFixed();
-            shadow.ledger.closeBySymbol(event.symbol, closePrice, nowMs, 'reverse_signal', `${event.eventId}:reverse`);
+            shadow.ledger.closeBySymbol(
+                event.symbol,
+                closePrice,
+                nowMs,
+                'reverse_signal',
+                `${event.eventId}:reverse`,
+                this.effectiveConsecutiveLossHaltThreshold,
+            );
         }
 
         const virtualSnapshot = shadow.ledger.snapshotForDecision(nowMs);
@@ -262,7 +281,7 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
             decision: { action: signal.action },
             maxOpenPositions: SHADOW_GATE_MAX_OPEN_POSITIONS,
             maxTradesPerDay: SHADOW_GATE_MAX_TRADES_PER_DAY,
-            haltAfterConsecutiveLosses: SHADOW_GATE_HALT_AFTER_CONSECUTIVE_LOSSES,
+            haltAfterConsecutiveLosses: this.effectiveConsecutiveLossHaltThreshold,
             requireExhaustionConfirmation: SHADOW_GATE_REQUIRE_EXHAUSTION_CONFIRMATION,
             skipMarketStress: SHADOW_GATE_SKIP_MARKET_STRESS,
             marginMode: SHADOW_GATE_MARGIN_MODE,
@@ -511,6 +530,7 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
             qty: openData?.qty ?? null,
             stopLoss: openData?.stopLoss ?? null,
             takeProfit: openData?.takeProfit ?? null,
+            haltRelaxActive: this.config.paperRelaxConsecutiveLossHalt,
             marketSnapshot: snapshot,
         });
     }

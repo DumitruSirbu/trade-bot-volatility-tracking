@@ -272,6 +272,15 @@ export class EnvironmentVariables {
     @IsBoolean()
     PAPER_RELAX_MARKET_STRESS: boolean = false;
 
+    // M36 — paper-only switch that relaxes the consecutive-loss halt so the paper
+    // exploration soak stops locking on a short losing streak. NEVER relaxes anything
+    // on live/testnet; the effective value additionally requires EXCHANGE_ENV=paper,
+    // enforced in AppConfigService.
+    @IsOptional()
+    @Transform(({ value }) => String(value).toLowerCase().trim() === 'true')
+    @IsBoolean()
+    PAPER_RELAX_CONSECUTIVE_LOSS_HALT: boolean = false;
+
     // M25 (ADR 0042 §3) — paper-only idiosyncratic-slot override. The slot model
     // is physically capped at A/B/C = 3 in every env; MAX_IDIOSYNCRATIC_SLOTS=2
     // plus the slot-C borrow yields 3 concurrent. Raising the idiosyncratic count

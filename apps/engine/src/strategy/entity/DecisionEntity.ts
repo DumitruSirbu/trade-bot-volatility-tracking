@@ -79,4 +79,11 @@ export class DecisionEntity {
 
     @Column({ name: 'halt_reason_detail', type: 'varchar', nullable: true })
     haltReasonDetail?: string | null;
+
+    // M36 Dispatch C — bias marker. true when the row was written while the
+    // consecutive-loss halt was relaxed (paper soak forced-continuation). Fences
+    // these left-tail forced-continuation outcomes from cross-version A/B
+    // analysis. Stamped at write time from the resolved boot flag.
+    @Column({ name: 'halt_relax_active', type: 'boolean', nullable: false, default: false })
+    haltRelaxActive!: boolean;
 }

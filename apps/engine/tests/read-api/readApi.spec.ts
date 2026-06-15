@@ -106,6 +106,7 @@ function buildDecision(overrides: Partial<DecisionEntity> = {}): DecisionEntity 
         action: SignalActionEnum.OPEN,
         reason: 'high-conviction trend',
         positionId: 1,
+        haltRelaxActive: false,
     } as DecisionEntity;
 
     return Object.assign(base, overrides);
