@@ -144,6 +144,11 @@ function buildMeanReversionExit(input: IStrategyInput, tradeSide: PositionSideEn
         stopLossPrice,
         stopType: StopTypeEnum.STRUCTURAL,
         timeStopAtMs: nowMs + params.time_stop_minutes * MS_PER_MINUTE,
+        // M38 D1 (ADR 0045): mean-reversion TP is VWAP-anchored (not reference+ATR), so it is
+        // NOT rebase-eligible — re-anchoring it to the fill ± ATR would corrupt it. The seam
+        // discriminator enforces this; no ATR distance is carried.
+        tpRebaseEligible: false,
+        atrDistance: null,
     };
 }
 

@@ -185,6 +185,8 @@ function buildIntent(): IOrderIntent {
             stopLossPrice: new Money('49000'),
             stopType: 'atr' as any,
             timeStopAtMs: NOW_MS + 30 * 60_000,
+            tpRebaseEligible: false,
+            atrDistance: null,
         },
         openPosition: null,
         sizing: {

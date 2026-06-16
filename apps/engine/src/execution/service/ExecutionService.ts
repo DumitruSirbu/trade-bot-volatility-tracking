@@ -44,8 +44,10 @@ import { RiskGateService } from '../../risk/service';
 import { StrategyVersionRepository } from '../../strategy/repository/StrategyVersionRepository';
 import {
     ENTRY_AUDIT_PERSIST_FAILED_REASON,
+    FILL_ACCEPTANCE_REJECTED,
     MAX_PERMANENT_RETRY_ATTEMPTS,
     MAX_REDUCE_REMAINDER_ATTEMPTS,
+    MAX_SIGNAL_DRIFT_PCT,
     ORDER_INTENT_EXPIRED_REASON_DRY_RUN,
     ORDER_INTENT_EXPIRED_REASON_HALTED,
     PENDING_OPEN_PROMOTE_EVENT_CLASS,
@@ -54,8 +56,10 @@ import {
 } from '../const';
 import { SubmitStateEnum } from '../enum';
 import { IFillSummary, IOrderPlanInternal, IProtectiveAttachResult, IProtectiveFallbackEvent } from '../interface';
+import { evaluateFillDrift, rebaseMomentumTakeProfit } from '../utils';
 import { ClientOrderIdFactory } from './ClientOrderIdFactory';
 import { ExchangeOrderSubmitter } from './ExchangeOrderSubmitter';
+import { FillAcceptanceUnwindService } from './FillAcceptanceUnwindService';
 import { FillAccumulator } from './FillAccumulator';
 import { LocalProtectiveMonitor } from './LocalProtectiveMonitor';
 import { OrderPolicyRouter } from './OrderPolicyRouter';
@@ -85,6 +89,14 @@ import { ProtectiveOrderAttacher } from './ProtectiveOrderAttacher';
 //   8. Persists one transactions row per terminal (ADR 0006 §5) including zero-fill audit
 //      rows for missed entries (must-fix #14, enabled by migration 20260524020000).
 
+// Inputs to the fill-acceptance guard (M38 D2). Grouped into one context object so the guard
+// and its extracted unwind helper stay inside the ≤2-argument convention.
+interface IFillAcceptanceContext {
+    event: IOrderIntentApprovedEvent;
+    positionRow: PositionEntity;
+    fillSummary: IFillSummary;
+}
+
 @Injectable()
 export class ExecutionService {
     private readonly logger = new Logger(ExecutionService.name);
@@ -107,6 +119,7 @@ export class ExecutionService {
         private readonly strategyVersions: StrategyVersionRepository,
         private readonly riskGate: RiskGateService,
         private readonly haltFlag: HaltFlagService,
+        private readonly fillAcceptanceUnwind: FillAcceptanceUnwindService,
         @Inject(EXCHANGE_CLIENT) private readonly exchangeClient: IExchangeClient,
         private readonly events: EventEmitter2,
     ) {}
@@ -901,9 +914,24 @@ export class ExecutionService {
         }
 
         const isOpenIntent = event.intent.intentAction === OrderIntentActionEnum.OPEN;
+
+        // M38 D1 (ADR 0045): rebase the momentum TP anchor from the signal-time reference price
+        // to the actual fill price BEFORE createPositionFromFill, so the persisted take_profit
+        // (:1137), the arm (:928), and the attach (:952) all use the SAME value. SL is never
+        // rebased. Mean-reversion / null atrDistance falls back to the frozen geometry (the
+        // tpEligible backstop and D2 reject cover the wrong-side case).
+        const resolvedTakeProfitPrice: MoneyValue =
+            event.clampedExit.tpRebaseEligible && event.clampedExit.atrDistance !== null
+                ? rebaseMomentumTakeProfit(event.clampedExit, fillSummary.avgFillPrice, event.intent.tradeSide)
+                : event.clampedExit.takeProfitPrice;
+
         const positionRow = isOpenIntent
-            ? await this.createPositionFromFill(event, plan, fillSummary, nowMs)
+            ? await this.createPositionFromFill(event, plan, fillSummary, nowMs, resolvedTakeProfitPrice)
             : await this.applyAddToExistingPosition(event, fillSummary);
+
+        if (isOpenIntent && (await this.rejectAndUnwindIfUnacceptable({ event, positionRow, fillSummary }))) {
+            return;
+        }
 
         // Step ordering per ADR 0008 §2 (round-3 must-fix #2 + round-4 #2): arm the LOCAL
         // monitor SYNCHRONOUSLY immediately after the OPEN-path createPositionFromFill
@@ -925,7 +953,7 @@ export class ExecutionService {
                 symbol: positionRow.symbol,
                 side: event.intent.tradeSide,
                 stopLossPrice: event.clampedExit.stopLossPrice,
-                takeProfitPrice: event.clampedExit.takeProfitPrice,
+                takeProfitPrice: resolvedTakeProfitPrice,
             });
         }
 
@@ -949,7 +977,7 @@ export class ExecutionService {
             symbol: event.intent.symbol,
             tradeSide: event.intent.tradeSide,
             stopLossPrice: event.clampedExit.stopLossPrice,
-            takeProfitPrice: event.clampedExit.takeProfitPrice,
+            takeProfitPrice: resolvedTakeProfitPrice,
         });
 
         await this.applyProtectiveAttachResult(positionRow, attachResult, event);
@@ -984,6 +1012,58 @@ export class ExecutionService {
         this.events.emit(POSITION_OPENED_EVENT, openedEvent);
     }
 
+    // M38 D2 (ADR 0045): fill-acceptance guard. Evaluated on a confirmed full OPEN fill, AFTER
+    // createPositionFromFill (the PENDING_OPEN row exists) and BEFORE the synchronous arm — so a
+    // doomed position never arms (ADR 0008 §2 window stays closed for surviving positions). The
+    // drift value is logged on every evaluation. On reject the position is unwound via a synthetic
+    // FLATTEN (one CLEAN CLOSED row, FORCE_CLOSE) and the reservation is confirmed; the caller skips
+    // arm/attach/transition/POSITION_OPENED_EVENT. Returns true when the fill was rejected.
+    private async rejectAndUnwindIfUnacceptable(ctx: IFillAcceptanceContext): Promise<boolean> {
+        const { event, positionRow, fillSummary } = ctx;
+        const driftResult = evaluateFillDrift({
+            clampedExit: event.clampedExit,
+            avgFillPrice: fillSummary.avgFillPrice,
+            side: event.intent.tradeSide,
+            entrySnapshot: event.entrySnapshot,
+            maxDriftPct: MAX_SIGNAL_DRIFT_PCT,
+        });
+
+        this.logger.log(
+            `fill-acceptance drift positionId=${positionRow.id} symbol=${event.intent.symbol} ` +
+                `driftPct=${driftResult.driftPct?.toFixed(4) ?? 'n/a'} shouldReject=${driftResult.shouldReject} reason=${driftResult.reason ?? 'none'}`,
+        );
+
+        if (!driftResult.shouldReject) {
+            return false;
+        }
+
+        await this.unwindRejectedFill(ctx, driftResult.reason);
+
+        return true;
+    }
+
+    // Unwind a rejected open fill via a synthetic FLATTEN (one CLEAN CLOSED row, FORCE_CLOSE)
+    // and confirm the reservation so it is not leaked. The caller skips arm/attach/transition/
+    // POSITION_OPENED_EVENT.
+    private async unwindRejectedFill(ctx: IFillAcceptanceContext, reason?: string): Promise<void> {
+        const { event, positionRow, fillSummary } = ctx;
+
+        this.logger.warn(
+            `fill-acceptance ${FILL_ACCEPTANCE_REJECTED} positionId=${positionRow.id} symbol=${event.intent.symbol} ` +
+                `reason=${reason} - unwinding via FLATTEN`,
+        );
+
+        await this.fillAcceptanceUnwind.emitSyntheticClose({
+            positionRow,
+            side: event.intent.tradeSide,
+            markPrice: fillSummary.avgFillPrice,
+            exitReason: ExitReasonEnum.FORCE_CLOSE,
+            slot: event.approvedSlot,
+            strategyVersionId: event.strategyVersionId,
+        });
+        this.confirmReservationSafely(event.reservationId);
+    }
+
     // Weighted-average entry on ADD (ADR 0007 §3 + must-fix #4). Uses the slot-scoped
     // lookup (round-3 must-fix #13) — the ADD targets the exact slot the gate approved,
     // never an arbitrary `findOpenBySymbol(...)[0]` which would pick the wrong leg if two
@@ -1008,6 +1088,9 @@ export class ExecutionService {
                 },
                 fillSummary,
                 Date.now(),
+                // ADD recovery-fallback keeps the frozen geometry (no D1 rebase on the ADD path,
+                // ADR 0007 §3).
+                event.clampedExit.takeProfitPrice,
             );
         }
 
@@ -1098,6 +1181,9 @@ export class ExecutionService {
         plan: IOrderPlanInternal,
         fillSummary: IFillSummary,
         nowMs: number,
+        // M38 D1 (ADR 0045): the resolved (rebased for momentum, frozen otherwise) TP to persist.
+        // Computed once in the caller so the persisted value matches the armed/attached value.
+        takeProfitPriceOverride: MoneyValue,
     ): Promise<PositionEntity> {
         const stopDistance = event.clampedExit.stopLossPrice.minus(fillSummary.avgFillPrice).abs();
         const stopDistancePct = stopDistance.dividedBy(fillSummary.avgFillPrice).times(100);
@@ -1134,7 +1220,7 @@ export class ExecutionService {
             // declared exits" invariant for that window. Writing the clamped exits here makes every
             // non-closed row re-armable by phase 4c (EngineBootstrapService).
             stopLossPrice: event.clampedExit.stopLossPrice,
-            takeProfitPrice: event.clampedExit.takeProfitPrice,
+            takeProfitPrice: takeProfitPriceOverride,
             slippageModelPct: plan.slippageCapPct,
             stopGapPct: stopDistancePct,
             flowTypeAtEntry: event.intent.flowType,

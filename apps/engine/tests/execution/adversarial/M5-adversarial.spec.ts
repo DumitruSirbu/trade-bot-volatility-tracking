@@ -187,6 +187,7 @@ function makeBundle(
         strategyVersions,
         riskGate as never,
         haltFlag,
+        { emitSyntheticClose: jest.fn() } as any,
         exchangeClient,
         events,
     );

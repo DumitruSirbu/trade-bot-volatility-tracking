@@ -118,6 +118,7 @@ describe('ExecutionService entry fill path — arm/record ordering invariant', (
             strategyVersions,
             riskGate,
             haltFlag,
+            { emitSyntheticClose: jest.fn() } as any,
             exchangeClient,
             events,
         );

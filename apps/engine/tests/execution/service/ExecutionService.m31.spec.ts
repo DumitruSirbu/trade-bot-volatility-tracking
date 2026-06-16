@@ -225,6 +225,7 @@ function makeService(
         strategyVersions,
         riskGate as unknown as RiskGateService,
         haltFlag,
+        { emitSyntheticClose: jest.fn() } as any,
         exchangeClient,
         events,
     );

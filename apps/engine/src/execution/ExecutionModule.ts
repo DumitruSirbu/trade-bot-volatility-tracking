@@ -10,6 +10,7 @@ import {
     ClientOrderIdFactory,
     ExchangeOrderSubmitter,
     ExecutionService,
+    FillAcceptanceUnwindService,
     FillAccumulator,
     LocalProtectiveMonitor,
     OrderPolicyRouter,
@@ -32,6 +33,7 @@ import {
     providers: [
         ClientOrderIdFactory,
         ExchangeOrderSubmitter,
+        FillAcceptanceUnwindService,
         FillAccumulator,
         LocalProtectiveMonitor,
         OrderPolicyRouter,

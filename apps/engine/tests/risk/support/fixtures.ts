@@ -33,6 +33,8 @@ export function buildProposedExit(overrides: Partial<IProposedExit> = {}): IProp
         stopLossPrice: new Money('30500'),
         stopType: StopTypeEnum.ATR,
         timeStopAtMs: NOW_MS + 30 * 60_000, // 30 min from now (within 60 min limit)
+        tpRebaseEligible: false,
+        atrDistance: null,
         ...overrides,
     };
 }

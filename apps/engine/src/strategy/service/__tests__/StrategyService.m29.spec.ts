@@ -171,6 +171,8 @@ function buildApprovedDecision(): IApprovedRiskDecision {
             stopLossPrice: new _Money('2100'),
             stopType: 'atr' as any,
             timeStopAtMs: 1_700_003_600_000,
+            tpRebaseEligible: false,
+            atrDistance: null,
         },
         reservationId: 'test-reservation-id',
         haltReasonDetail: null,

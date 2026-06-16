@@ -462,6 +462,9 @@ export class LocalProtectiveMonitor {
             stopLossPrice: armed.stopLossPrice ?? markPrice,
             stopType: StopTypeEnum.ATR,
             timeStopAtMs: 0,
+            // M38 D1 (ADR 0045): a close intent is never rebased — it is a de-risking exit, not an open.
+            tpRebaseEligible: false,
+            atrDistance: null,
         };
     }
 

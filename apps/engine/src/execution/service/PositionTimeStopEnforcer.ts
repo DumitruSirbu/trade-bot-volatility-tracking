@@ -465,6 +465,9 @@ export class PositionTimeStopEnforcer implements OnModuleInit {
             stopLossPrice: position.stopLossPrice ?? markPrice,
             stopType: StopTypeEnum.ATR,
             timeStopAtMs: 0,
+            // M38 D1 (ADR 0045): a time-stop close is a de-risking exit — never rebased.
+            tpRebaseEligible: false,
+            atrDistance: null,
         };
     }
 

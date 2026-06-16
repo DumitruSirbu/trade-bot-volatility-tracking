@@ -166,6 +166,8 @@ function buildIntent(coinTier: CoinTierEnum = CoinTierEnum.TIER_1): IOrderIntent
             stopType: 'atr' as any,
             // nowMs + 30min → satisfies time_stop_minutes=60 constraint
             timeStopAtMs: 1_700_000_000_000 + 30 * 60_000,
+            tpRebaseEligible: false,
+            atrDistance: null,
         },
         openPosition: null,
         sizing: {
