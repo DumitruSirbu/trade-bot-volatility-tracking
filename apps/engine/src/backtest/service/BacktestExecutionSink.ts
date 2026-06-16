@@ -23,6 +23,9 @@ export class BacktestExecutionSink {
     applyOpenFill(fill: IBacktestFill, position: IBacktestPosition, dateString: string): void {
         this.book.openPositions.set(position.positionId, position);
         this.book.incrementOpenedOnDay(position.symbol, dateString);
+        // M37 W2: retain the open leg's book-input provenance so the trade row can flag
+        // low-fidelity when EITHER leg used the tier-floor fallback (see buildTradeResult).
+        this.book.recordOpenFillDepthAware(position.positionId, fill.depthAware);
 
         const entryNotional = new Money(position.entryNotionalUsdt);
         this.ledger.open(position.positionId, position.symbol, entryNotional);
@@ -141,7 +144,10 @@ export class BacktestExecutionSink {
             closedAtMs: closeFill.tsMs,
             holdMs: closeFill.tsMs - position.openedAtMs,
             exitReason,
-            lowFidelity: !closeFill.depthAware,
+            // M37 W2 (ADR 0015 M37 amendment): low-fidelity when EITHER leg used the
+            // tier-floor-model book fallback (no captured book_snapshots row). The open-leg
+            // provenance was recorded at applyOpenFill; the close leg is this fill.
+            lowFidelity: !this.book.wasOpenFillDepthAware(position.positionId) || !closeFill.depthAware,
         };
     }
 

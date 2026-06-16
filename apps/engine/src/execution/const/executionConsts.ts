@@ -76,6 +76,15 @@ export const SUBMIT_TIMEOUT_ERROR_MARKER = 'submit_network_timeout';
 // "why is amount='0'" magic disappears from ProtectiveOrderAttacher.
 export const BINANCE_CLOSE_POSITION_PLACEHOLDER_AMOUNT = '0';
 
+// M37 D3.2 — live time-stop safety-net sweep cadence. PositionTimeStopEnforcer is event-driven
+// off `price.update` (one deadline-check per tick per symbol). A thin tier-2 symbol whose feed
+// stalls emits no ticks, so an event-only enforcer can let a position run far past its deadline
+// (the MRVL 127-min-vs-15-min breach). This interval drives a periodic sweep over ALL open
+// positions — independent of tick arrival — so a deadline-breached position closes at/near its
+// `time_stop_at` even with a dead feed. LIVE-ONLY: the backtest runs its own deterministic
+// per-bar time-stop check (BacktestRunnerService.shouldHitTimeStop) and never schedules this.
+export const TIME_STOP_SWEEP_INTERVAL_MS = 60_000;
+
 // --- close-producer eventId prefixes (ADR 0011 §9 shared close registry) ---
 //
 // Each close producer stamps its emitted CLOSE intent with a deterministic eventId built from

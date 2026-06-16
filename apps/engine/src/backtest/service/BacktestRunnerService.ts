@@ -27,7 +27,7 @@ import { InstrumentRepository } from '../../market-data/repository/InstrumentRep
 import { OpenInterestRepository } from '../../market-data/repository/OpenInterestRepository';
 import { evaluateTrigger } from '../../market-data/trigger';
 import { resolveTriggerParams } from '../../market-data/utils';
-import { DEFAULT_MAINTENANCE_MARGIN_RATE, MARKET_BREADTH_NEUTRAL_PCT } from '../../risk/const/riskConsts';
+import { COIN_DEPTH_FLOOR_10BPS_USDT, DEFAULT_MAINTENANCE_MARGIN_RATE, MARKET_BREADTH_NEUTRAL_PCT } from '../../risk/const/riskConsts';
 import { IInstrumentConstraints } from '../../risk/interface';
 import { ReservationLedger } from '../../risk/service';
 import { IStrategy } from '../../strategy/interface';
@@ -36,7 +36,7 @@ import { StrategyVersionRepository } from '../../strategy/repository/StrategyVer
 import { BacktestInstrumentAdapter } from '../adapter/BacktestInstrumentAdapter';
 import { BacktestPositionAdapter } from '../adapter/BacktestPositionAdapter';
 import { BacktestRiskStateAdapter } from '../adapter/BacktestRiskStateAdapter';
-import { BACKTEST_WARMUP_BAR_COUNT } from '../const/backtestConsts';
+import { BACKTEST_FALLBACK_BID_ASK_SPREAD_PCT, BACKTEST_FALLBACK_DEPTH_FLOOR_MULTIPLIER, BACKTEST_WARMUP_BAR_COUNT } from '../const/backtestConsts';
 import { HistoricalFillAdapter, IFillRequest } from '../fill/HistoricalFillAdapter';
 import { assertNoLookAhead } from '../guard/CausalityGuard';
 import { BacktestBook } from '../state/BacktestBook';
@@ -54,8 +54,12 @@ import { PointInTimeUniverse } from './PointInTimeUniverse';
 
 // The BTC reference symbol used to source `btc5mMovePct` per bar. BTC reference is loaded
 // independently of the universe so it can drive correlation classification even when BTC
-// itself is not a tradable candidate on the replay window.
-const BTC_REFERENCE_SYMBOL = 'BTCUSDT';
+// itself is not a tradable candidate on the replay window. Stored in the ccxt unified form
+// (`BTC/USDT:USDT`) to match the `candles.symbol` persistence format — the bare `BTCUSDT`
+// form silently matched zero rows, defaulting btc5mMovePct to 0 on every bar, which collapsed
+// every idiosyncrasy score to 0 and hard-rejected every idiosyncratic candidate NO_ELIGIBLE_SLOT
+// (M37 W2: a second 0-fill blocker alongside the missing-book depth check).
+const BTC_REFERENCE_SYMBOL = 'BTC/USDT:USDT';
 
 // Open-interest sampling cadence is sub-bar; for the deterministic replay we look up the
 // most recent OI sample at-or-before the bar's open. A 1-hour window keeps the lookup
@@ -587,6 +591,7 @@ export class BacktestRunnerService {
         const oiChange15mPct = computeOiChangePct(oiNow, oi15mAgo);
 
         const bookSnapshot = data.bookByBarOpenMs.get(bar.openTimeMs) ?? null;
+        const bookInputs = resolveBookGateInputs(bookSnapshot, tier);
         const btcMovePct = this.resolveBtcMovePct(ctx.btcReferenceBars, bar.openTimeMs);
         const funding = resolveFundingRateAt(data.fundingEvents, bar.openTimeMs);
 
@@ -602,9 +607,13 @@ export class BacktestRunnerService {
             btc5mMovePct: btcMovePct,
             eth5mMovePct: 0,
             btc1mMovePct: 0,
-            bidAskSpreadPct: 0,
-            bookDepth10bpsUsdt: bookSnapshot !== null ? (bookSnapshot.depth10bps ?? null) : null,
-            bookDepth50bpsUsdt: bookSnapshot !== null ? (bookSnapshot.depth50bps ?? null) : null,
+            // M37 W2: real captured spread/depth when a book_snapshots row exists for this bar
+            // (full-fidelity gate input); a conservative tier-floor-model fallback otherwise so
+            // the gate's depth/spread checks no longer hard-reject EVERY no-book candidate. Fills
+            // produced on a fallback bar are flagged low-fidelity downstream (depthAware=false).
+            bidAskSpreadPct: bookInputs.bidAskSpreadPct,
+            bookDepth10bpsUsdt: bookInputs.bookDepth10bpsUsdt,
+            bookDepth50bpsUsdt: bookInputs.bookDepth50bpsUsdt,
             // Cross-symbol breadth is not reconstructable in single-symbol replay — feed the
             // neutral midpoint (no signal), NOT 0. Since M19 the breadth halt fires at
             // |breadth-50| >= STRESS_BREADTH_DISTANCE_PCT (40); a 0 here would read as |0-50|=50,
@@ -1075,6 +1084,48 @@ function buildBookIndex(rows: BookSnapshotEntity[]): Map<number, BookSnapshotEnt
     }
 
     return result;
+}
+
+// Book-derived gate inputs the risk gate reads (spread ceiling + per-coin depth floor). The
+// values resolved here.
+interface IBookGateInputs {
+    readonly bidAskSpreadPct: number;
+    readonly bookDepth10bpsUsdt: MoneyValue | null;
+    readonly bookDepth50bpsUsdt: MoneyValue | null;
+}
+
+// M37 W2 (ADR 0015 M37 amendment) — BACKTEST-ONLY gate-INPUT approximation. `book_snapshots`
+// are captured only sparsely (around live decisions), so most replayed trigger bars have no
+// captured book. When a row exists the real spread + depth are returned (full fidelity); when
+// it is absent the replay substitutes a conservative tier-floor-model fallback so the gate's
+// depth/spread checks stop hard-rejecting EVERY no-book candidate. The fallback assumes
+// liquidity exactly clears the per-tier eligibility floor (BACKTEST_FALLBACK_DEPTH_FLOOR_MULTIPLIER
+// × COIN_DEPTH_FLOOR_10BPS_USDT) and a sub-ceiling spread — it never models abundant book, so
+// it cannot manufacture a fill the live gate would reject for a genuinely thin book. This is
+// never applied live; the live gate reads the real order book. Fills on a fallback bar carry
+// depthAware=false (HistoricalFillAdapter) → IBacktestReport.lowFidelityTradeCount.
+function resolveBookGateInputs(bookSnapshot: BookSnapshotEntity | null, tier: CoinTierEnum): IBookGateInputs {
+    if (bookSnapshot !== null && bookSnapshot.depth10bps !== null && bookSnapshot.depth10bps !== undefined) {
+        const spreadPct =
+            bookSnapshot.spread !== null && bookSnapshot.spread !== undefined
+                ? new Money(bookSnapshot.spread).toNumber()
+                : BACKTEST_FALLBACK_BID_ASK_SPREAD_PCT;
+        const depth50bps = bookSnapshot.depth50bps !== null && bookSnapshot.depth50bps !== undefined ? new Money(bookSnapshot.depth50bps) : null;
+
+        return {
+            bidAskSpreadPct: spreadPct,
+            bookDepth10bpsUsdt: new Money(bookSnapshot.depth10bps),
+            bookDepth50bpsUsdt: depth50bps,
+        };
+    }
+
+    const fallbackDepth = new Money(COIN_DEPTH_FLOOR_10BPS_USDT[tier]).times(BACKTEST_FALLBACK_DEPTH_FLOOR_MULTIPLIER);
+
+    return {
+        bidAskSpreadPct: BACKTEST_FALLBACK_BID_ASK_SPREAD_PCT,
+        bookDepth10bpsUsdt: fallbackDepth,
+        bookDepth50bpsUsdt: fallbackDepth,
+    };
 }
 
 function serializeCoinTier(tier: CoinTierEnum): IBacktestTradeResult['coinTier'] {

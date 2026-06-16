@@ -4,6 +4,13 @@
 // two parallel queries plus the paired-diff row. We assert: (a) both versions
 // run, (b) paired-diff totals propagate, (c) validation rejects equal-version
 // and bad ranges.
+//
+// M37 W1: `getPerformance` now resolves `strategy_versions.status` via a 1-row
+// `LIMIT 1` lookup before its aggregation, and `compareVersions` selects the
+// paired-diff source per side from that status (active → `decisions`/
+// `positions`; shadow → `shadow_decisions`). The stub routes three query kinds:
+// the version lookup (`LIMIT 1`), the per-version aggregation, and the
+// paired-diff query (`paired_event_count`).
 
 import { MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN } from '@bot/shared';
 
@@ -11,13 +18,28 @@ import { AnalysisValidationError, compareVersions } from '../../src/index';
 
 type QueryHandler = (sql: string, bindings: readonly unknown[]) => Promise<unknown[]>;
 
+function isVersionLookupSql(sql: string): boolean {
+    return sql.includes('LIMIT 1');
+}
+
+function isPairedDiffSql(sql: string): boolean {
+    return sql.includes('paired_event_count');
+}
+
+// Both versions default to `active` so the paired-diff reads
+// `decisions`/`positions` (the pre-M37 behavior these legacy assertions cover).
+// Shadow-path routing is covered by its own tests below.
 function makeStubDataSource(performanceRow: Record<string, unknown>, pairedRow: Record<string, unknown>) {
     const calls: { sql: string; bindings: readonly unknown[] }[] = [];
 
     const handler: QueryHandler = async (sql, bindings) => {
         calls.push({ sql, bindings });
 
-        if (sql.includes('paired_with_pnl')) {
+        if (isVersionLookupSql(sql)) {
+            return [{ label: 'v', status: 'active' }];
+        }
+
+        if (isPairedDiffSql(sql)) {
             return [pairedRow];
         }
 
@@ -52,9 +74,9 @@ describe('compareVersions', () => {
         expect(result.pairedDiff.meanPnlDeltaUsd).toBe('0.7109375');
         expect(result.pairedDiff.belowSampleFloor).toBe(false);
 
-        // Three queries: getPerformance(a), getPerformance(b), paired-diff.
-        expect(calls).toHaveLength(3);
-        const pairedCall = calls.find((c) => c.sql.includes('paired_with_pnl'));
+        // Five queries: per-version (lookup + aggregation) ×2, plus paired-diff.
+        expect(calls).toHaveLength(5);
+        const pairedCall = calls.find((c) => isPairedDiffSql(c.sql));
 
         expect(pairedCall).toBeDefined();
         expect(pairedCall!.bindings).toEqual([1, 2, from.toISOString(), to.toISOString()]);
@@ -138,7 +160,10 @@ describe('compareVersions', () => {
         // shared decimalMath so the surface is stable across PG versions.
         let capturedSql = '';
         const handler: QueryHandler = async (sql) => {
-            if (sql.includes('paired_with_pnl')) {
+            if (isVersionLookupSql(sql)) {
+                return [{ label: 'v', status: 'active' }];
+            }
+            if (isPairedDiffSql(sql)) {
                 capturedSql = sql;
                 return [
                     {
@@ -148,7 +173,7 @@ describe('compareVersions', () => {
                     },
                 ];
             }
-            return [{ trade_count: '100', win_count: '50', net_pnl_usd: '0', label: 'v', status: 'shadow' }];
+            return [{ trade_count: '100', win_count: '50', net_pnl_usd: '0', label: 'v', status: 'active' }];
         };
 
         const result = await compareVersions({ query: handler } as never, { aVersionId: 1, bVersionId: 2, from, to });
@@ -168,7 +193,10 @@ describe('compareVersions', () => {
         // we verify the CTE contains both filter clauses for both versions.
         let capturedPairedSql = '';
         const handler: QueryHandler = async (sql) => {
-            if (sql.includes('paired_with_pnl')) {
+            if (isVersionLookupSql(sql)) {
+                return [{ label: 'v', status: 'active' }];
+            }
+            if (isPairedDiffSql(sql)) {
                 capturedPairedSql = sql;
                 return [
                     {
@@ -178,7 +206,7 @@ describe('compareVersions', () => {
                     },
                 ];
             }
-            return [{ trade_count: '1', win_count: '1', net_pnl_usd: '5', label: 'v', status: 'shadow' }];
+            return [{ trade_count: '1', win_count: '1', net_pnl_usd: '5', label: 'v', status: 'active' }];
         };
 
         const result = await compareVersions({ query: handler } as never, { aVersionId: 1, bVersionId: 2, from, to });
@@ -199,7 +227,10 @@ describe('compareVersions', () => {
         // semantics; this unit asserts the contract surface).
         let capturedPairedSql = '';
         const handler: QueryHandler = async (sql) => {
-            if (sql.includes('paired_with_pnl')) {
+            if (isVersionLookupSql(sql)) {
+                return [{ label: 'v', status: 'active' }];
+            }
+            if (isPairedDiffSql(sql)) {
                 capturedPairedSql = sql;
                 return [
                     {
@@ -209,7 +240,7 @@ describe('compareVersions', () => {
                     },
                 ];
             }
-            return [{ trade_count: '1', win_count: '1', net_pnl_usd: '5', label: 'v', status: 'shadow' }];
+            return [{ trade_count: '1', win_count: '1', net_pnl_usd: '5', label: 'v', status: 'active' }];
         };
 
         const result = await compareVersions({ query: handler } as never, { aVersionId: 1, bVersionId: 2, from, to });
@@ -229,7 +260,10 @@ describe('compareVersions', () => {
         // contains the clause on both LEFT JOINs.
         let capturedPairedSql = '';
         const handler: QueryHandler = async (sql) => {
-            if (sql.includes('paired_with_pnl')) {
+            if (isVersionLookupSql(sql)) {
+                return [{ label: 'v', status: 'active' }];
+            }
+            if (isPairedDiffSql(sql)) {
                 capturedPairedSql = sql;
                 return [
                     {
@@ -239,15 +273,88 @@ describe('compareVersions', () => {
                     },
                 ];
             }
-            return [{ trade_count: '0', win_count: '0', net_pnl_usd: '0', label: 'v', status: 'shadow' }];
+            return [{ trade_count: '0', win_count: '0', net_pnl_usd: '0', label: 'v', status: 'active' }];
         };
 
         await compareVersions({ query: handler } as never, { aVersionId: 1, bVersionId: 2, from, to });
 
-        const aClause = (capturedPairedSql.match(/pa\.closed_at\s*<\s*\$4/gu) ?? []).length;
-        const bClause = (capturedPairedSql.match(/pb\.closed_at\s*<\s*\$4/gu) ?? []).length;
-        expect(aClause).toBe(1);
-        expect(bClause).toBe(1);
+        // Both active sides LEFT JOIN the closed position bounded by the window
+        // upper bound ($4); the alias is `pos` per side (M37 builder).
+        const closedAtClauses = (capturedPairedSql.match(/pos\.closed_at\s*<\s*\$4/gu) ?? []).length;
+        expect(closedAtClauses).toBe(2);
+    });
+
+    it('reads shadow_decisions (not decisions/positions) for a shadow-vs-shadow pair', async () => {
+        // M37 W1 (D1.1): two concurrently-evaluated shadow versions must pair
+        // from `shadow_decisions` on the shared `event_id`. This is the fix that
+        // makes `compareVersions` return non-empty output for a shadow pair —
+        // pre-M37 it read only `decisions`/`positions` and returned 0 events.
+        let capturedPairedSql = '';
+        const handler: QueryHandler = async (sql) => {
+            if (isVersionLookupSql(sql)) {
+                return [{ label: 'v', status: 'shadow' }];
+            }
+            if (isPairedDiffSql(sql)) {
+                capturedPairedSql = sql;
+                return [
+                    {
+                        paired_event_count: '40',
+                        paired_traded_event_count: '0',
+                        net_pnl_delta_usd: '0',
+                    },
+                ];
+            }
+            return [{ trade_count: '0', win_count: '0', net_pnl_usd: '0', label: 'v', status: 'shadow' }];
+        };
+
+        const result = await compareVersions({ query: handler } as never, { aVersionId: 1, bVersionId: 4, from, to });
+
+        // Both sides read shadow_decisions; neither touches the live tables.
+        const shadowSources = (capturedPairedSql.match(/FROM shadow_decisions sd/gu) ?? []).length;
+        expect(shadowSources).toBe(2);
+        expect(capturedPairedSql).not.toContain('FROM decisions');
+        expect(capturedPairedSql).not.toContain('FROM positions');
+        // Non-hollow fill gate: only filled counterfactuals count as traded.
+        expect(capturedPairedSql).toContain("(sd.simulated_fill->>'missed')::boolean = false");
+        expect(capturedPairedSql).toContain("sd.simulated_fill->>'exitPrice' IS NOT NULL");
+        // Same-event output is non-empty even while shadow fills are hollow.
+        expect(result.pairedDiff.pairedEventCount).toBe(40);
+        expect(result.pairedDiff.pairedTradedEventCount).toBe(0);
+        expect(result.pairedDiff.meanPnlDeltaUsd).toBeNull();
+    });
+
+    it('reads the active side from decisions/positions and the shadow side from shadow_decisions (no double-count)', async () => {
+        // M37 W1 (D1.2) precedence rule: in an active-vs-shadow pair the active
+        // version is sourced from `decisions`/`positions` and the shadow version
+        // from `shadow_decisions` — each from exactly one stream so the active
+        // version is never double-counted across the two tables.
+        let capturedPairedSql = '';
+        const handler: QueryHandler = async (sql, bindings) => {
+            if (isVersionLookupSql(sql)) {
+                // Route by the version id binding, not call order ( the two
+                // getPerformance lookups race under Promise.all). v3 active, v4 shadow.
+                return [bindings[0] === 3 ? { label: 'a', status: 'active' } : { label: 'b', status: 'shadow' }];
+            }
+            if (isPairedDiffSql(sql)) {
+                capturedPairedSql = sql;
+                return [
+                    {
+                        paired_event_count: '12',
+                        paired_traded_event_count: '0',
+                        net_pnl_delta_usd: '0',
+                    },
+                ];
+            }
+            return [{ trade_count: '0', win_count: '0', net_pnl_usd: '0', label: 'x', status: 'active' }];
+        };
+
+        const result = await compareVersions({ query: handler } as never, { aVersionId: 3, bVersionId: 4, from, to });
+
+        // Exactly one active side (decisions/positions) and one shadow side.
+        expect((capturedPairedSql.match(/FROM decisions d/gu) ?? []).length).toBe(1);
+        expect((capturedPairedSql.match(/LEFT JOIN positions pos/gu) ?? []).length).toBe(1);
+        expect((capturedPairedSql.match(/FROM shadow_decisions sd/gu) ?? []).length).toBe(1);
+        expect(result.pairedDiff.pairedEventCount).toBe(12);
     });
 
     it('rejects equal versionIds', async () => {
@@ -260,5 +367,111 @@ describe('compareVersions', () => {
         const { ds } = makeStubDataSource({}, {});
 
         await expect(compareVersions(ds as never, { aVersionId: 1, bVersionId: 2, from: to, to: from })).rejects.toBeInstanceOf(AnalysisValidationError);
+    });
+
+    // ── M37 W1 adversarial: additional pairing semantics ─────────────────────
+
+    it('returns pairedEventCount=0 when shadow_decisions event_ids do not overlap between the two versions', async () => {
+        // why: `compareVersions` pairs on the shared event_id (INNER JOIN). If
+        // versionA fired on event E1 and versionB fired on event E2 (different ids),
+        // no paired row exists — the joined result is empty. The paired-diff CTE
+        // uses INNER JOIN on event_id; this test proves no stale cross-join escapes.
+        const handler: QueryHandler = async (sql) => {
+            if (isVersionLookupSql(sql)) {
+                return [{ label: 'v', status: 'shadow' }];
+            }
+
+            if (isPairedDiffSql(sql)) {
+                // The DB inner-join returns zero rows; the adapter maps that to count=0.
+                return [
+                    {
+                        paired_event_count: '0',
+                        paired_traded_event_count: '0',
+                        net_pnl_delta_usd: '0',
+                    },
+                ];
+            }
+
+            return [{ trade_count: '5', win_count: '2', net_pnl_usd: '0', label: 'v', status: 'shadow' }];
+        };
+
+        const result = await compareVersions({ query: handler } as never, { aVersionId: 10, bVersionId: 11, from, to });
+
+        expect(result.pairedDiff.pairedEventCount).toBe(0);
+        expect(result.pairedDiff.pairedTradedEventCount).toBe(0);
+        expect(result.pairedDiff.meanPnlDeltaUsd).toBeNull();
+        expect(result.pairedDiff.belowSampleFloor).toBe(true);
+    });
+
+    it('active-vs-shadow pair returns non-zero pairedEventCount when they share event_ids', async () => {
+        // why: pre-M37 only `decisions`/`positions` was queried; a shadow side
+        // produced zero because shadow rows live in shadow_decisions. The M37 fix
+        // selects each side from its status-correct table so the INNER JOIN on
+        // event_id can match. This test proves the structural routing is in place.
+        let capturedPairedSql = '';
+        const handler: QueryHandler = async (sql, bindings) => {
+            if (isVersionLookupSql(sql)) {
+                // versionId 5 is active, versionId 6 is shadow.
+                return [bindings[0] === 5 ? { label: 'a', status: 'active' } : { label: 'b', status: 'shadow' }];
+            }
+
+            if (isPairedDiffSql(sql)) {
+                capturedPairedSql = sql;
+                // Simulate 8 events matched on the shared event_id.
+                return [
+                    {
+                        paired_event_count: '8',
+                        paired_traded_event_count: '0',
+                        net_pnl_delta_usd: '0',
+                    },
+                ];
+            }
+
+            return [{ trade_count: '8', win_count: '3', net_pnl_usd: '0', label: 'x', status: 'active' }];
+        };
+
+        const result = await compareVersions({ query: handler } as never, { aVersionId: 5, bVersionId: 6, from, to });
+
+        // Non-zero paired count confirms the mixed-table routing produced a joinable result.
+        expect(result.pairedDiff.pairedEventCount).toBe(8);
+        // Active side reads decisions/positions; shadow side reads shadow_decisions.
+        expect((capturedPairedSql.match(/FROM decisions d/gu) ?? []).length).toBe(1);
+        expect((capturedPairedSql.match(/FROM shadow_decisions sd/gu) ?? []).length).toBe(1);
+    });
+
+    it('active-vs-shadow: active version is NOT double-counted across both tables', async () => {
+        // why: the active version may carry shadow_decisions rows for a window when
+        // it was concurrently shadowed (ADR 0029 M37 amendment). The precedence rule
+        // reads it from `decisions`/`positions` ONLY — its shadow_decisions rows are
+        // silently ignored. This prevents the same event appearing on the active side
+        // twice (once from decisions, once from shadow_decisions).
+        let capturedPairedSql = '';
+        const handler: QueryHandler = async (sql, bindings) => {
+            if (isVersionLookupSql(sql)) {
+                return [bindings[0] === 7 ? { label: 'active-v', status: 'active' } : { label: 'shadow-v', status: 'shadow' }];
+            }
+
+            if (isPairedDiffSql(sql)) {
+                capturedPairedSql = sql;
+                return [
+                    {
+                        paired_event_count: '15',
+                        paired_traded_event_count: '5',
+                        net_pnl_delta_usd: '25',
+                    },
+                ];
+            }
+
+            return [{ trade_count: '15', win_count: '5', net_pnl_usd: '25', label: 'x', status: 'active' }];
+        };
+
+        const result = await compareVersions({ query: handler } as never, { aVersionId: 7, bVersionId: 8, from, to });
+
+        // The active side CTE reads exactly one source (decisions, not shadow_decisions).
+        // "FROM decisions d" appears exactly once (for the active side); the shadow side uses shadow_decisions.
+        expect((capturedPairedSql.match(/FROM decisions d/gu) ?? []).length).toBe(1);
+        expect((capturedPairedSql.match(/FROM shadow_decisions sd/gu) ?? []).length).toBe(1);
+        // No double-count path exists: active version never appears in FROM shadow_decisions.
+        expect(result.pairedDiff.pairedEventCount).toBe(15);
     });
 });

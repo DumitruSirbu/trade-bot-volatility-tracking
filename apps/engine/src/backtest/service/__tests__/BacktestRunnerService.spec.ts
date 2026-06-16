@@ -24,8 +24,10 @@ import { CoinTierEnum, FlowTypeEnum, RegimeLabelEnum } from '@bot/shared';
 
 import { Money } from '../../../common/utils/money';
 import { CANDLE_5M_INTERVAL_MS } from '../../../market-data/const/candleConsts';
+import { COIN_DEPTH_FLOOR_10BPS_USDT } from '../../../risk/const/riskConsts';
 import { MARKET_BREADTH_NEUTRAL_PCT, STRESS_BREADTH_DISTANCE_PCT } from '../../../risk/const';
 import { StressHaltEvaluator } from '../../../risk/service/StressHaltEvaluator';
+import { BACKTEST_FALLBACK_BID_ASK_SPREAD_PCT, BACKTEST_FALLBACK_DEPTH_FLOOR_MULTIPLIER } from '../../const/backtestConsts';
 import { BacktestRunnerService } from '../BacktestRunnerService';
 
 // ─── factories ────────────────────────────────────────────────────────────────
@@ -939,7 +941,9 @@ describe('BacktestRunnerService — resolveBtcMovePct (via event fields)', () =>
         const barOpenTimeMs = new Date('2024-01-15T00:00:00.000Z').getTime();
         const bar = buildCandle(barOpenTimeMs);
         // BTC open=40000, close=40400 → move = (40400-40000)/40000 * 100 = 1.0%
-        const btcBar = { ...buildCandle(barOpenTimeMs), symbol: 'BTCUSDT', open: '40000', close: '40400' };
+        // BTC reference bars persist under the ccxt unified symbol (`BTC/USDT:USDT`), matching
+        // BTC_REFERENCE_SYMBOL — the bare `BTCUSDT` form matched zero rows and collapsed the move to 0.
+        const btcBar = { ...buildCandle(barOpenTimeMs), symbol: 'BTC/USDT:USDT', open: '40000', close: '40400' };
 
         const runner = buildRunner({
             pointInTimeUniverse: {
@@ -948,7 +952,7 @@ describe('BacktestRunnerService — resolveBtcMovePct (via event fields)', () =>
             },
             candleLoader: {
                 loadFor5mWindow: jest.fn().mockImplementation(({ symbol, fromMs }: { symbol: string; fromMs: number }) => {
-                    if (symbol === 'BTCUSDT') {
+                    if (symbol === 'BTC/USDT:USDT') {
                         return Promise.resolve([btcBar]);
                     }
                     const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
@@ -1917,5 +1921,185 @@ describe('BacktestRunnerService — M19 breadth sentinel (marketBreadth5mUpPct=N
 
         expect(Math.abs(0 - 50)).toBeGreaterThanOrEqual(STRESS_BREADTH_DISTANCE_PCT);
         expect(evaluator.isStressed(zeroSnapshot, calmParams, false)).toBe(true);
+    });
+});
+
+// ─── M37 W2 — resolveBookGateInputs fallback (D2 fill-restoration) ─────────────
+//
+// `resolveBookGateInputs` is a module-level private function; we exercise it through
+// the event payload the orchestrator receives via `processEvent`. The event's
+// `bookDepth10bpsUsdt` and `bidAskSpreadPct` fields are populated by the function.
+
+describe('BacktestRunnerService — M37 W2: BTC_REFERENCE_SYMBOL uses ccxt unified form', () => {
+    it('BTC_REFERENCE_SYMBOL constant is BTC/USDT:USDT (not BTCUSDT)', async () => {
+        // why: the bare BTCUSDT form silently matched zero rows in the candles table,
+        // collapsing btc5mMovePct to 0 on every bar and hard-rejecting every
+        // idiosyncrasy-filtered candidate via NO_ELIGIBLE_SLOT (M37 W2 second 0-fill blocker).
+        // The runner's internal constant is tested indirectly via the loadFor5mWindow call;
+        // this assertion locks the canonical string form.
+        let btcSymbolQueried: string | null = null;
+        const barOpenTimeMs = new Date('2024-01-15T00:00:00.000Z').getTime();
+        const bar = buildCandle(barOpenTimeMs);
+
+        const runner = buildRunner({
+            pointInTimeUniverse: {
+                resolveForWindow: jest.fn().mockResolvedValue(['ETHUSDT']),
+                resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
+            },
+            candleLoader: {
+                loadFor5mWindow: jest.fn().mockImplementation(({ symbol, fromMs }: { symbol: string; fromMs: number }) => {
+                    if (symbol !== 'ETHUSDT') {
+                        btcSymbolQueried = symbol as string;
+                    }
+                    const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
+                    return Promise.resolve(isReplay && symbol === 'ETHUSDT' ? [bar] : []);
+                }),
+                loadTicksForBar: jest.fn().mockResolvedValue([]),
+            },
+            indicatorStateBuilder: {
+                buildInitialWindow: jest.fn().mockReturnValue([]),
+                appendBar: jest.fn().mockReturnValue([bar]),
+                computeSnapshot: jest.fn().mockReturnValue(null),
+            },
+        });
+
+        await runner.run(buildConfig());
+
+        // The runner MUST query the BTC reference with the ccxt unified symbol, not the bare form.
+        expect(btcSymbolQueried).toBe('BTC/USDT:USDT');
+        expect(btcSymbolQueried).not.toBe('BTCUSDT');
+    });
+});
+
+describe('BacktestRunnerService — M37 W2: resolveBookGateInputs fallback semantics', () => {
+    // Builds a runner that captures the event the orchestrator receives, with a controllable
+    // book snapshot repository. The captured event's book depth / spread fields reflect what
+    // resolveBookGateInputs returned for that bar.
+    function buildRunnerCapturingEvent(bookSnapshots: ReturnType<typeof buildBookSnapshotEntity>[]) {
+        const barOpenTimeMs = new Date('2024-01-15T00:00:00.000Z').getTime();
+        const bar = buildCandle(barOpenTimeMs);
+        let capturedEvent: any = null;
+
+        const runner = buildRunner({
+            pointInTimeUniverse: {
+                resolveForWindow: jest.fn().mockResolvedValue(['ETHUSDT']),
+                resolveAt: jest.fn().mockResolvedValue(new Map([['ETHUSDT', CoinTierEnum.TIER_1]])),
+            },
+            bookSnapshotRepository: {
+                findRange: jest.fn().mockResolvedValue(bookSnapshots),
+            },
+            candleLoader: {
+                loadFor5mWindow: jest.fn().mockImplementation(({ symbol, fromMs }: { symbol: string; fromMs: number }) => {
+                    if (symbol !== 'ETHUSDT') return Promise.resolve([]);
+                    const isReplay = fromMs === new Date('2024-01-01T00:00:00.000Z').getTime();
+                    return Promise.resolve(isReplay ? [bar] : []);
+                }),
+                loadTicksForBar: jest.fn().mockResolvedValue([]),
+            },
+            indicatorStateBuilder: {
+                buildInitialWindow: jest.fn().mockReturnValue([]),
+                appendBar: jest.fn().mockReturnValue([bar]),
+                computeSnapshot: jest.fn().mockReturnValue({
+                    symbol: 'ETHUSDT',
+                    closedBarOpenTimeMs: barOpenTimeMs,
+                    vwapSession: new Money('2000'),
+                    vwap20bar: new Money('2000'),
+                    vwap24h: new Money('2000'),
+                    vwapEventAnchored: new Money('2000'),
+                    activeVwapAnchorType: 'session',
+                    vwapDeviationPct: 3.5,
+                    vwapDeviationSigma: 2.5,
+                    volumeRatio: 2.5,
+                    volume20barAvg: new Money('500000'),
+                    atr14: new Money('50'),
+                    adx14: 20,
+                    adxDiPlus: 10,
+                    adxDiMinus: 5,
+                    rsi14: 55,
+                    bollingerUpper: new Money('2100'),
+                    bollingerLower: new Money('1900'),
+                    bollingerPctB: 0.7,
+                    close: new Money('2070'),
+                    fiveMinMovePct: 1.0,
+                }),
+            },
+            orchestrator: {
+                processEvent: jest.fn().mockImplementation((event: any) => {
+                    capturedEvent = event;
+                    return Promise.resolve({ skipped: true, rejectedByGate: false, missedFill: false, filled: false });
+                }),
+            },
+        });
+
+        return { runner, barOpenTimeMs, getCapturedEvent: () => capturedEvent };
+    }
+
+    it('when no book_snapshot row exists, bookDepth10bpsUsdt is the tier-floor multiplied fallback (non-zero, non-rejecting)', async () => {
+        // why: pre-M37 the gate received depth=0, which hard-rejected EVERY no-book candidate.
+        // The fallback must be strictly above the per-tier COIN_DEPTH_FLOOR_10BPS_USDT floor
+        // so the depth check passes, not a zero that continues the 0-fill blocker.
+        const { runner, getCapturedEvent } = buildRunnerCapturingEvent([]);
+
+        await runner.run(buildConfig());
+
+        const event = getCapturedEvent();
+        expect(event).not.toBeNull();
+
+        const tier1Floor = COIN_DEPTH_FLOOR_10BPS_USDT[CoinTierEnum.TIER_1];
+        const expectedFallbackDepth = tier1Floor * BACKTEST_FALLBACK_DEPTH_FLOOR_MULTIPLIER;
+
+        // Depth must be strictly above the floor (> not >=) — the gate boundary is `<=` (floor rejects).
+        expect(Number(event.bookDepth10bpsUsdt)).toBeGreaterThan(tier1Floor);
+        expect(Number(event.bookDepth10bpsUsdt)).toBeCloseTo(expectedFallbackDepth, 2);
+    });
+
+    it('when no book_snapshot row exists, bidAskSpreadPct is the conservative fallback (below tier-1 spread ceiling)', async () => {
+        // why: the fallback spread must be sub-ceiling so the spread check passes.
+        // Tier-1 ceiling is 0.15%; BACKTEST_FALLBACK_BID_ASK_SPREAD_PCT = 0.05%.
+        const { runner, getCapturedEvent } = buildRunnerCapturingEvent([]);
+
+        await runner.run(buildConfig());
+
+        const event = getCapturedEvent();
+        expect(event).not.toBeNull();
+        expect(event.bidAskSpreadPct).toBeCloseTo(BACKTEST_FALLBACK_BID_ASK_SPREAD_PCT, 4);
+    });
+
+    it('when a book_snapshot row exists, the real captured spread and depth are used (full-fidelity gate input)', async () => {
+        // why: the fallback must only apply when no snapshot exists; a real snapshot
+        // row must override the fallback so the live-captured conditions are reproduced.
+        const barOpenTimeMs = new Date('2024-01-15T00:00:00.000Z').getTime();
+        const snapshot = buildBookSnapshotEntity(barOpenTimeMs);
+        snapshot.spread = new Money('0.12') as any;
+        snapshot.depth10bps = new Money('75000') as any;
+
+        const { runner, getCapturedEvent } = buildRunnerCapturingEvent([snapshot]);
+
+        await runner.run(buildConfig());
+
+        const event = getCapturedEvent();
+        expect(event).not.toBeNull();
+        // Real snapshot values flow through — NOT the fallback values.
+        expect(Number(event.bidAskSpreadPct)).toBeCloseTo(0.12, 4);
+        expect(Number(event.bookDepth10bpsUsdt)).toBeCloseTo(75000, 0);
+    });
+
+    it('fallback depth is CONSERVATIVE (tier-floor × 1.01) — not abundant — so no live-impossible fills are manufactured', async () => {
+        // why: the fallback models barely-sufficient liquidity (1% above the floor),
+        // not abundant book. It stops EVERY candidate from being rejected but cannot
+        // turn a genuinely thin-book rejection into an approval.
+        // BACKTEST_FALLBACK_DEPTH_FLOOR_MULTIPLIER = 1.01: depth sits 1% above the
+        // floor that the gate's `<= floor` boundary would reject.
+        expect(BACKTEST_FALLBACK_DEPTH_FLOOR_MULTIPLIER).toBe(1.01);
+
+        const tier1Floor = COIN_DEPTH_FLOOR_10BPS_USDT[CoinTierEnum.TIER_1];
+        const fallbackDepth = tier1Floor * BACKTEST_FALLBACK_DEPTH_FLOOR_MULTIPLIER;
+
+        // The fallback is strictly above the rejection boundary but not abundant.
+        expect(fallbackDepth).toBeGreaterThan(tier1Floor);
+        // It should not be so generous that it models a liquid top-tier coin.
+        // Abundant tier-1 depth is order-of-magnitude larger (tens of millions); the
+        // fallback is only marginally above the floor.
+        expect(fallbackDepth / tier1Floor).toBeLessThan(1.1);
     });
 });

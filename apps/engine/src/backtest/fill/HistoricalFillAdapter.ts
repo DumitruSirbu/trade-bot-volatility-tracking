@@ -199,8 +199,14 @@ export class HistoricalFillAdapter {
             slippagePct: core.slippagePct,
             tsMs: core.tsMs,
             missed: !core.filled,
-            // Tier-floor model only at M7 (depth-aware extension is a deferred wave).
-            depthAware: false,
+            // M37 W2 (ADR 0015 M37 amendment): a fill is "depth-aware" (full-fidelity) when a
+            // real captured book_snapshots row backed the gate's depth/spread inputs for this
+            // bar. When no row existed the replay used the conservative tier-floor-model
+            // fallback (resolveBookGateInputs), so the fill is low-fidelity. The slippage model
+            // is still tier-floor in both cases (depth-aware slippage is a deferred wave); this
+            // flag now tracks book-INPUT provenance so fallback fills are never pooled with
+            // book-backed fills (IBacktestReport.lowFidelityTradeCount, ADR 0019 criterion 12).
+            depthAware: request.bookSnapshot !== null,
         };
     }
 }

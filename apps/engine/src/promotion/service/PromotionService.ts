@@ -105,8 +105,7 @@ export class PromotionService {
                 await this.requireReportPromotesVersion(reportRow, versionId);
 
                 if (incumbent !== null) {
-                    incumbent.status = StrategyStatusEnum.ARCHIVED;
-                    incumbent.archivedAt = new Date();
+                    this.demoteIncumbentToShadow(incumbent);
                     await manager.save(StrategyVersionEntity, incumbent);
                 }
 
@@ -144,8 +143,7 @@ export class PromotionService {
                 const incumbent = await this.lockActiveByName(manager, target.name, target.id);
 
                 if (incumbent !== null) {
-                    incumbent.status = StrategyStatusEnum.ARCHIVED;
-                    incumbent.archivedAt = new Date();
+                    this.demoteIncumbentToShadow(incumbent);
                     await manager.save(StrategyVersionEntity, incumbent);
                 }
 
@@ -198,11 +196,27 @@ export class PromotionService {
             throw new PromotionStateException(`PromotionService: version ${versionId} not found`);
         }
 
-        if (target.status !== StrategyStatusEnum.ARCHIVED) {
-            throw new PromotionStateException(`PromotionService: version ${versionId} must be archived to reactivate (was ${target.status})`);
+        // M37 (D1.3): a demoted incumbent now rests in SHADOW (not ARCHIVED) so it
+        // keeps shadow-logging with no gap. Reactivation therefore accepts a SHADOW
+        // target as well as a legacy ARCHIVED one; both are non-active versions
+        // eligible to be flipped back to ACTIVE.
+        if (target.status !== StrategyStatusEnum.ARCHIVED && target.status !== StrategyStatusEnum.SHADOW) {
+            throw new PromotionStateException(`PromotionService: version ${versionId} must be archived or shadow to reactivate (was ${target.status})`);
         }
 
         return target;
+    }
+
+    // M37 (D1.3): demote the outgoing active version to SHADOW — never ARCHIVED.
+    // The shadow orchestrator (`ShadowStrategyOrchestratorService.findActiveShadows`)
+    // filters on `status = shadow`, so an ARCHIVED demotion silently stops the
+    // version's shadow-logging until an operator hand-edits it back (the verified
+    // 6-day v1 blackout, Jun 8→14). Resting it in SHADOW keeps the counterfactual
+    // stream continuous across the transition. `archivedAt` is cleared so the row
+    // is not mistaken for an archived version by downstream readers.
+    private demoteIncumbentToShadow(incumbent: StrategyVersionEntity): void {
+        incumbent.status = StrategyStatusEnum.SHADOW;
+        incumbent.archivedAt = null;
     }
 
     private async lockActiveByName(manager: EntityManager, name: string, excludingId: number): Promise<StrategyVersionEntity | null> {

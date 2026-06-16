@@ -41,7 +41,7 @@ import { Money } from '../../../common/utils/money';
 import { CANDLE_5M_INTERVAL_MS } from '../../../market-data/const/candleConsts';
 import { TickAggregateEntity } from '../../../market-data/entity/TickAggregateEntity';
 import { TickAggregateRepository } from '../../../market-data/repository/TickAggregateRepository';
-import { HistoricalFillAdapter, IFillRequest } from '../../../backtest/fill/HistoricalFillAdapter';
+import { HistoricalFillAdapter } from '../../../backtest/fill/HistoricalFillAdapter';
 import { ShadowDecisionRepository } from '../../repository/ShadowDecisionRepository';
 import { StrategyVersionRepository } from '../../repository/StrategyVersionRepository';
 import { StrategyRegistry } from '../../registry/StrategyRegistry';
@@ -446,28 +446,32 @@ describe('ShadowStrategyOrchestratorService — D8: empty ticks → conservative
 // ─── F10 — barHigh/barLow are tick-derived, not entry-price clones ──────────────
 
 describe('ShadowStrategyOrchestratorService — F10: barHigh/barLow come from tick extremes, not entry price', () => {
+    // M37 (D1.6): the tick-derived bar extremes now flow into the FORWARD-ONLY exit
+    // simulation (`simulateIntrabarStop`), not the entry `simulateFill`. The F10
+    // regression intent is unchanged — extremes must be tick-derived, not entry-price
+    // clones — only the method that receives them moved.
     it('when ticks have a wider range than entry price, barHigh > entryPrice and barLow < entryPrice', async () => {
         // tick high = 30_500, tick low = 30_300, entry price = 30_450
         // → barHigh must equal 30_500, barLow must equal 30_300 (NOT both 30_450)
         const tick = buildCrossingTick();
         // high and low are already set by buildCrossingTick: high=30500, low=30300
 
-        let capturedFillRequest: IFillRequest | null = null;
-        jest.spyOn(HistoricalFillAdapter.prototype, 'simulateFill').mockImplementation((req) => {
-            capturedFillRequest = req;
-            return {
-                missed: false,
-                priceUsdt: req.limitPrice.toFixed(),
-                slippagePct: '0',
-                qty: '0.1',
-                feeUsdt: '0',
-                tsMs: NOW_MS,
-                eventId: req.eventId,
-                symbol: req.symbol,
-                side: req.side,
-                intent: req.intent,
-                depthAware: false,
-            } as any;
+        let capturedBarHigh: string | null = null;
+        let capturedBarLow: string | null = null;
+        const realStop = HistoricalFillAdapter.prototype.simulateIntrabarStop;
+        jest.spyOn(HistoricalFillAdapter.prototype, 'simulateIntrabarStop').mockImplementation(function (
+            this: HistoricalFillAdapter,
+            side,
+            stopLoss,
+            takeProfit,
+            ticks,
+            barHigh,
+            barLow,
+            barOpenMs,
+        ) {
+            capturedBarHigh = barHigh.toFixed();
+            capturedBarLow = barLow.toFixed();
+            return realStop.call(this, side, stopLoss, takeProfit, ticks, barHigh, barLow, barOpenMs);
         });
 
         const { service } = buildService([tick], buildOpenSignal());
@@ -475,12 +479,12 @@ describe('ShadowStrategyOrchestratorService — F10: barHigh/barLow come from ti
 
         await service.runShadows(event, NOW_MS);
 
-        expect(capturedFillRequest).not.toBeNull();
-        expect(new Decimal(capturedFillRequest!.barHigh.toFixed()).gte(new Decimal(ENTRY_PRICE_STR))).toBe(true);
-        expect(new Decimal(capturedFillRequest!.barLow.toFixed()).lte(new Decimal(ENTRY_PRICE_STR))).toBe(true);
+        expect(capturedBarHigh).not.toBeNull();
+        expect(new Decimal(capturedBarHigh!).gte(new Decimal(ENTRY_PRICE_STR))).toBe(true);
+        expect(new Decimal(capturedBarLow!).lte(new Decimal(ENTRY_PRICE_STR))).toBe(true);
         // The critical regression guard: barHigh and barLow must NOT both equal entry price (pre-M26 bug)
-        expect(capturedFillRequest!.barHigh.toFixed()).not.toBe(ENTRY_PRICE_STR);
-        expect(capturedFillRequest!.barLow.toFixed()).not.toBe(ENTRY_PRICE_STR);
+        expect(capturedBarHigh).not.toBe(ENTRY_PRICE_STR);
+        expect(capturedBarLow).not.toBe(ENTRY_PRICE_STR);
 
         jest.restoreAllMocks();
     });
@@ -494,22 +498,22 @@ describe('ShadowStrategyOrchestratorService — F10: barHigh/barLow come from ti
         tick2.high = buildMoneyValue('30800'); // higher
         tick2.low = buildMoneyValue('30100'); // lower
 
-        let capturedFillRequest: IFillRequest | null = null;
-        jest.spyOn(HistoricalFillAdapter.prototype, 'simulateFill').mockImplementation((req) => {
-            capturedFillRequest = req;
-            return {
-                missed: false,
-                priceUsdt: req.limitPrice.toFixed(),
-                slippagePct: '0',
-                qty: '0.1',
-                feeUsdt: '0',
-                tsMs: NOW_MS,
-                eventId: req.eventId,
-                symbol: req.symbol,
-                side: req.side,
-                intent: req.intent,
-                depthAware: false,
-            } as any;
+        let capturedBarHigh: string | null = null;
+        let capturedBarLow: string | null = null;
+        const realStop = HistoricalFillAdapter.prototype.simulateIntrabarStop;
+        jest.spyOn(HistoricalFillAdapter.prototype, 'simulateIntrabarStop').mockImplementation(function (
+            this: HistoricalFillAdapter,
+            side,
+            stopLoss,
+            takeProfit,
+            ticks,
+            barHigh,
+            barLow,
+            barOpenMs,
+        ) {
+            capturedBarHigh = barHigh.toFixed();
+            capturedBarLow = barLow.toFixed();
+            return realStop.call(this, side, stopLoss, takeProfit, ticks, barHigh, barLow, barOpenMs);
         });
 
         const { service } = buildService([tick1, tick2], buildOpenSignal());
@@ -517,11 +521,11 @@ describe('ShadowStrategyOrchestratorService — F10: barHigh/barLow come from ti
 
         await service.runShadows(event, NOW_MS);
 
-        expect(capturedFillRequest).not.toBeNull();
+        expect(capturedBarHigh).not.toBeNull();
         // barHigh must be max(30600, 30800) = 30800
-        expect(capturedFillRequest!.barHigh.toFixed()).toBe('30800');
+        expect(capturedBarHigh).toBe('30800');
         // barLow must be min(30200, 30100) = 30100
-        expect(capturedFillRequest!.barLow.toFixed()).toBe('30100');
+        expect(capturedBarLow).toBe('30100');
 
         jest.restoreAllMocks();
     });
@@ -731,6 +735,79 @@ describe('ShadowStrategyOrchestratorService — adversarial: SKIP signal skips t
         expect(ledger.tryOpen as jest.Mock).not.toHaveBeenCalled();
         const [insertArg] = (shadowDecisionsMock.insertShadowDecision as jest.Mock).mock.calls[0];
         expect(insertArg.simulatedFill).toBeNull();
+    });
+});
+
+// ─── M37 (D1.6) — non-hollow shadow fill: entry + forward-only exit + closeReason ──
+
+describe('ShadowStrategyOrchestratorService — D1.6: accepted open produces a NON-HOLLOW counterfactual', () => {
+    // Builds a tick whose intra-bar HIGH breaches the LONG take-profit so the forward-only
+    // exit simulation resolves to a `tp` close — the repaired path must populate
+    // entryPrice (≠ "0"), exitPrice, and closeReason, with missed === false.
+    function buildTpBreachTick(): TickAggregateEntity {
+        const tick = new TickAggregateEntity();
+        tick.id = 9;
+        tick.ts = new Date(BAR_OPEN_MS + 2_000);
+        tick.symbol = SYMBOL;
+        tick.open = buildMoneyValue('30400');
+        tick.high = buildMoneyValue('31600'); // > TAKE_PROFIT_STR (31500) → TP breach
+        tick.low = buildMoneyValue('30300');
+        tick.close = buildMoneyValue(ENTRY_PRICE_STR);
+
+        tick.volume = buildMoneyValue('500');
+
+        return tick;
+    }
+
+    it('a gate-allowed LONG open with a TP-breaching forward tick fills (missed=false) with entry/exit/closeReason populated', async () => {
+        const { service, shadowDecisionsMock } = buildService([buildTpBreachTick()], buildOpenSignal(PositionSideEnum.LONG));
+        const event = buildVolatilityEvent();
+
+        await service.runShadows(event, NOW_MS);
+
+        const [insertArg] = (shadowDecisionsMock.insertShadowDecision as jest.Mock).mock.calls[0];
+        const fill = insertArg.simulatedFill;
+
+        expect(fill).not.toBeNull();
+        expect(fill.missed).toBe(false);
+        expect(new Decimal(fill.entryPrice).gt(0)).toBe(true);
+        expect(fill.exitPrice).not.toBeNull();
+        expect(fill.closeReason).toBe('tp');
+        expect(fill.lowFidelity).toBe(true);
+    });
+
+    it('when the forward tick path breaches neither SL nor TP, the open force-closes at the bar close', async () => {
+        // A tight tick that stays well inside both SL (29500) and TP (31500) → no breach →
+        // the forward-only exit is a force_close at the last tick close.
+        const insideTick = buildCrossingTick();
+        insideTick.high = buildMoneyValue('30500');
+        insideTick.low = buildMoneyValue('30400');
+
+        const { service, shadowDecisionsMock } = buildService([insideTick], buildOpenSignal(PositionSideEnum.LONG));
+        const event = buildVolatilityEvent();
+
+        await service.runShadows(event, NOW_MS);
+
+        const [insertArg] = (shadowDecisionsMock.insertShadowDecision as jest.Mock).mock.calls[0];
+        const fill = insertArg.simulatedFill;
+
+        expect(fill.missed).toBe(false);
+        expect(fill.closeReason).toBe('force_close');
+        expect(fill.forceClose).toBe(true);
+        expect(fill.exitPrice).toBe(ENTRY_PRICE_STR);
+    });
+
+    it('an accepted open with NO signal-bar ticks stays a conservative miss (no fabricated fill)', async () => {
+        const { service, ledger, shadowDecisionsMock } = buildService([], buildOpenSignal(PositionSideEnum.LONG));
+        const event = buildVolatilityEvent();
+
+        await service.runShadows(event, NOW_MS);
+
+        // No-tape open is declined upstream before reaching simulateShadowFill, so the row
+        // persists with simulatedFill: null and the ledger never opens.
+        const [insertArg] = (shadowDecisionsMock.insertShadowDecision as jest.Mock).mock.calls[0];
+        expect(insertArg.simulatedFill).toBeNull();
+        expect(ledger.tryOpen as jest.Mock).not.toHaveBeenCalled();
     });
 });
 

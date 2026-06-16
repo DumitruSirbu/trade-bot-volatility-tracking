@@ -37,6 +37,15 @@ interface IArmedPosition {
     readonly stopLossPrice: MoneyValue | null;
     readonly takeProfitPrice: MoneyValue | null;
     readonly armedAtMs: number;
+    // M37 D3.1 — TP arming-tick guard. The TP monitor must NOT fire on a position whose entry fill
+    // landed AT or PAST the TP level (a `take_profit` label requires a realized gain net of cost; an
+    // instant-fire produces a 0-min hold / MFE=0.00 / net-negative close mislabeled as take_profit —
+    // the EDGE/ZEC/ALLO defect). `tpEligible` starts false and flips true on the FIRST observed tick
+    // where TP is NOT already breached — i.e. price was on the pre-target side at least once. Only
+    // then can a later cross-up be a genuine take-profit run. SL is never gated (survival first), so
+    // a position armed past TP still closes correctly via SL or the time-stop enforcer. The flag is
+    // mutated in place on the armed entry (the Map holds the same object reference).
+    tpEligible: boolean;
 }
 
 // Breach classification (`BreachKindEnum`, execution/enum) is side-aware per ADR 0011 §3:
@@ -97,6 +106,9 @@ export class LocalProtectiveMonitor {
             stopLossPrice: input.stopLossPrice,
             takeProfitPrice: input.takeProfitPrice,
             armedAtMs: Date.now(),
+            // M37 D3.1: TP starts ineligible — it arms only after the first tick observed on the
+            // pre-target side of the TP level (see `evaluateBreach`).
+            tpEligible: false,
         });
 
         this.logger.log(`local monitor armed positionId=${input.positionId} symbol=${input.symbol} side=${input.side}`);
@@ -126,14 +138,17 @@ export class LocalProtectiveMonitor {
     // Pure breach-classification function (ADR 0011 §3). Exposed as a public method
     // so unit tests can call it without constructing the gate/repository graph.
     // No side effects, no `Date.now()`, no I/O.
+    //
+    // M37 D3.1: TP is gated on `armed.tpEligible` — a TP breach is suppressed until the position has
+    // observed at least one tick on the pre-target side of the TP level (the eligibility transition is
+    // owned by `onPriceUpdate`, the command path, so this stays a pure query per CQS). SL is never
+    // gated: survival before opportunity, and a degenerate gap through both still resolves to SL.
     evaluateBreach(armed: IArmedPosition, markPrice: MoneyValue): BreachKindEnum | null {
-        // SL first (ADR 0011 §3): survival before opportunity. A degenerate gap
-        // through both SL and TP on a single tick resolves to SL.
         if (armed.stopLossPrice !== null && this.isStopLossBreached(armed.side, markPrice, armed.stopLossPrice)) {
             return BreachKindEnum.STOP_LOSS;
         }
 
-        if (armed.takeProfitPrice !== null && this.isTakeProfitBreached(armed.side, markPrice, armed.takeProfitPrice)) {
+        if (armed.tpEligible && armed.takeProfitPrice !== null && this.isTakeProfitBreached(armed.side, markPrice, armed.takeProfitPrice)) {
             return BreachKindEnum.TAKE_PROFIT;
         }
 
@@ -164,6 +179,12 @@ export class LocalProtectiveMonitor {
         const armedSnapshot = [...this.armed.values()].filter((armed) => armed.symbol === event.symbol);
 
         for (const armed of armedSnapshot) {
+            // M37 D3.1: flip TP eligibility BEFORE evaluating. A tick on the pre-target side of the TP
+            // level (TP not breached) proves the position was not opened at/past its TP, so a later
+            // cross-up is a genuine take-profit run. This is the command-path mutation that keeps
+            // `evaluateBreach` a pure query.
+            this.updateTakeProfitEligibility(armed, markPrice);
+
             const breach = this.evaluateBreach(armed, markPrice);
 
             if (breach === null) {
@@ -172,6 +193,30 @@ export class LocalProtectiveMonitor {
 
             await this.handleBreach(armed, markPrice, breach, event.timestampMs);
         }
+    }
+
+    // M37 D3.1 arming-tick transition. Once `tpEligible` is true it stays true (a position that ran
+    // favorably then pulled back to entry is still TP-eligible). It flips true the first time a tick
+    // is observed where TP is NOT already breached — i.e. price is on the pre-target side. If the very
+    // first observed tick is already at/past TP (entry filled at/past the target), the flag stays false
+    // and that instant TP fire is suppressed; the position closes via SL or the time-stop enforcer with
+    // a correct exit label, never a 0-min/MFE-0.00 `take_profit`.
+    private updateTakeProfitEligibility(armed: IArmedPosition, markPrice: MoneyValue): void {
+        if (armed.tpEligible || armed.takeProfitPrice === null) {
+            return;
+        }
+
+        if (!this.isTakeProfitBreached(armed.side, markPrice, armed.takeProfitPrice)) {
+            armed.tpEligible = true;
+
+            return;
+        }
+
+        this.logger.warn(
+            `local monitor TP suppressed on arming tick positionId=${armed.positionId} symbol=${armed.symbol} side=${armed.side} ` +
+                `markPrice=${markPrice.toFixed()} tp=${armed.takeProfitPrice.toFixed()} - entry filled at/past TP; ` +
+                `awaiting a pre-target tick before TP can fire (M37 D3.1)`,
+        );
     }
 
     // Disarm-on-CLOSED: the monitor stands down automatically when the position

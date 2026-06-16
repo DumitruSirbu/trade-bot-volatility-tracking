@@ -14,6 +14,7 @@ import {
 } from '@bot/shared';
 import { Inject, Injectable, Logger, OnModuleInit, forwardRef } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
+import { Interval } from '@nestjs/schedule';
 
 import { ORDER_INTENT_APPROVED_EVENT, ORDER_INTENT_EXPIRED_EVENT, POSITION_OPENED_EVENT, PRICE_UPDATE_EVENT } from '../../common/const';
 import { IPositionOpenedEvent } from '../../common/interface/IPositionOpenedEvent';
@@ -24,7 +25,12 @@ import { PositionRepository } from '../../position/repository/PositionRepository
 import { IIntentSizing, IOrderIntent, IOrderIntentApprovedEvent, IRiskGateContext } from '../../risk/interface';
 import { IProposedExit } from '../../strategy/interface';
 import { RiskGateService } from '../../risk/service';
-import { ORDER_INTENT_EXPIRED_REASON_DRY_RUN, ORDER_INTENT_EXPIRED_REASON_HALTED, TIME_STOP_ENFORCER_EVENT_ID_PREFIX } from '../const';
+import {
+    ORDER_INTENT_EXPIRED_REASON_DRY_RUN,
+    ORDER_INTENT_EXPIRED_REASON_HALTED,
+    TIME_STOP_ENFORCER_EVENT_ID_PREFIX,
+    TIME_STOP_SWEEP_INTERVAL_MS,
+} from '../const';
 import { SharedCloseCoordinator } from './SharedCloseCoordinator';
 
 // M33 Fix 1 (ADR 0011 §9) — the live/paper time-stop enforcer. No component in the live path
@@ -141,50 +147,109 @@ export class PositionTimeStopEnforcer implements OnModuleInit {
             }
 
             // Only AFTER the slot is held do we start async work. `void` so the handler returns
-            // synchronously — the acquire above is the only serialization point that matters.
-            void this.enforceTimeStop(positionId, event);
+            // synchronously — the acquire above is the only serialization point that matters. The
+            // price-tick path passes its own `event.price` as the close-intent mark (the most recent
+            // observed price for the symbol); `nowMs` is the event timestamp (deterministic / replay-safe).
+            void this.enforceTimeStop(positionId, event.symbol, parseMoney(event.price), event.timestampMs);
         }
+    }
+
+    // M37 D3.2 — periodic safety-net sweep. PositionTimeStopEnforcer's price-tick path only checks a
+    // symbol's deadlines when a `price.update` arrives for THAT symbol; a thin tier-2 coin whose feed
+    // stalls emits no ticks, so a position can run far past its `time_stop_at` (the MRVL 127-min breach).
+    // This interval-driven sweep checks ALL open positions against their persisted deadlines regardless
+    // of tick arrival, and closes any breached one through the SAME gate-routed machinery the price path
+    // uses. The slot acquire is synchronous before any per-position await, so a same-instant collision
+    // with the price path (or the SL/TP monitor) still fires exactly one close.
+    //
+    // Determinism: the deadline is compared against `Date.now()` captured ONCE here at the sweep
+    // boundary, then injected downward — the SAME documented `@Interval`-reads-the-clock exception
+    // ReconciliationService uses. The backtest never schedules this sweep: it runs its own deterministic
+    // per-bar time-stop check (BacktestRunnerService.shouldHitTimeStop), so live↔backtest parity holds.
+    @Interval(TIME_STOP_SWEEP_INTERVAL_MS)
+    async sweepDeadlineBreaches(): Promise<void> {
+        const nowMs = Date.now();
+
+        if (nowMs < this.earliestTimeStopMs) {
+            return;
+        }
+
+        await this.closeAllBreachedPositions(nowMs);
+    }
+
+    // Iterates every open candidate and enforces any whose deadline the sweep boundary has crossed.
+    // Re-reads the authoritative open set (the in-memory index is the fast-path guard, the DB is the
+    // source of truth for the close) so a stalled-feed position with no index entry is still caught.
+    private async closeAllBreachedPositions(nowMs: number): Promise<void> {
+        const openPositions = await this.positions.findOpen();
+
+        for (const position of openPositions) {
+            if (!this.isDeadlineBreached(position, nowMs)) {
+                continue;
+            }
+
+            // Synchronous acquire before any await — same serialization guarantee as the price path.
+            if (!this.closeCoordinator.tryAcquire(position.id)) {
+                continue;
+            }
+
+            // No fresh tick on the sweep path, so the close-intent mark falls back to the row's
+            // entryPrice. The mark is non-load-bearing for the close: the gate short-circuits CLOSE
+            // without reading it and the executor submits REDUCE_MARKET (no limit price). It only feeds
+            // the informational `midAtTrigger` / notional.
+            void this.enforceTimeStop(position.id, position.symbol, position.entryPrice, nowMs);
+        }
+    }
+
+    // True when the position carries a persisted deadline that the supplied clock has crossed.
+    private isDeadlineBreached(position: PositionEntity, nowMs: number): boolean {
+        if (position.timeStopAt === null || position.timeStopAt === undefined) {
+            return false;
+        }
+
+        return nowMs >= position.timeStopAt.getTime();
     }
 
     // Runs only after the slot is held. Re-reads the authoritative row (qty may have changed via a
     // partial reduce between the index load and now — MEDIUM Q1), re-validates due-eligibility, then
     // routes a CLOSE through the gate. On any abort/reject it releases the slot so the next tick retries.
-    private async enforceTimeStop(positionId: number, event: IPriceUpdateEvent): Promise<void> {
+    // Shared by the price-tick path and the periodic sweep — both supply the close-intent `markPrice`
+    // and the deadline-comparison `nowMs`, so the body is source-agnostic.
+    private async enforceTimeStop(positionId: number, symbol: string, markPrice: MoneyValue, nowMs: number): Promise<void> {
         // M33 R1-Fix-A: floating `void` call — a throw from any await below would leak the held slot
         // forever, leaving the position permanently uncloseable for this run. The catch releases the
         // slot, logs with context, and swallows (re-throwing would surface as an unhandled rejection).
         try {
-            const candidates = await this.positions.findTimeStopCandidatesBySymbol(event.symbol);
-            const position = this.validateTimeStopEligibility(positionId, candidates, event);
+            const candidates = await this.positions.findTimeStopCandidatesBySymbol(symbol);
+            const position = this.validateTimeStopEligibility(positionId, candidates, symbol, nowMs);
 
             if (position === null) {
                 return;
             }
 
             // fill diverges from backtest bar.open by up to one taker slippage tier — ADR-0015 §4.6
-            const markPrice = parseMoney(event.price);
             const intent = this.buildCloseIntent(position, markPrice);
-            const context = this.buildDeRiskContext(event.timestampMs);
+            const context = this.buildDeRiskContext(nowMs);
 
-            await this.emitApprovedClose(intent, context, positionId, position, event.timestampMs);
+            await this.emitApprovedClose(intent, context, positionId, position, nowMs);
         } catch (cause) {
             this.closeCoordinator.release(positionId);
             this.logger.error(
-                `time-stop enforcement threw for positionId=${positionId} symbol=${event.symbol}: ` +
+                `time-stop enforcement threw for positionId=${positionId} symbol=${symbol}: ` +
                     `${cause instanceof Error ? cause.message : String(cause)} - released close slot; next past-deadline tick will re-evaluate`,
             );
         }
     }
 
     // The three guard checks that gate a held slot into an actual close (re-read presence, persisted
-    // deadline present, deadline still crossed against the event clock). Returns the validated row,
+    // deadline present, deadline still crossed against the supplied clock). Returns the validated row,
     // or null after releasing the slot — the position is no longer due, so the next tick re-evaluates.
-    private validateTimeStopEligibility(positionId: number, candidates: readonly PositionEntity[], event: IPriceUpdateEvent): PositionEntity | null {
+    private validateTimeStopEligibility(positionId: number, candidates: readonly PositionEntity[], symbol: string, nowMs: number): PositionEntity | null {
         const position = candidates.find((candidate) => candidate.id === positionId) ?? null;
 
         if (position === null) {
             this.logger.log(`time-stop positionId=${positionId} no longer a candidate (closed/qty<=0/CLOSING) - releasing slot`);
-            this.removeFromIndex(event.symbol, positionId);
+            this.removeFromIndex(symbol, positionId);
             this.closeCoordinator.release(positionId);
 
             return null;
@@ -196,7 +261,7 @@ export class PositionTimeStopEnforcer implements OnModuleInit {
             return null;
         }
 
-        if (event.timestampMs < position.timeStopAt.getTime()) {
+        if (nowMs < position.timeStopAt.getTime()) {
             this.closeCoordinator.release(positionId);
 
             return null;

@@ -521,3 +521,81 @@ populates it:
 This converts the M26 "identified analytically (`missed=true AND no tick_aggregates`)"
 heuristic into a self-describing column, preventing survivorship bias when analyzing
 shadow misses. It does not change any fill outcome — only the recorded reason.
+
+## M37 Amendment (2026-06-15)
+
+**Milestone:** M37 (strategy-comparison infrastructure). **Status:** Accepted.
+**See:** ADR 0017 M37 amendment, ADR 0015 M37 amendment.
+
+A direct content inspection of `shadow_decisions.simulated_fill` (2026-06-15) showed
+**~99% of fills are hollow** — `missed:true`, `entryPrice:"0"`, no `exitPrice`, no
+`closeReason`, `lowFidelity:true` (v2: 841/844; v3: 177/179). The shadow stream records
+*decisions* but produces **no realized counterfactual outcome**, so the same-event
+comparison the read layer exposes (ADR 0017 M37) has nothing to compare on the shadow
+side. M37 repairs the read layer and the fill content. This amendment records both, and
+reaffirms (does **not** change) the topology and determinism invariants.
+
+### Analysis-layer reconciliation contract (READ-layer change, not topology)
+
+The comparison layer reads `shadow_decisions` reconciled with `decisions`/`positions`
+on the shared `event_id`, applying the active-vs-shadow precedence rule from ADR 0017
+M37: **active version from `decisions`/`positions`; shadow-status versions from
+`shadow_decisions`; a version in both is never double-counted.** This is a
+`packages/analysis/` read-layer change. **Evaluation topology is unchanged** — the rows
+already exist; the prior gap was that the analysis queries never read the shadow table.
+
+### Active→shadow status-transition continuity (engine, D1.3)
+
+When a version flips from `active` to `shadow`, `runShadows` must pick it up
+**immediately, with no logging gap**. A verified defect motivates this requirement: v1
+went inactive on Jun 8 but did not resume shadow-logging until Jun 14 — a **6-day
+blackout** (Jun 8→14) in both `decisions` and `shadow_decisions`. A deactivated version
+must continue as `shadow` with no gap across the transition. This is a targeted engine
+fix to the status transition, **not** a topology change.
+
+### Shadow fill-simulator content fix (D1.6) — supersedes ~99% hollow behavior
+
+An accepted `open` counterfactual MUST produce a **non-hollow** `simulated_fill`:
+
+- `entryPrice` — entry at the **decision-close** reference per the M26 next-bar-open
+  alignment (ADR 0029 M26 amendment; ADR 0015 §6 forward-look fix). Never `"0"`.
+- **Forward-only exit** — driven by the **version's own exit policy on FORWARD bars
+  only**. No future-extremum / look-ahead fill. The exit is computed from bars at or
+  after entry, never from a future bar's high/low chosen with hindsight.
+- `closeReason` — populated (`sl` / `tp` / `intra_bar_stop` / `force_close` /
+  `reverse_signal`, per §2.1.3).
+- **Realized counterfactual PnL** — derived from entry/exit/slippage components per
+  §2.3, never raw decision-price PnL (§2.3.3).
+
+This **supersedes the prior ~99% hollow `missed:true` / `entryPrice:"0"` behavior.**
+The engine must **root-cause WHY ~99% miss before changing fill logic**; the M26
+amendment's **close-side `reconstructReferencePrice` proxy** is the suspected
+short-circuit (the close-side resolves at a low-fidelity reference and never computes
+an exit). Other candidate causes: a `MissedFillModel` / limit-fill model that almost
+never fills, or the M26 next-bar alignment declining when no next bar exists. The fill
+remains a **VIRTUAL counterfactual — never a live order, no slot, no `positions` row.**
+It computes a hypothetical entry/exit/PnL in-memory and stamps
+`shadow_decisions.simulated_fill`; it never touches the order path. The ledger stays
+**forward-only**: no look-ahead, no wall-clock / RNG, evaluation order-independent.
+
+> **Forward-only / no-rescore (carried from M26).** Pre-D1.6 `shadow_decisions` rows
+> stay hollow and are **not** retroactively rescored — the virtual ledger is
+> forward-only. A full-window rescore is a separate replay job (out of scope for M37).
+> D1.6 changes only newly written rows.
+
+### Topology and determinism reaffirmed (NOT changed)
+
+- **No topology change.** Shadow evaluation stays in
+  `ShadowStrategyOrchestratorService` — its own orchestrator, sovereign virtual ledger
+  (§2.1), fire-and-forget, **never touches `RiskGateService`**. "No shadow version
+  reaches the order path" is a **regression guard on the existing separation** (M37
+  D1.4), NOT a constraint on any new loop. Shadows are **NOT** to be folded into
+  `StrategyService`'s gated per-event loop — that is the only live-order path, and
+  merging shadows into it would risk the HARD no-shadow-order invariant.
+- **§2.1 cardinal rule preserved — NOT a shared snapshot.** Each version builds its
+  **own** snapshot (re-classifying `flowType`/`signalScore` under its own params) from
+  the **shared immutable event / signal-bar tick set** loaded once per event in
+  `runShadows` and threaded immutably into each `runOneShadow` (M26 amendment).
+  Determinism comes from the **shared immutable event**, not from sharing a market
+  snapshot. **Mandating a single shared snapshot across versions is forbidden** — it
+  reintroduces the censoring/bias §2.1 and §4 alt-2 reject.

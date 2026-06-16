@@ -201,6 +201,52 @@ lives in Postgres to keep the row size bounded.
 5. **Hyperparameter grid search inside the harness.** Rejected for M8 — out of
    scope per the brief. M13's agentic loop is the place for search.
 
+## M37 Amendment (2026-06-15)
+
+**Milestone:** M37 (strategy-comparison infrastructure). **Status:** Accepted.
+
+ADR 0017 §2.2 specified same-event comparison over a shared `event_id` tape. M37
+records where those same-event pairs **actually come from in the live system**, and
+that the prior gap was the **read layer**, not the producer.
+
+- **Producer already exists and is correct.** The same-event pairs ADR 0017
+  depends on are produced by the **already-existing** `shadow_decisions` stream.
+  `ShadowStrategyOrchestratorService.runShadows` allocates a single `event_id`
+  **once per live event** and threads it into every shadow row, so every
+  shadow-status version emits one row per event under that shared id (ADR 0029 §2.2).
+  The live event tape and the per-version pairing this ADR specifies are therefore
+  produced in production today — evaluation topology was already correct and
+  concurrent. **No evaluation-topology change is made by M37.**
+
+- **The gap was the comparison READ layer.** `compareVersions.ts` and
+  `getPerformance.ts` read only `decisions`/`positions` and **never read
+  `shadow_decisions`** — so the same-event comparison this ADR specifies returned
+  nothing despite the data existing. M37 wires the read layer to read
+  `shadow_decisions` reconciled with `decisions`/`positions` on the shared
+  `event_id`. This is a `packages/analysis/` change, not a change to the producer.
+
+- **Active-vs-shadow precedence / dedup rule (HARD).** A version can appear in
+  **both** tables (e.g. v2 is in `decisions`/`positions` as the active version *and*
+  in `shadow_decisions` for the window it was also shadowed). Reconciliation MUST
+  apply a precedence rule so no version is double-counted:
+  - For the **active** version, use `decisions`/`positions`.
+  - For **shadow-status** versions, use `shadow_decisions`.
+  A version present in both tables for the same `event_id` is counted **once**, from
+  its precedence-selected stream — never twice.
+
+- **Mean-suppression floor and the v0 baseline path.** `compareVersions` suppresses
+  `meanPnlDeltaUsd` to `null` until `pairedTradedEventCount ≥ 30`
+  (`MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN`), where a pair counts as **traded** only
+  when **both** versions opened **and** closed in-window. v0 (the skip baseline,
+  `trade_enabled:false`) has **~0 paired-TRADED events by construction**, so its
+  `meanPnlDeltaUsd` stays `null` forever on the paired-traded path. The v0 baseline
+  must therefore be sourced from the **skip / counterfactual stream** via
+  `getFunnelSummary` / `getPerformance` (the forward-only counterfactual estimator in
+  ADR 0029, repaired in M37 D1.6), **not** from `compareVersions`' paired-traded
+  path. The `MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN` floor is a *minimum-to-compute-a-mean*
+  trigger and must never be conflated with the promotion/switch gate (ADR 0019 /
+  ADR 0018 §2.5).
+
 ## 5. Open questions
 
 - **`event_id` continuity across versions when v3's router suppresses a trigger
