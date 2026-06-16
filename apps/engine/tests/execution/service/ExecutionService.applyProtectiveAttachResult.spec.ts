@@ -103,6 +103,7 @@ function makeService(exchangeEnv: ExchangeEnvironmentEnum) {
         strategyVersions,
         riskGate,
         haltFlag,
+        { emitSyntheticClose: jest.fn() } as any,
         exchangeClient,
         events,
     );

@@ -167,6 +167,7 @@ function makeService(
         strategyVersions,
         riskGate,
         haltFlag,
+        { emitSyntheticClose: jest.fn() } as any,
         exchangeClient,
         events,
     );
@@ -494,6 +495,7 @@ describe('ExecutionService — POST_ONLY_MAKER awaitPolicyTimeout: cancel + clas
             strategyVersions,
             riskGate,
             haltFlag,
+            { emitSyntheticClose: jest.fn() } as any,
             exchangeClient,
             events,
         );
@@ -584,6 +586,7 @@ describe('ExecutionService — POST_ONLY_MAKER would-cross → CANCELLED, no res
             strategyVersions,
             riskGate,
             haltFlag,
+            { emitSyntheticClose: jest.fn() } as any,
             exchangeClient,
             events,
         );
@@ -701,6 +704,7 @@ describe('ExecutionService — ADD path with weighted-average entry', () => {
             strategyVersions,
             riskGate,
             haltFlag,
+            { emitSyntheticClose: jest.fn() } as any,
             exchangeClient,
             events,
         );
@@ -829,6 +833,7 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
             strategyVersions,
             riskGate,
             haltFlag,
+            { emitSyntheticClose: jest.fn() } as any,
             exchangeClient,
             events,
         );
@@ -940,6 +945,7 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
             strategyVersions,
             riskGate,
             haltFlag,
+            { emitSyntheticClose: jest.fn() } as any,
             exchangeClient,
             events,
         );

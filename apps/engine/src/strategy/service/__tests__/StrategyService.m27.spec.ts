@@ -110,6 +110,8 @@ function buildIntent(overrides: Partial<IOrderIntent> = {}): IOrderIntent {
             takeProfitPrice: new Money('52000'),
             stopType: 'atr' as any,
             timeStopAtMs: NOW_MS + 30 * 60_000,
+            tpRebaseEligible: false,
+            atrDistance: null,
         },
         openPosition: null,
         sizing: {
@@ -143,6 +145,8 @@ function buildApprovedDecision(): IRiskDecision {
             takeProfitPrice: new Money('52000'),
             stopType: 'atr' as any,
             timeStopAtMs: NOW_MS + 30 * 60_000,
+            tpRebaseEligible: false,
+            atrDistance: null,
         },
         reservationId: `${EVENT_ID}:A`,
         haltReasonDetail: null,

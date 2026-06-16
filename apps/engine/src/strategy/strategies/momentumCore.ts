@@ -48,5 +48,11 @@ function buildMomentumExit(input: IStrategyInput, tradeSide: PositionSideEnum, n
         stopLossPrice: new Money(event.vwapSession),
         stopType: StopTypeEnum.STRUCTURAL,
         timeStopAtMs: nowMs + params.time_stop_minutes * MS_PER_MINUTE,
+        // M38 D1 (ADR 0045): momentum TP is reference+ATR, so it is rebase-eligible — the
+        // execution layer re-anchors it from the signal-time reference to the actual fill
+        // price. atrDistance carries the SAME atrTarget computed above (consumed verbatim
+        // at the arm/backtest seams; never re-derived).
+        tpRebaseEligible: true,
+        atrDistance: atrTarget,
     };
 }

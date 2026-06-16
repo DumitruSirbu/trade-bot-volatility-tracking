@@ -117,6 +117,7 @@ function buildService(): ExecutionService {
         { findById: jest.fn().mockResolvedValue({ direction: 'both' }) } as any, // strategyVersions
         { evaluate: jest.fn() } as any, // riskGate
         { isHalted: jest.fn().mockReturnValue(false), getReason: jest.fn() } as any, // haltFlag
+        { emitSyntheticClose: jest.fn() } as any, // positionCloseCoordinator
         {} as any, // exchangeClient
         { emit: jest.fn() } as any, // events
     );

@@ -1,5 +1,7 @@
 import { CoinTierEnum, OrderPolicyEnum } from '@bot/shared';
 
+import { Money } from '../../common/utils/money';
+
 // Execution-layer constants (ADR 0005/0006/0007/0008). All numbers/strings used by the
 // executor live here — no inline magic numbers in services (conventions §Constants Placement).
 // Both ExecutionModule (live) and M7 BacktestModule import THIS module so live and replay
@@ -95,6 +97,8 @@ export const TIME_STOP_SWEEP_INTERVAL_MS = 60_000;
 export const TIME_STOP_ENFORCER_EVENT_ID_PREFIX = 'time-stop-enforcer-';
 export const LOCAL_MONITOR_BREACH_EVENT_ID_PREFIX = 'local-monitor-breach-';
 export const RECONCILIATION_FLATTEN_EVENT_ID_PREFIX = 'reconciliation-flatten-';
+// M38 D2 (ADR 0045) — deterministic eventId prefix for the fill-acceptance FLATTEN unwind.
+export const SYNTHETIC_CLOSE_EVENT_ID_PREFIX = 'synthetic-close-';
 
 // `reason` values carried on ORDER_INTENT_EXPIRED_EVENT that leave no live order resting, so the
 // owning producer releases its close slot and the next tick re-fires (Fix 1b release table).
@@ -196,3 +200,27 @@ export const CCXT_ORDER_STATUS_CLOSED = 'closed';
 export const CCXT_ORDER_STATUS_CANCELED = 'canceled';
 export const CCXT_ORDER_STATUS_EXPIRED = 'expired';
 export const CCXT_ORDER_STATUS_REJECTED = 'rejected';
+
+// --- M38 D2: fill-acceptance guard (ADR 0045) ---
+
+// Counted execution-layer metric/log label emitted when a confirmed open fill is rejected at
+// fill acceptance (wrong-side-of-own-SL or beyond the drift cap) and unwound via FLATTEN.
+// Engine-local — an execution-layer counter, never serialized across the wire, never a
+// strategy SkipReason.
+export const FILL_ACCEPTANCE_REJECTED = 'fill_acceptance_rejected';
+
+// Far-tail magnitude drift cap (% of the signal-time reference price). Shipped OFF
+// (undefined): the operative reject is the wrong-side-of-own-SL hard structural check, which
+// is always on regardless of this value. Set to ~8.0 as a WIDE, un-calibrated fat-finger
+// guard only — this window CANNOT calibrate a tighter cap (drift is collinear with the
+// wrong-side bug). Do NOT tighten toward the distribution body until a clean post-D1 soak
+// window exists.
+export const MAX_SIGNAL_DRIFT_PCT: number | undefined = undefined;
+
+// Decimal building blocks for the exit-geometry drift formula (exitGeometryHelper). Kept here
+// (not module-local to the helper) so they are shared across the helper's exported functions
+// and any future execution-layer consumer. `PCT_DIVISOR` converts a percentage to a fraction;
+// `EXIT_GEOMETRY_ONE` is the decimal one used to build the deviation factor in the SAME
+// op-order as entryHelpers.ts:44-46 (parity invariant).
+export const PCT_DIVISOR = new Money(100);
+export const EXIT_GEOMETRY_ONE = new Money(1);

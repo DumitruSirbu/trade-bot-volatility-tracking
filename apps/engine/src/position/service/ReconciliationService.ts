@@ -1063,6 +1063,9 @@ export class ReconciliationService {
                 stopLossPrice: markPrice,
                 stopType: StopTypeEnum.ATR,
                 timeStopAtMs: 0,
+                // M38 D1 (ADR 0045): a flatten is a de-risking close — never rebased.
+                tpRebaseEligible: false,
+                atrDistance: null,
             },
             openPosition: null,
             sizing,

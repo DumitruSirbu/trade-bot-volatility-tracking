@@ -50,6 +50,7 @@ Also see [live-vs-backtest-contract.md](../live-vs-backtest-contract.md) for the
 | [0007](0007-partial-fill-semantics.md) | Partial-fill semantics (M5) |
 | [0008](0008-sl-tp-attach.md) | SL/TP attach & protective-order fallback (M5) |
 | [0011](0011-local-sltp-fallback-and-held-symbols.md) | Local SL/TP fallback & held-symbol subscription (M6) |
+| [0045](0045-m38-fill-time-tp-rebase-and-fill-acceptance-guard.md) | M38 — Fill-time TP rebase + fill-acceptance guard (D1/D2) |
 | [0030](0030-in-engine-rate-limit-token-bucket-policy.md) | In-engine rate-limit token-bucket policy (M11a) |
 
 ## Position, reconciliation, recovery

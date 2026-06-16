@@ -16,6 +16,7 @@ import {
 import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { Money, MoneyValue } from '../../common/utils/money';
+import { rebaseMomentumTakeProfit } from '../../execution/utils';
 import { TickAggregateEntity, BookSnapshotEntity } from '../../market-data/entity';
 import { CANDLE_5M_INTERVAL_MS } from '../../market-data/const/candleConsts';
 import {
@@ -368,6 +369,19 @@ export class BacktestOrchestrator {
         const fillQty = new Money(fill.qty);
         const entryNotional = fillPrice.times(fillQty);
 
+        // An OPEN signal that reaches buildPosition always carries a concrete side; default to
+        // SHORT only to satisfy the nullable ISignal.tradeSide type (a null side never opens).
+        const side = signal.tradeSide ?? PositionSideEnum.SHORT;
+
+        // M38 D1 (ADR 0045): rebase the momentum TP from the signal-time reference to the fill
+        // price at the SAME seam the live executor does, via the SAME pure helper (parity). SL is
+        // never rebased. Mean-reversion / null atrDistance keeps the frozen geometry. D2 is NOT
+        // applied in backtest — backtest fills are deterministic (no exchange slippage to gate).
+        const resolvedTpUsdt =
+            decision.clampedExit.tpRebaseEligible && decision.clampedExit.atrDistance !== null
+                ? rebaseMomentumTakeProfit(decision.clampedExit, fillPrice, side).toFixed(18)
+                : decision.clampedExit.takeProfitPrice.toFixed(18);
+
         return {
             positionId: `${event.eventId}:${fill.tsMs}`,
             symbol: event.symbol,
@@ -377,8 +391,8 @@ export class BacktestOrchestrator {
             qty: fill.qty,
             entryNotionalUsdt: entryNotional.toFixed(8),
             leverage: decision.approvedSizing.leverage.toFixed(4),
-            stopLossUsdt: decision.clampedExit.stopLossPrice.toFixed(18),
-            takeProfitUsdt: decision.clampedExit.takeProfitPrice.toFixed(18),
+            stopLossUsdt: decision.clampedExit.stopLossPrice.toFixed(18), // SL unchanged — never rebased
+            takeProfitUsdt: resolvedTpUsdt,
             openedAtMs: fill.tsMs,
             timeStopAtMs: decision.clampedExit.timeStopAtMs,
             maxAdverseExcursionPct: '0',
