@@ -390,3 +390,91 @@ describe('PositionTimeStopEnforcer', () => {
         expect(approvedEventsOf(emitSpy)).toHaveLength(0);
     });
 });
+
+// ── M37 D3.2 — periodic sweep (sweepDeadlineBreaches) adversarial tests ─────
+
+describe('PositionTimeStopEnforcer — M37 D3.2: sweepDeadlineBreaches periodic safety-net', () => {
+    it('sweep closes a deadline-breached position even with no price tick', async () => {
+        // why: the MRVL 127-min breach — a thin coin whose price feed stalled
+        // emitted no ticks, so the price-path enforcer never ran. sweepDeadlineBreaches
+        // re-reads findOpen() and closes any past-deadline row independent of tick arrival.
+        // Call onModuleInit to populate the deadline index (arms earliestTimeStopMs);
+        // then advance the wall clock past the deadline so the sweep's fast-path passes.
+        const { enforcer, emitSpy, evaluateSpy, findCandidatesSpy } = buildHarness({ timeStopAtMs: DEADLINE_MS });
+        await armIndex(enforcer);
+        // Ensure the re-read also returns the candidate row.
+        findCandidatesSpy.mockResolvedValue([buildRow({ timeStopAtMs: DEADLINE_MS })]);
+
+        // OPERATE: call sweep at a time past the deadline — no price tick involved.
+        jest.spyOn(Date, 'now').mockReturnValue(DEADLINE_MS + 1_000);
+        await enforcer.sweepDeadlineBreaches();
+        await flush();
+        jest.spyOn(Date, 'now').mockRestore();
+
+        // CHECK: the sweep emits exactly one CLOSE intent with exitReason=TIME_STOP.
+        const approved = approvedEventsOf(emitSpy);
+        expect(approved).toHaveLength(1);
+        expect(approved[0].intent.intentAction).toBe(OrderIntentActionEnum.CLOSE);
+        expect(approved[0].intent.exitReason).toBe(ExitReasonEnum.TIME_STOP);
+        expect(evaluateSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('sweep is a no-op when no position has crossed its deadline', async () => {
+        // why: the sweep must not close positions still within their time budget.
+        // A future deadline must be silently skipped. armIndex populates the in-memory
+        // deadline index so the fast-path guard does not short-circuit the sweep
+        // before the per-position check runs.
+        const futureDeadlineMs = DEADLINE_MS + 60_000;
+        const { enforcer, emitSpy } = buildHarness({ timeStopAtMs: futureDeadlineMs });
+        await armIndex(enforcer);
+
+        // Wall clock is BEFORE the future deadline — the per-position check fires
+        // but finds the deadline not yet crossed.
+        jest.spyOn(Date, 'now').mockReturnValue(DEADLINE_MS);
+        await enforcer.sweepDeadlineBreaches();
+        await flush();
+        jest.spyOn(Date, 'now').mockRestore();
+
+        expect(approvedEventsOf(emitSpy)).toHaveLength(0);
+    });
+
+    it('sweep fast-path: if Date.now() < earliestTimeStopMs, returns immediately without emitting a close', async () => {
+        // why: the sweep reads earliestTimeStopMs as a scalar guard, identical to
+        // the price-path fast-path. When no deadline has been crossed no DB read or
+        // gate call should occur on every 60-second interval tick.
+        const { enforcer, emitSpy, evaluateSpy } = buildHarness({ timeStopAtMs: DEADLINE_MS + 120_000 });
+        await armIndex(enforcer);
+
+        // Wall clock is far before any deadline (120s before the position's stop).
+        jest.spyOn(Date, 'now').mockReturnValue(DEADLINE_MS);
+        await enforcer.sweepDeadlineBreaches();
+        await flush();
+        jest.spyOn(Date, 'now').mockRestore();
+
+        // Fast-path fires: no gate call, no close emitted.
+        expect(approvedEventsOf(emitSpy)).toHaveLength(0);
+        expect(evaluateSpy).not.toHaveBeenCalled();
+    });
+
+    it('sweep does not double-close a position already being closed (slot held by price path)', async () => {
+        // why: the price path and the sweep could both fire in the same 60-second
+        // window. The shared slot registry (SharedCloseCoordinator.tryAcquire) is
+        // the dedup substrate; the sweep must skip any position whose slot is held.
+        const { enforcer, emitSpy, coordinator, findCandidatesSpy } = buildHarness({ timeStopAtMs: DEADLINE_MS });
+        await armIndex(enforcer);
+        findCandidatesSpy.mockResolvedValue([buildRow({ timeStopAtMs: DEADLINE_MS })]);
+
+        // Simulate: the price path already acquired the slot.
+        coordinator.tryAcquire(POSITION_ID);
+
+        jest.spyOn(Date, 'now').mockReturnValue(DEADLINE_MS + 1_000);
+        await enforcer.sweepDeadlineBreaches();
+        await flush();
+        jest.spyOn(Date, 'now').mockRestore();
+
+        // No additional close emitted; the slot was already held.
+        expect(approvedEventsOf(emitSpy)).toHaveLength(0);
+        // Slot still held by the original acquirer.
+        expect(coordinator.isHeld(POSITION_ID)).toBe(true);
+    });
+});

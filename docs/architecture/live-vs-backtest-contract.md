@@ -222,6 +222,63 @@ local-fallback slippage delta).
 
 ---
 
+## M37 Amendment (2026-06-15) — per-check gate-reconstructability table
+
+**Milestone:** M37 (strategy-comparison infrastructure). **Status:** Accepted.
+**See:** ADR 0015 M37 amendment, ADR 0004 §1 (`RejectReasonEnum`).
+
+The backtest produced `tradeCount: 0` because the gate rejected 100% of post-signal
+candidates while the same gate approves ~7% live — the depth/liquidation checks could
+not reconstruct their `book_snapshots` inputs and hard-rejected everything. This table
+classifies **every** risk-gate check (ADR 0004 §1 ordered pipeline) by how faithfully
+it reconstructs in backtest:
+
+- **Reconstructable** — runs **identically** live and in backtest; the input is a pure
+  function of replayed OHLCV / `tick_aggregates` / `funding_rates` / `open_interest`
+  or in-memory ledger state. No flag.
+- **Approximated** — uses a documented **fallback** in backtest because its true input
+  (live order book) is unavailable; any fill produced via the fallback is **flagged
+  low-fidelity** (`lowFidelityTradeCount`, ADR 0017 §2.4 / ADR 0015 M37).
+- **Not modeled** — skipped in backtest, with a stated reason.
+
+| Gate check (ADR 0004 §1) | Class | Input source in backtest | Owning ADR |
+|---|---|---|---|
+| Global halt / kill-switch (`global_halt`) | Reconstructable | `BacktestRiskStateAdapter` (in-memory `risk_state`) | ADR 0004 §1, §7 |
+| Market-stress halt (`market_stress`: BTC/ETH 5m, OI, funding, breadth, same-bar, spread) | Reconstructable | M1 fast-stress snapshot fields on the replayed event — all from OHLCV / funding / OI / spread | ADR 0004 §6, §6a–§6e |
+| Universe floor (`below_universe_floor`) | Reconstructable | `UniverseReplayLoader` point-in-time `universe_membership` | ADR 0004 §1; ADR 0015 §4.4 |
+| OI available (`oi_unavailable`) | Reconstructable | replayed `open_interest` seeded at the bar boundary | ADR 0004 §1; ADR 0015 §4.2 |
+| Spread ceiling (`spread_too_wide`) | **Approximated** | `book_snapshots.bid_ask_spread_pct` where present; **fallback to tier-slippage-derived spread when missing → low-fidelity** | ADR 0004 §1; ADR 0015 §4.6, M37 |
+| Per-coin depth (`coin_book_too_thin`) | **Approximated** | `book_snapshots.book_depth_10bps_usdt` where present; **conservative fallback when missing → low-fidelity** | ADR 0004 §6a; ADR 0015 §4.6, M37 |
+| Cooldown (`cooldown_active`) | Reconstructable | in-memory closed-position log in `BacktestBook` | ADR 0004 §1, §5 |
+| Daily / weekly / consecutive-loss limits | Reconstructable | `BacktestRiskStateAdapter` realized-PnL map + closed-position log | ADR 0004 §5; ADR 0015 §4.5 |
+| Overtrading caps (per-symbol/day, per-bar universe) | Reconstructable | in-memory open/closed logs + injected `nowMs` | ADR 0004 §1, §7 |
+| Slot / candidate selection (`max_positions_reached`, `btc_correlated_*`, `no_eligible_slot`) | Reconstructable | `BacktestPositionAdapter` + reservation ledger; deterministic bar-window batching | ADR 0004 §4; ADR 0015 §4.5 |
+| Funding size-cut / suppress (`funding_suppressed`) | Reconstructable | replayed `funding_rates` history (no constant) | ADR 0004 §8; ADR 0015 §4.7 |
+| Time-stop validity (`time_stop_missing_or_invalid`) | Reconstructable | pure check on the strategy's `IProposedExit` | ADR 0004 §1; ADR 0003 §3 |
+| **SL-inside-liquidation (`sl_outside_liquidation`) — KNOWN BLOCKER** | **Approximated** | liquidation distance needs depth/book state; **documented relaxed liquidation+depth fallback when `book_snapshots` missing → low-fidelity.** This is the check that hard-rejected 100% in the 0-fill backtest | ADR 0004 §8; ADR 0015 §4.6, M37 |
+| Exposure caps (per-coin, same-direction portfolio) | Reconstructable | reservation ledger + in-memory positions; notional math is decimal | ADR 0004 §1, §8a |
+| Tier-3 not validated (`tier3_not_validated`) | Reconstructable | seeded `instruments` / version params | ADR 0004 §1 |
+| Model-divergence halt (`model_divergence_halt`) | **Not modeled** | live-only kill switch fed by realized-slippage divergence (M9); no live order flow to diverge against in replay. Skipped — backtest measures the modeled cost, not live execution drift | ADR 0004 §1 |
+| Sizing / leverage clamp (≤3×, step, min-notional) | Reconstructable | pure `PositionSizer` decimal math against seeded `instruments` row | ADR 0004 §8, §8a; ADR 0015 §4.7 |
+| Live order book (any check requiring live L2 depth at fill) | **Approximated** | persisted `book_snapshots` row where present; tier-slippage floor fallback otherwise → low-fidelity (C6 fidelity floor) | C6, C9; ADR 0015 §4.6, M37 |
+
+**Notes (locked):**
+
+- The **only** checks that degrade to **Approximated** are those whose true input is
+  the live order book (`book_snapshots`): spread ceiling, per-coin depth,
+  `sl_outside_liquidation`, and any direct L2-depth-at-fill check. Every other check is
+  **Reconstructable** from replayed OHLCV / `tick_aggregates` / `funding_rates` /
+  `open_interest` or in-memory ledger state.
+- The fallback for the Approximated checks is a **gate-INPUT approximation, not a
+  different gate** — the same `RiskGateService.evaluate` code runs; only the missing
+  `book_snapshots` input is substituted (ADR 0015 M37). It is **backtest-only** and
+  never applied live.
+- Any fill produced through an Approximated fallback is flagged **low-fidelity**, and a
+  version's edge must survive with low-fidelity trades excluded (ADR 0019 criterion 12).
+- The single **Not modeled** check (`model_divergence_halt`) is a live execution-drift
+  kill switch with no backtest analogue; skipping it is conservative for the backtest
+  (it can only *add* live rejections, never remove backtest ones).
+
 ## Updating this document
 
 Adding a clause requires either an ADR or an explicit reference to a milestone brief.

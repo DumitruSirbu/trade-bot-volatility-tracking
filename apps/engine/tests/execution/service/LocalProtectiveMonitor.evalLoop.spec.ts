@@ -156,6 +156,8 @@ describe('LocalProtectiveMonitor — side-aware breach evaluator (pure, ADR 0011
     it('LONG TP: markPrice exactly equal to TP is a breach', () => {
         const { monitor } = buildHarness();
         armLongAt(monitor, '29500', '31000');
+        // M37 D3.1: TP gate requires at least one favorable tick first (price on pre-target side)
+        monitor.listArmed()[0].tpEligible = true;
 
         const breach = monitor.evaluateBreach(monitor.listArmed()[0], new Money('31000'));
 
@@ -192,6 +194,8 @@ describe('LocalProtectiveMonitor — side-aware breach evaluator (pure, ADR 0011
     it('SHORT TP: markPrice exactly equal to TP is a breach', () => {
         const { monitor } = buildHarness({ positionSide: PositionSideEnum.SHORT });
         armShortAt(monitor, '30500', '29000');
+        // M37 D3.1: TP gate requires at least one favorable tick first (price on pre-target side)
+        monitor.listArmed()[0].tpEligible = true;
 
         const breach = monitor.evaluateBreach(monitor.listArmed()[0], new Money('29000'));
 
@@ -237,6 +241,8 @@ describe('LocalProtectiveMonitor — onPriceUpdate emits gate-routed close inten
     it('LONG TP breach → one close intent with exitReason=TAKE_PROFIT', async () => {
         const harness = buildHarness({ positionSide: PositionSideEnum.LONG });
         armLongAt(harness.monitor, '29500', '31000');
+        // M37 D3.1: send one favorable tick (below TP) to arm the TP eligibility guard
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('30000'));
 
         await harness.monitor.onPriceUpdate(buildPriceUpdate('31050'));
 
@@ -261,6 +267,8 @@ describe('LocalProtectiveMonitor — onPriceUpdate emits gate-routed close inten
     it('SHORT TP breach → one close intent with exitReason=TAKE_PROFIT and CLOSE tradeSide=LONG', async () => {
         const harness = buildHarness({ positionSide: PositionSideEnum.SHORT });
         armShortAt(harness.monitor, '30500', '29000');
+        // M37 D3.1: send one favorable tick (above TP, below SL) to arm the TP eligibility guard
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('29500'));
 
         await harness.monitor.onPriceUpdate(buildPriceUpdate('28950'));
 
@@ -311,6 +319,8 @@ describe('LocalProtectiveMonitor — idempotency on repeat ticks past the breach
     it('repeat ticks after a TP breach also fire only one intent', async () => {
         const harness = buildHarness();
         armLongAt(harness.monitor, '29500', '31000');
+        // M37 D3.1: prime the TP eligibility guard with one favorable tick before breach ticks
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('30000'));
 
         for (let i = 0; i < 5; i++) {
             await harness.monitor.onPriceUpdate(buildPriceUpdate('31200'));
@@ -491,5 +501,118 @@ describe('LocalProtectiveMonitor — eval loop is event-driven (no timers, no ex
         // the engine emits. Anti-coverage: catches a typo in the event name.
         expect(PRICE_UPDATE_EVENT).toBe('marketData.price.update');
         expect(POSITION_STATE_TRANSITIONED_EVENT).toBe('position.state.transitioned');
+    });
+});
+
+// ── M37 D3.1 — tpEligible arming-tick guard (adversarial) ───────────────────
+
+describe('LocalProtectiveMonitor — M37 D3.1: tpEligible arming-tick guard', () => {
+    it('TP does NOT fire on the first tick when the entry fills at/past the TP level (EDGE/ZEC/ALLO scenario)', async () => {
+        // why: the EDGE/ZEC/ALLO defect caused a LONG position entered exactly at
+        // the TP level to be labeled take_profit with 0-min hold / MFE=0.00. The
+        // fix: `tpEligible` starts false and only flips true on the FIRST tick
+        // that is NOT already at/past TP. A first tick AT the TP level must NOT
+        // fire a close — the guard must stay false and suppress the event.
+        const harness = buildHarness({ positionSide: PositionSideEnum.LONG });
+        armLongAt(harness.monitor, '29500', '31000');
+
+        // First and only tick exactly AT the TP level — this is the arming tick;
+        // tpEligible was false → guard suppresses the TP fire.
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('31000'));
+
+        expect(getApprovedEvents(harness.emitSpy)).toHaveLength(0);
+        expect(harness.evaluateSpy).not.toHaveBeenCalled();
+    });
+
+    it('TP does NOT fire on consecutive at-or-above-TP ticks until a pre-target tick arms eligibility', async () => {
+        // why: two ticks at/past the TP must both be suppressed until a
+        // below-TP tick is observed. This guards against any sequence of
+        // above-target ticks before the first favorable tick.
+        const harness = buildHarness({ positionSide: PositionSideEnum.LONG });
+        armLongAt(harness.monitor, '29500', '31000');
+
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('31100')); // above TP — suppressed
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('31200')); // still above TP — suppressed
+
+        expect(getApprovedEvents(harness.emitSpy)).toHaveLength(0);
+    });
+
+    it('TP fires after a favorable tick arms eligibility and a subsequent above-TP tick is observed', async () => {
+        // why: after the first tick strictly below the TP level (the "favorable"
+        // tick — price was on the pre-target side), tpEligible flips true and the
+        // next above-TP tick must fire a TAKE_PROFIT close. This is the normal
+        // winning-trade path.
+        const harness = buildHarness({ positionSide: PositionSideEnum.LONG });
+        armLongAt(harness.monitor, '29500', '31000');
+
+        // Favorable tick: below TP — arms tpEligible.
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('30500'));
+
+        // No close yet — the favorable tick was below TP, not above it.
+        expect(getApprovedEvents(harness.emitSpy)).toHaveLength(0);
+
+        // TP breach tick after eligibility was armed.
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('31100'));
+
+        const approved = getApprovedEvents(harness.emitSpy);
+        expect(approved).toHaveLength(1);
+        expect(approved[0].intent.exitReason).toBe(ExitReasonEnum.TAKE_PROFIT);
+    });
+
+    it('SL still fires on the very first tick — the guard applies only to TP', async () => {
+        // why: survival before opportunity. The tpEligible guard must NEVER delay
+        // a stop-loss close. A LONG position armed at SL=29500 must close
+        // immediately on the first tick at/below 29500, regardless of tpEligible.
+        const harness = buildHarness({ positionSide: PositionSideEnum.LONG });
+        armLongAt(harness.monitor, '29500', '31000');
+
+        // First tick is already at SL — must fire immediately.
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('29500'));
+
+        const approved = getApprovedEvents(harness.emitSpy);
+        expect(approved).toHaveLength(1);
+        expect(approved[0].intent.exitReason).toBe(ExitReasonEnum.STOP_LOSS);
+    });
+
+    it('gap-through-both (SL wins): first tick is both below SL and above TP in a degenerate config — SL is checked first', async () => {
+        // why: degenerate SL > TP config (or a gap that crosses both). SL is the
+        // first check in evaluateBreach; it must win unconditionally. This also
+        // verifies that tpEligible=false does not accidentally cause neither branch
+        // to fire when both would trigger.
+        const harness = buildHarness({ positionSide: PositionSideEnum.LONG });
+        // SL=31000, TP=29000 — inverted, degenerate. Any tick in (29000, 31000)
+        // is simultaneously below SL (<=31000) and above TP (>=29000) for a LONG.
+        harness.monitor.arm({
+            positionId: 42,
+            symbol: 'BTCUSDT',
+            side: PositionSideEnum.LONG,
+            stopLossPrice: new Money('31000'),
+            takeProfitPrice: new Money('29000'),
+        });
+
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('30000'));
+
+        const approved = getApprovedEvents(harness.emitSpy);
+        expect(approved).toHaveLength(1);
+        expect(approved[0].intent.exitReason).toBe(ExitReasonEnum.STOP_LOSS);
+    });
+
+    it('tpEligible=true is permanent — once armed a pullback does not reset it', async () => {
+        // why: once the position has been on the pre-target side at least once
+        // the TP eligibility must persist across subsequent neutral ticks. A
+        // pullback below TP after eligibility is armed must not re-suppress TP.
+        const harness = buildHarness({ positionSide: PositionSideEnum.LONG });
+        armLongAt(harness.monitor, '29500', '31000');
+
+        // Arm eligibility.
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('30000'));
+        // Pullback — still below TP, no close, but eligibility must remain true.
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('29700'));
+        // TP breach — must now fire because eligibility is still armed.
+        await harness.monitor.onPriceUpdate(buildPriceUpdate('31001'));
+
+        const approved = getApprovedEvents(harness.emitSpy);
+        expect(approved).toHaveLength(1);
+        expect(approved[0].intent.exitReason).toBe(ExitReasonEnum.TAKE_PROFIT);
     });
 });

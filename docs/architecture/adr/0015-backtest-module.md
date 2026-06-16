@@ -260,6 +260,71 @@ The only surfaces with distinct code paths are: (a) port adapters; (b) execution
 5. **Use synthetic 5-min bars constructed from `tick_aggregates` instead of stored `candles`.** Rejected — the live path consumes graduated bars from `SymbolCandleState`, and the stored `candles` rows are exactly those graduated bars. Reconstructing from ticks would (a) be slower and (b) introduce a reconstruction step that has no live analogue. `tick_aggregates` is used only for **intrabar** stop/TP simulation, which is where it adds fidelity.
 6. **Random-sample slippage from a per-tier distribution.** Rejected — the strategy is required to be deterministic, and a randomised fill simulator would break the "repeated runs return identical metrics" property in the M7 Definition of Done. Tier slippage is a deterministic function of (tier, side, params); depth-aware extension is a deterministic function of the persisted `book_snapshots` row.
 
+## M37 Amendment (2026-06-15)
+
+**Milestone:** M37 (strategy-comparison infrastructure). **Status:** Accepted.
+**See:** `docs/architecture/live-vs-backtest-contract.md` (per-check reconstructability
+table), ADR 0019 criterion 12, ADR 0004 §1 (gate reject reasons).
+
+### Root cause — 0-fill backtest
+
+The three M37 report windows (`reports/backtest/v2-…`, `v3-…`, `v4-…`) all produced
+`tradeCount: 0`: **every candidate that survived the signal stage was then rejected by
+the gate**. Live, the same gate approves roughly **~7% of open-intents**. A gate that
+approves ~7% live and 0% in backtest is **not the same gate**, which breaks the
+live/backtest parity claim of §5. The documented cause: the backtest **cannot
+reconstruct `book_snapshots` / liquidation-distance / depth state**, so the
+liquidation- and depth-dependent gate checks (notably `sl_outside_liquidation`, ADR
+0004 §1/§8) hard-reject every candidate.
+
+### Two-route fix for gate-input reconstruction
+
+- **Preferred — feed captured `book_snapshots` into replay.** Where the soak DB has
+  retained `book_snapshots` over the backtest window, the replay consumes them so the
+  liquidation-distance and depth checks run on **real captured book state**. This is
+  **full fidelity — no flag needed.** The engine must first verify coverage over the
+  window; partial coverage yields a per-event mix of full-fidelity and fallback fills.
+- **Fallback — documented relaxed liquidation+depth check.** Where `book_snapshots`
+  cannot be reconstructed, the backtest uses a clearly documented, **conservative**
+  fallback for the liquidation-distance / depth checks instead of hard-rejecting. The
+  fallback must not manufacture fills the live gate would never allow. Any fill
+  produced via this path is **flagged low-fidelity** so it is never confused with a
+  book-backed fill.
+
+### Low-fidelity accounting — extend, do not re-add
+
+The report schema **already** carries `lowFidelityTradeCount` (ADR 0017 §2.4, mirrored
+in §4.7's fidelity disclosure). The fallback path **extends** that existing field — it
+does **not** introduce a parallel flag. Each backtest fill is tagged full-fidelity
+(book-backed) or fallback/low-fidelity, and the report surfaces the count of each.
+
+### Sanity bound on fill rate — same denominator both sides
+
+The fill-rate sanity bound is measured as **approvals / open-intents** — post-gate-eligible
+candidates, **excluding pre-gate skips** — on **both** live and backtest (the same
+denominator). The original live ~7% was approvals/open-intents while the backtest 0%
+was fills/total-events; comparing the two requires the same denominator. Directional
+target: backtest v2 approval rate over a live-overlapping window is **comparable to live
+~7%** (not 0%, not ~100%). A scalar rate alone is insufficient — the accept/reject
+**composition** (per-`flow_type` or per-symbol pass rate, or the rejected-reason
+distribution) is compared too, so a biased fallback that happens to land near ~7% in
+aggregate is still caught.
+
+### Edge must survive low-fidelity exclusion (ADR 0019 criterion 12)
+
+The real protection is **ADR 0019 criterion 12**: a version's edge must survive with
+`lowFidelity` trades **excluded**. A backtest fill that exists only because of the
+fallback relaxation cannot, by itself, justify promotion.
+
+### Determinism + parity preserved
+
+The backtest still runs the **same** strategy + execution-policy code as live (§5
+umbrella rule). The fallback is a **gate-INPUT approximation** — a conservative
+substitute for the missing `book_snapshots` row fed into the existing gate — **not a
+different gate and not a strategy change.** The backtest remains a pure function of its
+inputs (replayable, no wall-clock / RNG). The fallback is **backtest-only**; it is never
+applied to the live risk gate.
+
 ## 8. Out of scope (deferred / handled elsewhere)
 
 - **Same-event multi-version simulation** (M7 plan task) — composes `BacktestRunnerService.run` over `{v0, v1, v2, v3}` for the same `event_id`-keyed tape; handled by the M8 comparison harness, not by `BacktestModule` directly.

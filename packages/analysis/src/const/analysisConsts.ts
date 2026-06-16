@@ -25,3 +25,13 @@ export const ANALYSIS_MAX_RANGE_MS = 366 * MS_PER_DAY;
  * than silently truncate.
  */
 export const DECISIONS_ROW_CAP = 10_000;
+
+/**
+ * `strategy_versions.status` value for the single live version whose realized
+ * trades land in `positions`/`decisions`. Mirrors `StrategyStatusEnum.ACTIVE`
+ * (`@bot/shared`) — duplicated as a local literal because the analysis ts-jest
+ * config resolves `@bot/shared` to source artifacts that fail value-import under
+ * the test runner (same reason `formatMoneyString` imports `decimal.js`
+ * directly). The string MUST stay in sync with `StrategyStatusEnum.ACTIVE`.
+ */
+export const STRATEGY_STATUS_ACTIVE = 'active';

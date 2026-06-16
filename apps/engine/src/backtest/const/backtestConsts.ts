@@ -12,6 +12,32 @@ export const BACKTEST_WARMUP_BAR_COUNT = 200; // matches CLOSED_BAR_WINDOW_SIZE
 // tier-1 slippage multiplier instead of the strategy_versions.params value.
 export const BACKTEST_STRESS_SLIPPAGE_MULTIPLIER = 2.0;
 
+// --- M37 W2 (ADR 0015 M37 amendment) book-snapshot fallback gate inputs ---
+//
+// `book_snapshots` are persisted only sparsely (~around live decisions), so most replayed
+// trigger bars have no captured book state. The risk gate's per-coin depth check
+// (COIN_DEPTH_FLOOR_10BPS_USDT) and spread ceiling read these book-derived inputs; with no
+// book row the engine previously fed depth='0', which the gate read as too-thin and
+// hard-rejected EVERY such candidate (the documented 0-fill blocker). This is a BACKTEST-ONLY
+// gate-INPUT approximation (not a gate change, never applied live): when no book row exists
+// the replay substitutes a conservative tier-floor-model depth + spread and flags the
+// resulting fill low-fidelity (IBacktestFill.depthAware=false → IBacktestReport.lowFidelityTradeCount).
+// The fallback is conservative: it assumes liquidity exactly clears the per-tier eligibility
+// floor (not abundant book), so it never manufactures a fill the live gate would reject for a
+// genuinely thin book — it only stops the replay from rejecting EVERY no-book candidate. A
+// version's edge must still survive with low-fidelity trades excluded (ADR 0019 criterion 12).
+
+// Multiplier applied to the per-tier COIN_DEPTH_FLOOR_10BPS_USDT to derive the fallback
+// 10bps depth when no book snapshot is available. The gate boundary is `<=` (depth exactly
+// at the floor REJECTS), so the fallback must sit strictly above the floor; 1.01 clears it by
+// the minimum defensible margin — assuming barely-sufficient liquidity, never abundant.
+export const BACKTEST_FALLBACK_DEPTH_FLOOR_MULTIPLIER = 1.01;
+
+// Conservative fallback bid/ask spread (percent) when no book snapshot is available. Sits
+// below every tier spread ceiling (tightest = 0.15% for tier-1) so the spread check passes,
+// while being a non-zero, realistic taker-friendly spread rather than a fictitious zero.
+export const BACKTEST_FALLBACK_BID_ASK_SPREAD_PCT = 0.05;
+
 // Fraction of best trades to remove for robustness gate (remove top 5%).
 export const BACKTEST_ROBUSTNESS_TOP_TRIM_PCT = 0.05;
 

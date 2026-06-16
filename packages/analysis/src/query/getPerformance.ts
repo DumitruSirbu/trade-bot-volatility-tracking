@@ -5,6 +5,20 @@
 // engine's MetricsController projection (winRate semantics, money-string
 // formatting) row-for-row off the same source rows.
 //
+// **M37 W1 (D1.1/D1.2) — active-vs-shadow precedence.** A strategy version is
+// either the live `active` version (its realized trades live in `positions`) or
+// a `shadow` version (its counterfactual fills live in `shadow_decisions`). The
+// active version can ALSO carry `shadow_decisions` rows for a window it was
+// concurrently shadowed (ADR 0029 M37 amendment) — to avoid double-counting,
+// this function reads `positions` for the active version and `shadow_decisions`
+// for shadow versions, never both, keyed off `strategy_versions.status`. A
+// shadow trade counts as "traded" only when its `simulated_fill` is non-hollow
+// (`missed=false AND exitPrice IS NOT NULL`). PnL is computed from the fill JSONB
+// using `trade_side` and `qty` to sign the gross delta. Note: the D1.6 fill
+// simulator uses a causal same-bar approximation (entry and exit at bar close),
+// so gross PnL is ~0 for force_close rows — the honest result until a retroactive
+// replay job provides real forward-bar fills.
+//
 // **Window-semantics divergence vs the engine's MetricsController.** This
 // surface is the *historical-window* form: callers pass an explicit
 // `[from, to)` half-open range and the SQL filters
@@ -32,7 +46,7 @@ import { Decimal } from 'decimal.js';
 import { DataSource } from 'typeorm';
 import type { IPerformanceByVersionView } from '@bot/shared';
 
-import { MS_PER_DAY } from '../const/index.js';
+import { MS_PER_DAY, STRATEGY_STATUS_ACTIVE } from '../const/index.js';
 import { AnalysisValidationError, validateDateRangeOrThrow } from '../util/analysisValidation.js';
 
 export interface IGetPerformanceParams {
@@ -64,13 +78,83 @@ const PERFORMANCE_SQL = `
       AND p.closed_at <  $3
 `;
 
+// M37 W1 (D1.1/D1.2) — shadow-version aggregation. A shadow version has no
+// `positions` rows; its counterfactual fills live in `shadow_decisions`. A row
+// counts as "traded" only when its `simulated_fill` is non-hollow:
+// `missed=false AND exitPrice IS NOT NULL`. PnL is computed from the fill JSONB:
+// (exitPrice - entryPrice) × qty for LONG; (entryPrice - exitPrice) × qty for SHORT.
+// The window uses `created_at` (the shadow row's recording time) — shadow rows have no
+// `closed_at`; the simulated close timestamp lives inside the JSONB and is not the
+// windowing key for this decision-recording surface.
+// Note: force_close exits at bar close (≈ entry price), so gross PnL is ~0 for most
+// rows in live evaluation where no post-entry SL/TP breach occurs. This is the honest
+// result given the architectural constraint (next bar unavailable at evaluation time).
+const SHADOW_PERFORMANCE_SQL = `
+    SELECT
+        COUNT(*) FILTER (
+            WHERE (sd.simulated_fill->>'missed')::boolean = false
+              AND sd.simulated_fill->>'exitPrice' IS NOT NULL
+              AND sd.simulated_fill->>'entryPrice' IS NOT NULL
+              AND sd.simulated_fill->>'entryPrice' != '0'
+        )::text                                                                        AS trade_count,
+        COALESCE(SUM(CASE
+            WHEN (sd.simulated_fill->>'missed')::boolean = false
+             AND sd.simulated_fill->>'exitPrice' IS NOT NULL
+             AND sd.simulated_fill->>'entryPrice' IS NOT NULL
+             AND sd.simulated_fill->>'entryPrice' != '0'
+             AND (
+                CASE sd.trade_side
+                    WHEN 'long'  THEN (CAST(sd.simulated_fill->>'exitPrice' AS NUMERIC)
+                                       - CAST(sd.simulated_fill->>'entryPrice' AS NUMERIC))
+                                      * sd.qty::NUMERIC
+                    WHEN 'short' THEN (CAST(sd.simulated_fill->>'entryPrice' AS NUMERIC)
+                                       - CAST(sd.simulated_fill->>'exitPrice' AS NUMERIC))
+                                      * sd.qty::NUMERIC
+                    ELSE 0
+                END
+                - COALESCE(CAST(sd.simulated_fill->>'feeUsdtEntry' AS NUMERIC), 0)
+                - COALESCE(CAST(sd.simulated_fill->>'feeUsdtExit' AS NUMERIC), 0)
+             ) > 0
+            THEN 1 ELSE 0
+        END), 0)::text                                                                 AS win_count,
+        COALESCE(SUM(CASE
+            WHEN (sd.simulated_fill->>'missed')::boolean = false
+             AND sd.simulated_fill->>'exitPrice' IS NOT NULL
+             AND sd.simulated_fill->>'entryPrice' IS NOT NULL
+             AND sd.simulated_fill->>'entryPrice' != '0'
+            THEN
+                CASE sd.trade_side
+                    WHEN 'long'  THEN (CAST(sd.simulated_fill->>'exitPrice' AS NUMERIC)
+                                       - CAST(sd.simulated_fill->>'entryPrice' AS NUMERIC))
+                                      * sd.qty::NUMERIC
+                    WHEN 'short' THEN (CAST(sd.simulated_fill->>'entryPrice' AS NUMERIC)
+                                       - CAST(sd.simulated_fill->>'exitPrice' AS NUMERIC))
+                                      * sd.qty::NUMERIC
+                    ELSE 0
+                END
+                - COALESCE(CAST(sd.simulated_fill->>'feeUsdtEntry' AS NUMERIC), 0)
+                - COALESCE(CAST(sd.simulated_fill->>'feeUsdtExit' AS NUMERIC), 0)
+            ELSE 0
+        END), 0)::text                                                                 AS net_pnl_usd,
+        MAX(sv.name || '@v' || sv.version::text)                                       AS label,
+        MAX(sv.status)                                                                 AS status
+    FROM shadow_decisions sd
+    INNER JOIN strategy_versions sv ON sv.strategy_versions_id = sd.strategy_version_id
+    WHERE sd.strategy_version_id = $1
+      AND sd.action = 'open'
+      AND sd.created_at >= $2
+      AND sd.created_at <  $3
+`;
+
 // why: the aggregation SQL above INNER JOINs through `positions`, so a window
 // with zero closed positions yields a `label=null, status=null` row even for a
 // version that genuinely exists. Without this fallback the surface emitted
 // `unknown@v<id>` for a real active version, which an LLM agent reads as "the
 // version doesn't exist." A 1-row probe against `strategy_versions` resolves
 // the canonical label/status when the aggregation is empty, and surfaces a
-// validation error when the version truly does not exist.
+// validation error when the version truly does not exist. M37 W1 reuses this
+// probe to resolve the version's `status` BEFORE the aggregation so the active
+// (`positions`) vs shadow (`shadow_decisions`) path can be chosen.
 const VERSION_LOOKUP_SQL = `
     SELECT
         sv.name || '@v' || sv.version::text AS label,
@@ -89,24 +173,21 @@ export async function getPerformance(ds: DataSource, params: IGetPerformancePara
     validateVersionIdOrThrow(params.versionId);
     validateDateRangeOrThrow(params.from, params.to);
 
-    const rows: IPerformanceRow[] = await ds.query(PERFORMANCE_SQL, [params.versionId, params.from.toISOString(), params.to.toISOString()]);
-    const row = rows[0];
+    // M37 W1: resolve the version's canonical label + status first. `status`
+    // selects the aggregation source — `positions` for the active version,
+    // `shadow_decisions` for shadow versions — so no version is double-counted.
+    // Throws when the version genuinely does not exist.
+    const resolved = await lookupVersionOrThrow(ds, params.versionId);
+    const label = resolved.label;
+    const status = resolved.status;
 
-    const tradeCount = row !== undefined ? Number(row.trade_count) : 0;
-    const winCount = row !== undefined ? Number(row.win_count) : 0;
+    const aggregation = await aggregatePerformance(ds, params, status);
+    const tradeCount = aggregation.tradeCount;
+    const winCount = aggregation.winCount;
     // why: wrap raw `::text`-cast money strings through shared decimalMath so
     // the surface shape matches engine's `Money.toFixed()` exit point in
     // `mapPerformanceByVersion`. Same numeric value, identical string form.
-    const netPnlUsd = formatMoneyString(row !== undefined && row.net_pnl_usd !== null ? row.net_pnl_usd : '0');
-
-    // Resolve label/status from `strategy_versions` directly when the
-    // aggregation produced no joined row (empty window). Throws when the
-    // versionId genuinely doesn't exist so callers see a canonical
-    // "no such version" rather than a misleading `unknown@v<id>` synthetic.
-    const needsLookup = row === undefined || row.label === null || row.status === null;
-    const resolved = needsLookup ? await lookupVersionOrThrow(ds, params.versionId) : { label: row!.label!, status: row!.status! };
-    const label = resolved.label;
-    const status = resolved.status;
+    const netPnlUsd = formatMoneyString(aggregation.netPnlUsd);
 
     const windowDays = computeWindowDays(params.from, params.to);
     const winRate = tradeCount > 0 ? (winCount / tradeCount).toFixed(6) : null;
@@ -128,6 +209,28 @@ export async function getPerformance(ds: DataSource, params: IGetPerformancePara
         sharpe: null,
         sortino: null,
         expectancyPerUnitRisk: null,
+    };
+}
+
+interface IAggregatedPerformance {
+    readonly tradeCount: number;
+    readonly winCount: number;
+    readonly netPnlUsd: string;
+}
+
+// Selects the aggregation source by version status: the active version's
+// realized trades from `positions`; a shadow version's counterfactual fills
+// from `shadow_decisions`. This is the active-vs-shadow precedence rule
+// (M37 W1 D1.2) — a version is read from exactly one stream, never both.
+async function aggregatePerformance(ds: DataSource, params: IGetPerformanceParams, status: string): Promise<IAggregatedPerformance> {
+    const sql = status === STRATEGY_STATUS_ACTIVE ? PERFORMANCE_SQL : SHADOW_PERFORMANCE_SQL;
+    const rows: IPerformanceRow[] = await ds.query(sql, [params.versionId, params.from.toISOString(), params.to.toISOString()]);
+    const row = rows[0];
+
+    return {
+        tradeCount: row !== undefined ? Number(row.trade_count) : 0,
+        winCount: row !== undefined ? Number(row.win_count) : 0,
+        netPnlUsd: row !== undefined && row.net_pnl_usd !== null ? row.net_pnl_usd : '0',
     };
 }
 

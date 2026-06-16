@@ -123,7 +123,10 @@ describe('PromotionService (integration — requires Postgres)', () => {
         return new PromotionService(dataSource, gate);
     }
 
-    it('promote() archives the prior active row and flips the candidate to active', async () => {
+    // M37 (D1.3): the demoted incumbent now rests in SHADOW (not ARCHIVED) so it keeps
+    // shadow-logging across the active→shadow transition with no gap (the verified 6-day
+    // v1 blackout fix). `archivedAt` is cleared.
+    it('promote() demotes the prior active row to SHADOW and flips the candidate to active', async () => {
         const name = `${UNIQUE_NAME_PREFIX}promote_flow_${Date.now()}`;
         const incumbent = await strategyRepository.save(strategyRepository.create(buildStrategyRow(name, 1, StrategyStatusEnum.ACTIVE)));
         const candidate = await strategyRepository.save(strategyRepository.create(buildStrategyRow(name, 2, StrategyStatusEnum.DRAFT)));
@@ -139,8 +142,8 @@ describe('PromotionService (integration — requires Postgres)', () => {
         expect(promoted.promotionNote).toBe('first promotion');
 
         const reloadedIncumbent = await strategyRepository.findOne({ where: { id: incumbent.id } });
-        expect(reloadedIncumbent?.status).toBe(StrategyStatusEnum.ARCHIVED);
-        expect(reloadedIncumbent?.archivedAt).toBeInstanceOf(Date);
+        expect(reloadedIncumbent?.status).toBe(StrategyStatusEnum.SHADOW);
+        expect(reloadedIncumbent?.archivedAt).toBeNull();
 
         const activeRows = await strategyRepository.find({ where: { name, status: StrategyStatusEnum.ACTIVE } });
         expect(activeRows).toHaveLength(1);
@@ -173,7 +176,10 @@ describe('PromotionService (integration — requires Postgres)', () => {
         expect(reloaded?.status).toBe(StrategyStatusEnum.ARCHIVED);
     });
 
-    it('reactivate() flips an archived row back to active and archives any current active row', async () => {
+    // M37 (D1.3): reactivate flips an archived (or demoted-shadow) row back to active and
+    // demotes any current active row to SHADOW (not ARCHIVED) so the outgoing version keeps
+    // shadow-logging with no gap.
+    it('reactivate() flips an archived row back to active and demotes any current active row to SHADOW', async () => {
         const name = `${UNIQUE_NAME_PREFIX}reactivate_${Date.now()}`;
         const oldActive = await strategyRepository.save(strategyRepository.create(buildStrategyRow(name, 1, StrategyStatusEnum.ARCHIVED)));
         const currentActive = await strategyRepository.save(strategyRepository.create(buildStrategyRow(name, 2, StrategyStatusEnum.ACTIVE)));
@@ -189,20 +195,36 @@ describe('PromotionService (integration — requires Postgres)', () => {
         expect(reactivated.promotedAt).toBeInstanceOf(Date);
 
         const reloadedCurrent = await strategyRepository.findOne({ where: { id: currentActive.id } });
-        expect(reloadedCurrent?.status).toBe(StrategyStatusEnum.ARCHIVED);
+        expect(reloadedCurrent?.status).toBe(StrategyStatusEnum.SHADOW);
+        expect(reloadedCurrent?.archivedAt).toBeNull();
 
         const activeRows = await strategyRepository.find({ where: { name, status: StrategyStatusEnum.ACTIVE } });
         expect(activeRows).toHaveLength(1);
         expect(activeRows[0].id).toBe(oldActive.id);
     });
 
-    it('reactivate() refuses when the target row is not archived', async () => {
+    // M37 (D1.3): a demoted incumbent now rests in SHADOW and must be reactivatable from
+    // there — the previously-active version can be flipped back without first archiving it.
+    it('reactivate() accepts a SHADOW (demoted-incumbent) target and flips it back to active', async () => {
+        const name = `${UNIQUE_NAME_PREFIX}reactivate_shadow_${Date.now()}`;
+        const demotedShadow = await strategyRepository.save(strategyRepository.create(buildStrategyRow(name, 1, StrategyStatusEnum.SHADOW)));
+
+        const service = buildPromotionService(buildPromoteOutcome(demotedShadow.id, 0));
+
+        const reactivated = await service.reactivate(demotedShadow.id);
+
+        expect(reactivated.status).toBe(StrategyStatusEnum.ACTIVE);
+        expect(reactivated.archivedAt).toBeNull();
+        expect(reactivated.promotedAt).toBeInstanceOf(Date);
+    });
+
+    it('reactivate() refuses when the target row is a draft (neither archived nor shadow)', async () => {
         const name = `${UNIQUE_NAME_PREFIX}reactivate_not_archived_${Date.now()}`;
         const draft = await strategyRepository.save(strategyRepository.create(buildStrategyRow(name, 1, StrategyStatusEnum.DRAFT)));
 
         const service = buildPromotionService(buildPromoteOutcome(draft.id, 0));
 
-        await expect(service.reactivate(draft.id)).rejects.toThrow(/must be archived/);
+        await expect(service.reactivate(draft.id)).rejects.toThrow(/must be archived or shadow/);
     });
 
     // Paired regression test for R1-B1 (ADR 0016 §2.2 step 2): if the comparison report's

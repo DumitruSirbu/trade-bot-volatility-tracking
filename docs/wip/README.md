@@ -11,6 +11,7 @@ Scratch and investigation docs **before** they become milestone plans or ADRs.
 
 ## Active (root)
 
+- [m38-momentum-exit-geometry-and-strategy-routing.md](m38-momentum-exit-geometry-and-strategy-routing.md) — TP geometry stale at fill time, entry staleness gate, V3 hybrid promotion; M38 brief base (2026-06-15)
 - [live-exit-enforcement-gap.md](live-exit-enforcement-gap.md) — stuck open positions; live time-stop / paper SL-TP gap (2026-06-12)
 - [slot-model-and-correlated-leg-gaps.md](slot-model-and-correlated-leg-gaps.md) — slot C / correlated leg; gated by M30 soak (open)
 

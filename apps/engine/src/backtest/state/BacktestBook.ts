@@ -25,6 +25,13 @@ export class BacktestBook {
     // matches the per-symbol-per-day shape the gate needs.
     private readonly openedOnDaySymbol: Map<string, number> = new Map();
 
+    // M37 W2 (ADR 0015 M37 amendment): whether the OPEN fill of each live position was backed
+    // by a real captured book_snapshots row (true) or by the conservative tier-floor-model
+    // fallback (false). Keyed by positionId, recorded at open, OR-ed with the close-fill's
+    // fidelity so a trade is flagged low-fidelity if EITHER leg used the fallback. Engine-only
+    // in-memory state — IBacktestPosition is a shared contract and cannot carry it.
+    private readonly openFillDepthAwareByPositionId: Map<string, boolean> = new Map();
+
     incrementOpenedOnDay(symbol: string, dateString: string): void {
         const key = this.openedOnDayKey(symbol, dateString);
         const current = this.openedOnDaySymbol.get(key) ?? 0;
@@ -41,6 +48,16 @@ export class BacktestBook {
 
     openPositionList(): IBacktestPosition[] {
         return Array.from(this.openPositions.values());
+    }
+
+    recordOpenFillDepthAware(positionId: string, depthAware: boolean): void {
+        this.openFillDepthAwareByPositionId.set(positionId, depthAware);
+    }
+
+    // True only when the open fill was explicitly recorded as book-backed. Defaults to false
+    // (low-fidelity) for an unknown positionId so a missing record never over-states fidelity.
+    wasOpenFillDepthAware(positionId: string): boolean {
+        return this.openFillDepthAwareByPositionId.get(positionId) ?? false;
     }
 
     private openedOnDayKey(symbol: string, dateString: string): string {

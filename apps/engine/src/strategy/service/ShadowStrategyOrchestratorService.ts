@@ -7,6 +7,7 @@ import {
     IVirtualLedgerSnapshot,
     IVolatilityDetectedEvent,
     MissedReasonEnum,
+    OrderPolicyEnum,
     PositionSideEnum,
     SignalActionEnum,
     type ISimulatedFill,
@@ -19,11 +20,10 @@ import Decimal from 'decimal.js';
 import { Money, MoneyValue } from '../../common/utils/money';
 import { AppConfigService } from '../../config/service';
 import { RISK_PER_TRADE_PCT } from '../../risk/const';
-import { HistoricalFillAdapter, IFillRequest } from '../../backtest/fill/HistoricalFillAdapter';
+import { HistoricalFillAdapter, IFillRequest, IStopSimulatorResult } from '../../backtest/fill/HistoricalFillAdapter';
 import { TickAggregateEntity } from '../../market-data/entity';
 import { TickAggregateRepository } from '../../market-data/repository/TickAggregateRepository';
 import {
-    SHADOW_FILL_DEFAULT_POLICY,
     SHADOW_FILL_LATENCY_MS,
     SHADOW_GATE_CONSECUTIVE_LOSS_RELAX_SENTINEL,
     SHADOW_GATE_HALT_AFTER_CONSECUTIVE_LOSSES,
@@ -32,6 +32,7 @@ import {
     SHADOW_GATE_MAX_TRADES_PER_DAY,
     SHADOW_GATE_REQUIRE_EXHAUSTION_CONFIRMATION,
     SHADOW_GATE_SKIP_MARKET_STRESS,
+    SHADOW_TAKER_FEE_PCT,
     SHADOW_VERSION_DISCRIMINATOR_PREFIX,
 } from '../const';
 import { StrategyVersionEntity } from '../entity';
@@ -94,6 +95,27 @@ interface IShadowDecisionPersistInput {
     readonly openData: IShadowOpenData | null;
 }
 
+// M37 (D1.6): grouped input for the shadow fill counterfactual (≤2-argument
+// convention). All money fields are decimal-as-string at the boundary.
+interface IShadowFillInput {
+    readonly shadow: IResolvedShadow;
+    readonly event: IVolatilityDetectedEvent;
+    readonly side: PositionSideEnum;
+    readonly entryPriceStr: string;
+    readonly qtyStr: string;
+    readonly stopLossStr: string;
+    readonly takeProfitStr: string;
+    readonly evidence: ISignalBarEvidence;
+}
+
+// M37 (D1.6): the resolved forward-only exit — price, reason, and a deterministic
+// close timestamp derived from the breaching (or last) tick, never wall-clock.
+interface IShadowExitOutcome {
+    readonly exitPrice: string;
+    readonly closeReason: 'sl' | 'tp' | 'force_close';
+    readonly closedAt: string | null;
+}
+
 // M11a W2 (ADR 0029 §2.2). Orchestrates the shadow-mode counterfactual: when
 // the live `StrategyService` finishes routing v1's decision for an event, this
 // service evaluates every non-active, non-archived strategy version against
@@ -149,6 +171,17 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
     }
 
     async onModuleInit(): Promise<void> {
+        // M37 (D1.3): the shadow set is resolved ONCE at boot from
+        // `strategy_versions.status = shadow`. A version whose status flips to
+        // `shadow` at runtime (a live promotion demoting the incumbent — see
+        // PromotionService.demoteIncumbentToShadow) is therefore NOT picked up
+        // until the next restart. This is acceptable today because promotion is a
+        // config-change-plus-restart operation (ACTIVE_STRATEGY_VERSION_ID is an
+        // env var read at boot); the demoted incumbent resumes shadow-logging on
+        // the very next engine start with no durable gap.
+        // TODO(M-future): a hot `reloadShadows()` that re-queries findActiveShadows
+        // and resolves any newly-shadow version without a restart — tracked in
+        // docs/tech-debt.md (LOW) under shadow-orchestrator runtime reload.
         const activeId = this.config.activeStrategyVersionId;
         const rows = await this.strategyVersions.findActiveShadows(activeId);
 
@@ -249,10 +282,10 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
         // Same-side re-confirmations are NOT churned — they fall through to
         // the gate and are rejected naturally by `max_open_positions_reached`.
         //
-        // TODO (quant W4 review): `reconstructReferencePrice` is the entry-
-        // price proxy used here as the close fill price. A dedicated
-        // `intent: 'close'` simulation through HistoricalFillAdapter would be
-        // more accurate but is out of scope for this wave.
+        // TODO(M-future): `reconstructReferencePrice` is the entry-price proxy
+        // used here as the close fill price. A dedicated `intent: 'close'`
+        // simulation through HistoricalFillAdapter would be more accurate —
+        // tracked in docs/tech-debt.md under shadow-orchestrator close-sim.
         const existingPosition = shadow.ledger.findOpenPositionBySymbol(event.symbol);
         const isReverseClose =
             signal.action === SignalActionEnum.OPEN &&
@@ -334,7 +367,16 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
                 );
             } else {
                 const qtyForLedger = this.deriveShadowQty(shadow, entryPriceStr, stopLossStr);
-                const simulatedFill = this.simulateShadowFill(shadow, stampedEvent, signal.tradeSide, entryPriceStr, qtyForLedger, evidence);
+                const simulatedFill = this.simulateShadowFill({
+                    shadow,
+                    event: stampedEvent,
+                    side: signal.tradeSide,
+                    entryPriceStr,
+                    qtyStr: qtyForLedger,
+                    stopLossStr,
+                    takeProfitStr,
+                    evidence,
+                });
 
                 openData = {
                     qty: qtyForLedger,
@@ -386,39 +428,85 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
         }
     }
 
-    private simulateShadowFill(
-        shadow: IResolvedShadow,
-        event: IVolatilityDetectedEvent,
-        side: PositionSideEnum,
-        entryPriceStr: string,
-        qtyStr: string,
-        evidence: ISignalBarEvidence,
-    ): ISimulatedFill {
+    // M37 (D1.6, ADR 0029 M37 amendment): produce a NON-HOLLOW counterfactual for an
+    // accepted shadow open. Entry is at the M26 next-bar-open reference (last signal-bar
+    // tick close). Exit walks only the post-entry tick window — ticks at or after the
+    // entry tick — so no pre-entry price action can trigger SL/TP (causal same-bar
+    // approximation). In live evaluation the next bar is not yet available, so the
+    // post-entry window is typically just the entry tick itself, and force_close is the
+    // expected outcome for most shadow positions. lowFidelity: true until the depth-aware
+    // extension (ADR 0029 §2.4).
+    private simulateShadowFill(input: IShadowFillInput): ISimulatedFill {
+        const { side, entryPriceStr, stopLossStr, takeProfitStr, evidence } = input;
         const entryPrice = new Money(entryPriceStr);
-        const barExtremes = deriveBarExtremes(evidence.ticks, entryPrice);
 
+        if (evidence.ticks.length === 0) {
+            return buildMissedShadowFill(MissedReasonEnum.MISSING_TICK_DATA);
+        }
+
+        const entryTick = evidence.ticks[evidence.ticks.length - 1];
+        // Only ticks at-or-after the entry reference are causal; the full signal bar
+        // contains pre-entry price action that a position opened at bar close could not
+        // have experienced. In live evaluation the next bar is not yet available, so
+        // force_close is the expected outcome for most shadow positions.
+        const postEntryTicks = evidence.ticks.filter((t) => t.ts.getTime() >= entryTick.ts.getTime());
+        const postEntryExtremes = deriveBarExtremes(postEntryTicks, entryPrice);
+        const entrySlippagePct = this.computeEntrySlippagePct(input);
+        const stop = new HistoricalFillAdapter().simulateIntrabarStop(
+            side === PositionSideEnum.LONG ? 'long' : 'short',
+            new Money(stopLossStr),
+            new Money(takeProfitStr),
+            postEntryTicks,
+            postEntryExtremes.high,
+            postEntryExtremes.low,
+            input.event.entryCandleOpenTime,
+        );
+        const exit = this.resolveShadowExit(stop, evidence.ticks);
+
+        return this.buildFilledShadowFill(input, entryPrice, entrySlippagePct, exit);
+    }
+
+    private buildFilledShadowFill(input: IShadowFillInput, entryPrice: MoneyValue, entrySlippagePct: string, exit: IShadowExitOutcome): ISimulatedFill {
+        return {
+            entryPrice: entryPrice.toFixed(),
+            exitPrice: exit.exitPrice,
+            slippageEntryPct: entrySlippagePct,
+            slippageExitPct: '0',
+            slippageComponents: {
+                tierBase: entrySlippagePct,
+                latency: '0',
+                crossingSpread: '0',
+            },
+            feeUsdtEntry: computeTakerFeeUsdt(entryPrice.toFixed(), input.qtyStr),
+            feeUsdtExit: computeTakerFeeUsdt(exit.exitPrice, input.qtyStr),
+            missed: false,
+            missedReason: null,
+            forceClose: exit.closeReason === 'force_close',
+            lowFidelity: true,
+            closedAt: exit.closedAt,
+            closeReason: exit.closeReason,
+        };
+    }
+
+    // Entry-side slippage from the tier-floor model (REDUCE_MARKET — never misses).
+    // Accepts the full IShadowFillInput DTO; the adapter is invoked only to read the
+    // tier-floor slippage component, not to accept/reject the fill.
+    private computeEntrySlippagePct(input: IShadowFillInput): string {
+        const { shadow, event, side, entryPriceStr, qtyStr } = input;
+        const entryPrice = new Money(entryPriceStr);
         const fillRequest: IFillRequest = {
             eventId: event.eventId,
             symbol: event.symbol,
             side: side === PositionSideEnum.LONG ? 'long' : 'short',
             intent: 'open',
-            policy: SHADOW_FILL_DEFAULT_POLICY,
+            policy: OrderPolicyEnum.REDUCE_MARKET,
             limitPrice: entryPrice,
             qty: new Money(qtyStr),
             coinTier: event.coinTier,
             signalBarOpenMs: event.entryCandleOpenTime,
-            barHigh: barExtremes.high,
-            barLow: barExtremes.low,
-            // M26 (A1/A6, ADR 0029): the shadow path now replays the signal bar's
-            // `tick_aggregates` — the SAME rows M7 backtest loads — so `isMissedFill`
-            // judges the real intra-bar tape instead of an empty array (which always
-            // missed). `barHigh`/`barLow` come from the same tick set for snapshot
-            // consistency (they do not drive the open miss-detector; ticks do). The
-            // fill stays `lowFidelity: true` with `bookSnapshot: null` until the
-            // depth-aware extension (ADR 0029 §2.4). Residual gaps stay honest: the
-            // close-side still uses the reference-price proxy (A8) and the virtual
-            // ledger populates forward-only (A7) — this is NOT byte-identical to backtest.
-            ticks: evidence.ticks,
+            barHigh: entryPrice,
+            barLow: entryPrice,
+            ticks: [],
             bookSnapshot: null,
             tierSlippageParams: this.toTierSlippageParams(shadow.params),
             config: {
@@ -428,41 +516,32 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
             },
         };
 
-        const adapter = new HistoricalFillAdapter();
-        const fill = adapter.simulateFill(fillRequest);
+        const fill = new HistoricalFillAdapter().simulateFill(fillRequest);
 
-        // M27 (A0, carry-in from M26): tag every missed outcome with a durable
-        // `missedReason` so the soak can distinguish a no-tape miss from a
-        // price-not-touched miss (the M26 debug-log-only signal is now persisted).
-        // An empty tick set means there was no signal-bar tape to judge against
-        // (`missing_tick_data`); otherwise a miss means the next-bar entry price
-        // was never crossed (`price_not_touched`). A filled outcome carries null.
-        const missedReason = deriveMissedReason(evidence.ticks, fill.missed);
+        return fill.slippagePct;
+    }
 
-        // HistoricalFillAdapter / IBacktestFill exposes only a unified
-        // `slippagePct` (no per-component decomposition). Stamping tierBase =
-        // total slippage, latency/crossingSpread = 0 keeps the JSONB shape
-        // ADR 0029 §2.3.2 pins while identifying which component bears the
-        // cost. The depth-aware extension (deferred from M7) is the right
-        // place to populate the remaining components.
+    // Map the forward-only intra-bar stop verdict to the close fields. A breach (SL or TP)
+    // closes at the hit price with the matching reason; no breach force-closes at the bar
+    // close (the last tick close), the M26 next-bar-open ≈ bar-close proxy. `closedAt` is
+    // derived from the relevant tick timestamp — deterministic, no wall-clock.
+    private resolveShadowExit(stop: IStopSimulatorResult, ticks: TickAggregateEntity[]): IShadowExitOutcome {
+        if (stop.hit !== null && stop.hitPrice !== null) {
+            const closedAt = stop.hitTsMs === null ? null : new Date(stop.hitTsMs).toISOString();
+
+            return {
+                exitPrice: stop.hitPrice.toFixed(),
+                closeReason: stop.hit === 'stop_loss' ? 'sl' : 'tp',
+                closedAt,
+            };
+        }
+
+        const lastTick = ticks[ticks.length - 1];
+
         return {
-            entryPrice: fill.priceUsdt,
-            exitPrice: null,
-            slippageEntryPct: fill.slippagePct,
-            slippageExitPct: null,
-            slippageComponents: {
-                tierBase: fill.slippagePct,
-                latency: '0',
-                crossingSpread: '0',
-            },
-            missed: fill.missed,
-            missedReason,
-            forceClose: false,
-            // Every shadow open is treated as lowFidelity until the depth-
-            // aware extension lands (ADR 0029 §2.4 + ADR 0019 criterion 12).
-            lowFidelity: true,
-            closedAt: null,
-            closeReason: null,
+            exitPrice: lastTick.close.toFixed(),
+            closeReason: 'force_close',
+            closedAt: lastTick.ts.toISOString(),
         };
     }
 
@@ -627,9 +706,10 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
         }
 
         if (rows.length > 0) {
-            this.logger.log(
-                `shadow ${shadow.discriminator} ledger rebuilt from ${rows.length} historical rows (replayed ${replayedOpens} opens, skipped ${skippedLegacyOpens} legacy)`,
-            );
+            const rebuildSummary =
+                `shadow ${shadow.discriminator} ledger rebuilt from ${rows.length} historical rows` +
+                ` (replayed ${replayedOpens} opens, skipped ${skippedLegacyOpens} legacy)`;
+            this.logger.log(rebuildSummary);
         }
     }
 
@@ -667,20 +747,32 @@ function isStopSideValid(tradeSide: PositionSideEnum, entryPriceStr: string, sto
     return stop.gt(entry);
 }
 
-// M27 (A0): map a fill outcome to the durable `missedReason` tag.
-//   - filled (not missed)      → null
-//   - missed with no ticks     → 'missing_tick_data' (no signal-bar tape existed)
-//   - missed with ticks        → 'price_not_touched' (entry price never crossed)
-function deriveMissedReason(ticks: TickAggregateEntity[], missed: boolean): MissedReasonEnum | null {
-    if (!missed) {
-        return null;
-    }
+// M37 (D1.6): the conservative-miss `ISimulatedFill` for the no-tape case — there is no
+// forward path to judge an exit against, so the open stays a miss with `entryPrice:"0"`
+// (never a fabricated fill). Accepted opens with ticks emit a filled result (typically
+// force_close at bar close when the post-entry window contains no SL/TP breach).
+function buildMissedShadowFill(missedReason: MissedReasonEnum): ISimulatedFill {
+    return {
+        entryPrice: '0',
+        exitPrice: null,
+        slippageEntryPct: '0',
+        slippageExitPct: null,
+        slippageComponents: {
+            tierBase: '0',
+            latency: '0',
+            crossingSpread: '0',
+        },
+        missed: true,
+        missedReason,
+        forceClose: false,
+        lowFidelity: true,
+        closedAt: null,
+        closeReason: null,
+    };
+}
 
-    if (ticks.length === 0) {
-        return MissedReasonEnum.MISSING_TICK_DATA;
-    }
-
-    return MissedReasonEnum.PRICE_NOT_TOUCHED;
+function computeTakerFeeUsdt(priceStr: string, qtyStr: string): string {
+    return new Decimal(priceStr).times(new Decimal(qtyStr)).times(new Decimal(SHADOW_TAKER_FEE_PCT)).toFixed();
 }
 
 interface IBarExtremes {
