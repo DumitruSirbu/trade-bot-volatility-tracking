@@ -39,6 +39,9 @@
     "pnpm": {
         "auditConfig": {
             "ignoreGhsas": []
+        },
+        "overrides": {
+            "ws": ">=8.21.0"
         }
     }
 }
