@@ -1,1 +1,13 @@
-[]
+[
+    {
+        "ghsa": "GHSA-88fw-hqm2-52qc",
+        "cve": null,
+        "package": "hono",
+        "severity": "high",
+        "reason": "Transitive via @modelcontextprotocol/sdk (dev-time MCP tooling). The engine HTTP layer is NestJS/Express; hono is never instantiated as a server in this project and its CORS middleware is not reachable.",
+        "reachability": "not-reachable",
+        "approvedBy": "Dumitru Sirbu",
+        "approvedOn": "2026-06-16",
+        "expiresOn": "2026-09-13"
+    }
+]
