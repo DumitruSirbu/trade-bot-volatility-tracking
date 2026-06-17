@@ -29,6 +29,10 @@ export const EGRESS_ALLOWLIST: ReadonlySet<string> = new Set([
     'sharpe',
     'sortino',
     'expectancyPerUnitRisk',
+    'forceCloseFraction',
+    'missRate',
+    // IVersionComparisonResult additions (M39)
+    'forceCloseAbstain',
     // ADR 0037 explicit allowlist field names
     'versionId',
     'name',
