@@ -599,3 +599,115 @@ It computes a hypothetical entry/exit/PnL in-memory and stamps
   Determinism comes from the **shared immutable event**, not from sharing a market
   snapshot. **Mandating a single shared snapshot across versions is forbidden** — it
   reintroduces the censoring/bias §2.1 and §4 alt-2 reject.
+
+## Amendment — M39 (2026-06-17)
+
+**Milestone:** M39 (shadow-ledger close path + realized-PnL fidelity).
+**Status:** Accepted.
+**See:** ADR 0019 M39 amendment (D3 gate consumes the series this amendment makes
+non-degenerate), ADR 0015 (the backtest fill model W2 reuses).
+
+### Problem this amendment closes
+
+M37 (above) made the shadow path produce a non-hollow `simulated_fill` with a
+forward-only resolved exit. But that resolved verdict was written **only** into the
+`simulated_fill` JSONB and **never fed back into the virtual ledger** (`tryClose` was
+never called for the resolved exit). The fill said "closed"; the ledger believed the
+position was still open. Under the restricted-profile `max_open_positions: 1` (§2.1) the
+first open occupied the only slot **forever** and every subsequent open rejected
+`max_open_positions_reached` — so the **opens count per version was starved to ≈1** and
+no usable counterfactual series existed. This is a scope gap in the §2.1.3 close
+semantics (only `reverse_signal` was wired; the SL/TP/time-stop/force-close paths were
+not), not a regression.
+
+M39 ships in two waves: **W1 frees the slot so the opens count is honest; W2 makes the
+resolved exit value non-degenerate.** Every invariant above is preserved — the shadow
+path never touches the exchange, strategies stay pure, money is `decimal`, no wall-clock
+enters the deterministic path, and the slot ceiling stays at the live restricted profile
+(M39 does **not** raise `SHADOW_GATE_MAX_OPEN_POSITIONS`).
+
+### W1 — Free the virtual slot in-pass
+
+When `runOneShadow` accepts an open and `simulateShadowFill` returns a **non-missed**
+fill with a resolved `closeReason`, the orchestrator closes the virtual position **in
+the same pass**, reusing the existing `closeShadowInPass` / `closeBySymbol` path (no new
+PnL code path — §2.1.3 already runs the tested PnL math through `tryClose`).
+
+- **Derived close eventId (hard requirement).** `tryOpen` marks `event.eventId`
+  processed and `tryClose` rejects a duplicate `eventId`. The close therefore uses a
+  derived id `${event.eventId}:exit` (mirroring the existing `:reverse` suffix). Without
+  it, the close returns `duplicate_event_id` and the slot silently never frees.
+- **Deterministic close timestamp (invariant guard).** The close `nowMs` is derived from
+  `IShadowExitOutcome.closedAt`; when `closedAt` is null (the resolver returns null when
+  the stop's `hitTsMs` is null) it falls back to the **last-tick timestamp**, **never**
+  wall-clock. This preserves the determinism invariant: live and backtest see the same
+  derivation for the same input.
+- **Cold-restart rebuild no-op (precise predicate).** `rebuildLedger` replays an `open`
+  row as a **net-zero no-op** (open-then-close immediately ⇒ slot ends empty, only the
+  `eventId` seeded into `processedEventIds`) **iff** the row has `missed=false AND
+  exitPrice IS NOT NULL`. Hollow/missed rows (`missed=true` or null `exitPrice`,
+  including all pre-M37 rows) continue to NOT replay as opens, exactly as before — the
+  predicate must **not** loosen to "any resolved exit," or a hollow row would wrongly
+  replay. Without this rule, a restart re-creates the stuck slot.
+- **Consecutive-loss streak exclusion.** A same-bar `force_close ≈ entry` minus the exit
+  fee is reliably *slightly negative*; left unchecked, two such exits/day would trip
+  `halt_after_consecutive_losses: 2` and re-lock the version, defeating the milestone.
+  `countConsecutiveLossesInRiskDay` therefore **excludes `force_close` exits** from the
+  streak counter. The predicate is keyed on the close reason, **not** on PnL magnitude:
+  `realizedPnl.isNegative() && entry.closeReason !== 'force_close'`. A genuine `sl` /
+  `time_stop` loss (which after W2 can also land slightly negative) **still arms** the
+  streak — only the degenerate same-bar `force_close` is excluded.
+
+W1 alone makes the slot free every event and the opens count honest. It does **not**
+make the realized PnL meaningful: in live eval the post-entry window is the entry tick,
+so the exit is `force_close ≈ entry` ⇒ realized ≈ −fees.
+
+### W2 — Deferred next-bar exit walk (the genuine value precondition)
+
+The same-bar `force_close` is replaced by a true SL / TP / **time-stop** walk across the
+**next bar's** `tick_aggregates` (available on the soak tape minutes later, never in live
+eval). Same-bar `force_close` exits are queued as an `IPendingDeferredWalk` per symbol.
+On the next `runShadows` call where `event.entryCandleOpenTime >= nextBarOpenMs`,
+`HistoricalFillAdapter.simulateIntrabarStop` walks the next-bar ticks and resolves the
+exit to `sl`, `tp`, or `time_stop`. The `shadow_decisions.simulated_fill` JSONB is then
+upgraded **in-place** via `updateSimulatedFill`.
+
+This **reuses the same `HistoricalFillAdapter` the backtest uses** — no parallel exit
+model is introduced, honouring §2.3 / §4 alt-4 (one fill pipeline, no forked simulator)
+and the M37 "no look-ahead, forward-only" rule (the walk reads next-bar ticks at or after
+entry, never a future bar chosen with hindsight).
+
+### Canonical PnL source for the D3 gate
+
+The canonical realized-PnL source for the D3 comparison is the **analysis-layer
+both-leg-fee recomputation** from the fill JSONB
+(`(exitPrice − entryPrice) × qty × side − feeEntry − feeExit`), **not** the ledger's
+internal `realizedPnl` field. The ledger's `closeBySymbol` deducts only the **exit-leg**
+fee, so the ledger value would *disagree* with the reported number. The ledger's internal
+`realizedPnl` therefore stays exactly what it is — a gate-internal signal for the
+consecutive-loss streak only, **never** the reported/compared number. No persisted
+`realizedPnl` field is added to `ISimulatedFill` (it would be net-new state that
+contradicts the analysis layer).
+
+### Documented limitations (decided, not deferred)
+
+- **Funding asymmetry (accepted, bounded).** Live `realized_pnl` includes `+ fundingPaid`;
+  the shadow series does not. Intra/next-bar holds rarely cross an 8h settlement, so the
+  error is small, non-zero, and short-biased. **Decision: accept the documented, bounded
+  bias (option a) — no code change.** Excluding funding from the live side was the
+  rejected alternative.
+- **Selection bias (surfaced, not corrected).** Only filled events produce PnL and the
+  paired diff is **both-traded-only** (INNER JOIN on `event_id`), so the miss rate differs
+  by version. The analysis layer surfaces `miss_rate` per version alongside PnL so the
+  censoring is visible; it does not attempt to impute the unfilled events.
+- **Constant-equity scope.** `deriveShadowQty` uses a fixed `PAPER_STARTING_EQUITY_USDT`
+  (no compounding). This is unbiased for a **paired absolute-PnL diff** (the D3 use) but
+  invalid for a compounded equity curve / Sharpe / max-DD. The shadow realized series is
+  scoped to the paired diff only; feeding it into an equity-curve metric is out of scope
+  until a proper equity model ships.
+- **Window discipline.** The D3 window `from` MUST be ≥ the M39 W2 deploy timestamp
+  (2026-06-17). No pre/post-M39 mixing — the one legacy complete row would contaminate a
+  straddling window.
+- **`reverse_signal` status.** After W1, the `reverse_signal` close path is effectively
+  dead in steady state (the prior event already closed the position in-pass). It is
+  retained **only** for the restart-window edge case and is flagged for removal post-M39.
