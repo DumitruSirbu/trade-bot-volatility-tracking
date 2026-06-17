@@ -6,7 +6,8 @@ Exactly **one** row may be `ACTIVE`. Status lives here only — not in plan fron
 
 | ID | Status | Summary (1 line) | ADRs | Modules |
 |----|--------|------------------|------|---------|
-| M39 | ACTIVE | Shadow-ledger close path + realized-PnL fidelity (W1 DONE: in-pass + rebuild close walk free single slot; W2 pending: next-bar exit walk non-degenerate PnL; D3 gated) | 0029, 0019 | strategy, analysis |
+| M15 | ACTIVE | Cloud go-live & scaling | — | go-live |
+| M39 | DONE | Shadow-ledger close path + realized-PnL fidelity (W1+W2 shipped, D3 gate unblocked) | 0029, 0019 | strategy, analysis |
 | M38 | DONE | Exit-geometry repair + fill-acceptance guard (rebase momentum TP to fill price, reject + unwind wrong-side/over-slippage fills) | 0045, 0017, 0018, 0029 | strategy, execution, backtest |
 | M37 | DONE | Strategy-comparison infrastructure (concurrent shadow evaluation + backtest fill restoration + trade-record integrity) | 0017, 0018, 0029, 0015, 0004 | strategy, backtest, analysis, position |
 | M36 | DONE | Paper soak consecutive-loss-halt relaxation (disable 2-loss day-halt; keep full-day position flow + labeled-outcome collection) | 0042, 0004, 0029 | risk, strategy, config |
@@ -46,7 +47,6 @@ Exactly **one** row may be `ACTIVE`. Status lives here only — not in plan fron
 | M1 | DONE | Exchange integration & market data | 0001 | exchange |
 | M0 | DONE | Foundation & scaffolding | — | foundation |
 | M11 | DEFERRED | Go-live hardening (split parent) | — | go-live |
-| M15 | ACTIVE | Cloud go-live & scaling | — | go-live |
 | M20 | DEFERRED | Pre-cloud go-live blocker hardening | — | go-live |
 | 00-overview | INDEX | Timeless design + locked decisions | — | — |
 | M9-execution-plan | DONE | M9 dispatch checklist | 0020–0025 | — |
