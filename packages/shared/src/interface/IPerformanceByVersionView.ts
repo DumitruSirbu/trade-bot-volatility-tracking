@@ -10,4 +10,16 @@ export interface IPerformanceByVersionView {
     sharpe: string | null;
     sortino: string | null;
     expectancyPerUnitRisk: string | null;
+    /**
+     * Fraction of traded shadow fills that exited via `force_close` (same-bar,
+     * ≈ entry price). Shadow-only; null for active versions.
+     * Range: "0".."1" (decimal string). Null when no traded fills.
+     */
+    forceCloseFraction: string | null;
+    /**
+     * Fraction of shadow open decisions that were missed (no entry fill).
+     * Shadow-only; null for active versions.
+     * Range: "0".."1" (decimal string). Null when no open decisions.
+     */
+    missRate: string | null;
 }

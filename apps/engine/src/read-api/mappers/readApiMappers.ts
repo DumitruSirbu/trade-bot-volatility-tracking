@@ -257,6 +257,8 @@ export function mapPerformanceByVersion(row: IPerformanceAggregateRow, version: 
         sharpe: null,
         sortino: null,
         expectancyPerUnitRisk: null,
+        forceCloseFraction: null,
+        missRate: null,
     };
 }
 

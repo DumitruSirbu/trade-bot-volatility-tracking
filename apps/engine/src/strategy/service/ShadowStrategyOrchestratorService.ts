@@ -21,6 +21,7 @@ import { Money, MoneyValue } from '../../common/utils/money';
 import { AppConfigService } from '../../config/service';
 import { RISK_PER_TRADE_PCT } from '../../risk/const';
 import { HistoricalFillAdapter, IFillRequest, IStopSimulatorResult } from '../../backtest/fill/HistoricalFillAdapter';
+import { CANDLE_5M_INTERVAL_MS } from '../../market-data/const';
 import { TickAggregateEntity } from '../../market-data/entity';
 import { TickAggregateRepository } from '../../market-data/repository/TickAggregateRepository';
 import {
@@ -52,6 +53,25 @@ interface IResolvedShadow {
     readonly strategy: IStrategy;
     readonly params: IStrategyParams;
     readonly ledger: VirtualPositionLedgerService;
+    // M39 W2: in-memory queue of force_close exits awaiting the deferred
+    // next-bar re-walk, keyed by symbol. Populated when `runOneShadow` records
+    // a same-bar force_close; drained by `runDeferredExitWalks` once the next
+    // bar's ticks exist. NOT persisted — see `runDeferredExitWalks` doc for the
+    // documented restart behaviour.
+    readonly pendingDeferredWalks: Map<string, IPendingDeferredWalk>;
+}
+
+// M39 W2: one queued force_close exit awaiting its deferred next-bar walk.
+// All money fields are decimal-as-string; `barOpenMs` is the SIGNAL bar's open
+// time (the next bar starts at barOpenMs + CANDLE_5M_INTERVAL_MS).
+interface IPendingDeferredWalk {
+    readonly eventId: string;
+    readonly barOpenMs: number;
+    readonly side: 'long' | 'short';
+    readonly entryPrice: string;
+    readonly qty: string;
+    readonly stopLoss: string;
+    readonly takeProfit: string;
 }
 
 // W5c FIX 5: the four open-only sizing fields (qty / stopLoss / takeProfit /
@@ -207,6 +227,12 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
     // flowType/signalScore are NOT inputs here — only the raw event + clock.
     // All failures are contained internally so the live path is never affected.
     async runShadows(event: IVolatilityDetectedEvent, nowMs: number): Promise<void> {
+        // M39 W2: drain any pending same-bar force_close exits whose next bar has
+        // now opened BEFORE the per-shadow event loop. Running first guarantees a
+        // deterministic DB row order when this same event also records a new open
+        // for the same symbol: [old-row upgraded] → [new-row inserted].
+        await this.runDeferredExitWalks(event);
+
         // M26 (A2): load the signal-bar evidence ONCE per event and thread it into
         // every shadow. Loading inside `runOneShadow` would issue N identical SELECTs
         // (one per shadow version) and open a determinism gap if ticks land between
@@ -437,9 +463,134 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
 
                 if (closed === null) {
                     this.logger.warn(`shadow in-pass close returned null ${shadow.discriminator} eventId=${event.eventId}`);
+                } else if (fill.closeReason === 'force_close') {
+                    // M39 W2: a same-bar force_close is ≈ −fees (entry ≈ exit). Queue
+                    // a deferred re-walk against the NEXT bar's ticks (available ~5min
+                    // later) so the JSONB exit upgrades to the real sl/tp/time_stop.
+                    shadow.pendingDeferredWalks.set(event.symbol, {
+                        eventId: event.eventId,
+                        barOpenMs: event.entryCandleOpenTime,
+                        side: sideToString(tradeSide),
+                        entryPrice: fill.entryPrice,
+                        qty: openData.qty,
+                        stopLoss: openData.stopLoss,
+                        takeProfit: openData.takeProfit,
+                    });
+                } else {
+                    // The W1 same-bar walk already resolved a real sl/tp/time_stop —
+                    // no deferred walk needed; drop any stale pending for this symbol.
+                    shadow.pendingDeferredWalks.delete(event.symbol);
                 }
             }
         }
+    }
+
+    // M39 W2: drain the in-memory pending-walk queue. For each shadow+symbol whose
+    // next bar has opened (the new event's bar is at or past barOpenMs+5m), load the
+    // next bar's ticks and re-walk SL/TP across them; on success rewrite the DB row's
+    // `simulated_fill` JSONB and drop the pending entry. If the next bar's ticks are
+    // not yet populated, the entry stays queued and is retried on the next event.
+    //
+    // Fire-and-forget per symbol: a failure is logged and the entry stays queued for
+    // the next cycle. The queue is NOT persisted — after a cold restart, pending
+    // force_close rows remain in the DB as W1-only (≈0 PnL) data and are NOT
+    // re-queued. That is acceptable: the analysis layer's `forceCloseAbstain` guard
+    // already excludes them from the D3 gate, and `rebuildLedger` replays whatever
+    // exit the JSONB currently holds (force_close if never upgraded; sl/tp/time_stop
+    // if the deferred walk landed before the restart).
+    private async runDeferredExitWalks(event: IVolatilityDetectedEvent): Promise<void> {
+        for (const shadow of this.shadows) {
+            for (const [symbol, pending] of shadow.pendingDeferredWalks) {
+                const nextBarOpenMs = pending.barOpenMs + CANDLE_5M_INTERVAL_MS;
+
+                // Only attempt once the new event's bar is at or past the next bar.
+                if (event.entryCandleOpenTime < nextBarOpenMs) {
+                    continue;
+                }
+
+                try {
+                    const nextBarTicks = await this.tickAggregates.loadTicksForBar(symbol, nextBarOpenMs);
+
+                    if (nextBarTicks.length === 0) {
+                        // Next bar's ticks not yet ingested; retry next cycle.
+                        continue;
+                    }
+
+                    const upgradedExit = this.walkNextBarExit(pending, nextBarTicks, nextBarOpenMs);
+                    const upgradedFill = this.buildUpgradedFill(pending, upgradedExit);
+
+                    await this.shadowDecisions.updateSimulatedFill(shadow.discriminator, pending.eventId, upgradedFill);
+                    shadow.pendingDeferredWalks.delete(symbol);
+
+                    this.logger.debug(
+                        `shadow deferred walk completed ${shadow.discriminator} eventId=${pending.eventId} symbol=${symbol} exitReason=${upgradedExit.closeReason}`,
+                    );
+                } catch (cause) {
+                    const message = cause instanceof Error ? cause.message : String(cause);
+                    this.logger.warn(`shadow deferred walk failed ${shadow.discriminator} symbol=${symbol}: ${message}`);
+                }
+            }
+        }
+    }
+
+    // M39 W2: re-walk SL/TP across the FULL next bar using the same M7
+    // `simulateIntrabarStop` primitive the same-bar walk uses. A breach closes at
+    // the hit price (sl/tp); no breach closes at the bar's last tick as `time_stop`
+    // — NOT force_close: a full bar elapsed without a breach is real bar exhaustion,
+    // not the live-eval "next bar not yet available" placeholder W1 emitted.
+    private walkNextBarExit(pending: IPendingDeferredWalk, ticks: TickAggregateEntity[], nextBarOpenMs: number): IShadowExitOutcome {
+        const entryPrice = new Money(pending.entryPrice);
+        const barExtremes = deriveBarExtremes(ticks, entryPrice);
+
+        const stop = new HistoricalFillAdapter().simulateIntrabarStop(
+            pending.side,
+            new Money(pending.stopLoss),
+            new Money(pending.takeProfit),
+            ticks,
+            barExtremes.high,
+            barExtremes.low,
+            nextBarOpenMs,
+        );
+
+        if (stop.hit !== null && stop.hitPrice !== null) {
+            const closedAt = stop.hitTsMs === null ? null : new Date(stop.hitTsMs).toISOString();
+
+            return {
+                exitPrice: stop.hitPrice.toFixed(),
+                closeReason: stop.hit === 'stop_loss' ? 'sl' : 'tp',
+                closedAt,
+            };
+        }
+
+        const lastTick = ticks[ticks.length - 1];
+
+        return {
+            exitPrice: lastTick.close.toFixed(),
+            closeReason: 'time_stop',
+            closedAt: lastTick.ts.toISOString(),
+        };
+    }
+
+    // M39 W2: build the upgraded `simulated_fill` JSONB from the deferred walk.
+    // Entry-side slippage was fixed at open time and is NOT re-derived here; the
+    // taker-fee accounting reuses the same `computeTakerFeeUsdt` W1 uses so the
+    // realised-PnL series stays dimensionally consistent across the upgrade.
+    private buildUpgradedFill(pending: IPendingDeferredWalk, exit: IShadowExitOutcome): ISimulatedFill {
+        return {
+            entryPrice: pending.entryPrice,
+            exitPrice: exit.exitPrice,
+            slippageEntryPct: '0',
+            slippageExitPct: '0',
+            slippageComponents: { tierBase: '0', latency: '0', crossingSpread: '0' },
+            feeUsdtEntry: computeTakerFeeUsdt(pending.entryPrice, pending.qty),
+            feeUsdtExit: computeTakerFeeUsdt(exit.exitPrice, pending.qty),
+            missed: false,
+            missedReason: null,
+            forceClose: false,
+            lowFidelity: true,
+            closedAt: exit.closedAt,
+            closeReason: exit.closeReason,
+        };
     }
 
     // M37 (D1.6, ADR 0029 M37 amendment): produce a NON-HOLLOW counterfactual for an
@@ -559,7 +710,7 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
         };
     }
 
-    private deriveShadowQty(shadow: IResolvedShadow, entryPriceStr: string, stopLossPriceStr: string): string {
+    private deriveShadowQty(_shadow: IResolvedShadow, entryPriceStr: string, stopLossPriceStr: string): string {
         // Per-shadow virtual equity (ADR 0029 §5 open question (a)): seed from
         // PAPER_STARTING_EQUITY_USDT and apply the same risk_per_trade_pct v1
         // would apply at its restricted profile. The shadow ledger does NOT
@@ -667,6 +818,7 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
                 strategy: resolved.strategy,
                 params: resolved.params,
                 ledger,
+                pendingDeferredWalks: new Map(),
             };
         } catch (cause) {
             // A shadow that fails to resolve (bad params, no registered impl)
@@ -789,7 +941,7 @@ function resolveCloseNowMs(closedAt: string | null, fallbackMs: number): number 
     return Number.isFinite(parsed) ? parsed : fallbackMs;
 }
 
-function sideToString(side: PositionSideEnum): string {
+function sideToString(side: PositionSideEnum): 'long' | 'short' {
     if (side === PositionSideEnum.LONG) {
         return 'long';
     }

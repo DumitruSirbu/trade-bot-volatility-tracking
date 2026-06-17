@@ -54,6 +54,8 @@ export const PerformanceByVersionViewSchema = z.object({
     sharpe: DecimalString.nullable(),
     sortino: DecimalString.nullable(),
     expectancyPerUnitRisk: DecimalString.nullable(),
+    forceCloseFraction: DecimalString.nullable(),
+    missRate: DecimalString.nullable(),
 });
 const _perfCheck: IPerformanceByVersionView = {} as z.infer<typeof PerformanceByVersionViewSchema>;
 void _perfCheck;
@@ -68,6 +70,7 @@ const PairedDiffSummarySchema = z.object({
     netPnlDeltaUsd: DecimalString,
     meanPnlDeltaUsd: DecimalString.nullable(),
     belowSampleFloor: z.boolean(),
+    forceCloseAbstain: z.boolean(),
 });
 
 export const VersionComparisonResultSchema = z.object({

@@ -1,3 +1,4 @@
+import { type ISimulatedFill } from '@bot/shared';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DeepPartial, QueryFailedError, Repository } from 'typeorm';
@@ -49,6 +50,16 @@ export class ShadowDecisionRepository extends BaseRepository<ShadowDecisionEntit
             // and the lookup. Re-raise so the caller sees a non-silent failure.
             throw cause;
         }
+    }
+
+    // M39 W2: used by the deferred exit walk to upgrade a force_close fill in
+    // the DB. Keyed on the UNIQUE(shadow_version, event_id) constraint so the
+    // upgrade is a single UPDATE — no SELECT-then-UPDATE cycle. The in-memory
+    // ledger is NOT touched (W1 already recorded the force_close close); only
+    // the `simulated_fill` JSONB is rewritten so the analysis layer reads the
+    // upgraded exit and the D3 gate improvement flows through automatically.
+    async updateSimulatedFill(shadowVersion: string, eventId: string, fill: ISimulatedFill): Promise<void> {
+        await this.repository.update({ shadowVersion, eventId }, { simulatedFill: fill });
     }
 
     // Per-version event-window read used by the soak's exit-criterion

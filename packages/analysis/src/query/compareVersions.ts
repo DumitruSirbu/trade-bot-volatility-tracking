@@ -39,7 +39,7 @@
 import { Decimal } from 'decimal.js';
 import { DataSource } from 'typeorm';
 import type { IVersionComparisonResult } from '@bot/shared';
-import { MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN } from '@bot/shared';
+import { MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN, MAX_FORCE_CLOSE_FRACTION } from '@bot/shared';
 
 import { STRATEGY_STATUS_ACTIVE } from '../const/index.js';
 import { AnalysisValidationError, validateDateRangeOrThrow } from '../util/analysisValidation.js';
@@ -209,12 +209,22 @@ export async function compareVersions(ds: DataSource, params: ICompareVersionsPa
     // numeric value, identical string form.
     const netPnlDeltaUsd = formatMoneyString(rawNetPnlDelta);
     const belowSampleFloor = pairedTradedEventCount < MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN;
+
+    // M39 W2 (D3 gate): a shadow side dominated by same-bar force_close fills
+    // (≈ −fees placeholders) cannot support a trustworthy mean-PnL comparison.
+    // Abstain when EITHER side's force-close fraction exceeds the threshold. A
+    // null fraction (active version — no shadow fills) contributes no abstain
+    // signal. When abstaining, suppress the mean (same pattern as belowSampleFloor)
+    // so a placeholder-heavy comparison cannot read as "edge".
+    const forceCloseAbstain = exceedsForceCloseThreshold(aPerformance.forceCloseFraction) || exceedsForceCloseThreshold(bPerformance.forceCloseFraction);
+
     // why: compute the mean in application code (SUM / COUNT) rather than
     // letting Postgres `AVG(NUMERIC)` choose its own scale — keeps precision
-    // deterministic across PG versions. Suppress the result below the
-    // sample floor: a single-sample mean cannot read as "edge". The sum
+    // deterministic across PG versions. Suppress the result below the sample
+    // floor OR when the force-close guard abstains: neither a single-sample
+    // mean nor a placeholder-dominated mean can read as "edge". The sum
     // (netPnlDeltaUsd) is still exposed — totals are not misleading the way
-    // single-sample averages are.
+    // suppressed averages are.
     // why: route the mean through `formatMoneyString` so it lands on the same
     // canonical `decimal.js .toFixed()` surface the engine's `Money.toFixed()`
     // exit point produces (matches `netPnlDeltaUsd` above). Direct
@@ -222,7 +232,7 @@ export async function compareVersions(ds: DataSource, params: ICompareVersionsPa
     // non-terminating quotients — formatMoneyString re-normalises through the
     // same Decimal pipeline the rest of the surface uses.
     const meanPnlDeltaUsd =
-        !belowSampleFloor && pairedTradedEventCount > 0
+        !belowSampleFloor && !forceCloseAbstain && pairedTradedEventCount > 0
             ? formatMoneyString(new Decimal(rawNetPnlDelta).dividedBy(new Decimal(pairedTradedEventCount)).toFixed())
             : null;
 
@@ -235,8 +245,21 @@ export async function compareVersions(ds: DataSource, params: ICompareVersionsPa
             netPnlDeltaUsd,
             meanPnlDeltaUsd,
             belowSampleFloor,
+            forceCloseAbstain,
         },
     };
+}
+
+// M39 W2: a shadow side "exceeds the threshold" when its force-close fraction is
+// non-null AND strictly greater than MAX_FORCE_CLOSE_FRACTION. A null fraction
+// (active version, or a shadow with zero traded fills) is NOT an abstain signal.
+// Compared as Decimal values to honour the money-is-Decimal invariant.
+function exceedsForceCloseThreshold(forceCloseFraction: string | null): boolean {
+    if (forceCloseFraction === null) {
+        return false;
+    }
+
+    return new Decimal(forceCloseFraction).greaterThan(new Decimal(MAX_FORCE_CLOSE_FRACTION));
 }
 
 function validateVersionPairOrThrow(aVersionId: number, bVersionId: number): void {
