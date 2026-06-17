@@ -152,3 +152,66 @@ comparison/promotion logic.
 - **Regime-target map (criterion 11) source of truth.** Decision: a `const`
   in `promotionGateConsts.ts` keyed on `StrategyDirectionEnum`. v0 (baseline)
   is exempt — never promoted to live.
+
+## Amendment — M39 (2026-06-17)
+
+**Milestone:** M39 (shadow-ledger close path + realized-PnL fidelity).
+**Status:** Accepted.
+**See:** ADR 0029 M39 amendment (the shadow close path + non-degenerate exit walk that
+produce the D3 realized series).
+
+This amendment records the preconditions and the shadow-variant guard for the **D3**
+realized-PnL comparison (active version vs. shadow versions on the same `event_id` tape).
+It does **not** change the 12-criterion promotion gate of §2.2; it pins the conditions
+under which the shadow realized series is admissible to D3.
+
+1. **The D3 realized-PnL precondition is W2, not W1.** W1 (freeing the virtual slot so
+   the opens count accrues) only makes the **count** honest — the realized series it
+   yields is the ≈ −fees same-bar `force_close` series, which has near-zero variance and
+   a guaranteed-slightly-negative mean. The ADR 0018 bootstrap would read that as a
+   *false* inconclusive/reject (criterion 5), not as "no data." Only **W2** (the
+   next-bar exit walk that resolves `sl`/`tp`/`time_stop`) makes the realized **value**
+   non-degenerate and admissible. D3 stays gated on a clean **post-W2** window.
+
+2. **Criterion 12 in the shadow path is a `force_close` abstain guard — NOT a
+   `lowFidelity` guard.** Every shadow fill hard-codes `lowFidelity: true`
+   (`buildFilledShadowFill`), so a `lowFidelity`-keyed guard would abstain **forever**,
+   even on good W2 `sl`/`tp` data. The operative signal is the **`force_close`
+   fraction**, which W2 genuinely reduces. `compareVersions` sets `forceCloseAbstain:
+   true` and suppresses `meanPnlDeltaUsd` when **either** side's force_close fraction
+   exceeds the threshold. (If a true `lowFidelity` distinction is wanted later, W2 must
+   explicitly set `lowFidelity: false` for next-bar-walked exits — out of scope here.)
+   This is the shadow variant of §2.2 criterion 12; the §2.2 backtest-path
+   `lowFidelity`-exclusion rule is unchanged.
+
+3. **Threshold location.** `MAX_FORCE_CLOSE_FRACTION = 0.5` lives in
+   `packages/shared/src/const/comparisonConsts.ts` (alongside
+   `MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN`). Consistent with §2.4: operator policy lives in
+   a const file, never as a magic number inside `compareVersions.ts`. (The §2.4
+   backtest-gate thresholds remain in `promotionGateConsts.ts`; the D3 shadow-comparison
+   thresholds are the analysis-layer constants in `comparisonConsts.ts`.)
+
+4. **Window discipline.** The D3 window `from` MUST be ≥ the M39 W2 deploy timestamp
+   (2026-06-17). No pre/post-M39 mixing — the legacy miss/hollow rows are filtered by the
+   analysis SQL, but the one legacy complete row would contaminate a straddling window.
+   Report the window start.
+
+5. **Both-traded-only paired N + small-sample suppression.** The paired diff is
+   both-traded-only (INNER JOIN on `event_id`); the analysis layer surfaces per-version
+   `miss_rate` alongside PnL so the censoring is visible. `meanPnlDeltaUsd` is suppressed
+   (returned null, `belowSampleFloor=true`) below
+   `MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN = 30` paired, force_close-excluded events. This
+   floor is the D3-window analogue of §2.2 criterion 6's sample-sufficiency gate.
+
+6. **Funding asymmetry (documented, bias accepted).** Live `realized_pnl` includes
+   `+ fundingPaid`; the shadow series does not. The magnitude is bounded (intra/next-bar
+   holds rarely cross an 8h settlement) and short-biased. **Decision: accept the
+   documented bias — no code change** (per ADR 0029 M39 amendment).
+
+7. **Constant-equity scope — criteria 3 and 4 are out of scope for the shadow series.**
+   `deriveShadowQty` uses a fixed `PAPER_STARTING_EQUITY_USDT` (no compounding), which is
+   unbiased for a paired absolute-PnL diff but **invalid** for an equity curve. Therefore
+   §2.2 criterion 3 (max drawdown) and criterion 4 (worst single-day loss) cannot be
+   evaluated against the shadow series — they require a compounded equity model and are
+   **out of scope until a proper equity model ships**. D3 admissibility covers the paired
+   absolute-PnL diff only.

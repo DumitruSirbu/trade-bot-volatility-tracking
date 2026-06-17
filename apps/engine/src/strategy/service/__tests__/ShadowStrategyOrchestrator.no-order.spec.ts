@@ -258,6 +258,7 @@ function buildService(): IServiceContext {
             strategy: { name: 'v2', version: 2, direction: 'both', evaluate: jest.fn().mockReturnValue(buildOpenSignal()) },
             params: buildStrategyParams(),
             ledger,
+            pendingDeferredWalks: new Map<string, unknown>(),
         },
     ];
 

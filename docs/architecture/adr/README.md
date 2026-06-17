@@ -26,6 +26,7 @@ Also see [live-vs-backtest-contract.md](../live-vs-backtest-contract.md) for the
 | [0017](0017-walk-forward-and-same-event-comparison.md) | Walk-forward splits & same-event comparison (M8) |
 | [0018](0018-statistical-significance-paired-block-bootstrap.md) | Statistical significance: paired block bootstrap (M8) |
 | [0019](0019-promotion-gate.md) | Promotion gate (M8) |
+| [0019 § M39 amendment](0019-promotion-gate.md#amendment--m39-2026-06-17) | M39 D3 realized-PnL precondition (W2), force_close abstain guard |
 
 ## Risk, halts, paper profile
 
@@ -70,6 +71,7 @@ Also see [live-vs-backtest-contract.md](../live-vs-backtest-contract.md) for the
 | [0015](0015-backtest-module.md) | BacktestModule (M7) |
 | [0029](0029-shadow-counterfactual-and-fill-simulator-pipeline.md) | Shadow counterfactual + fill-simulator pipeline (M11a) |
 | [0029 § M26 amendment](0029-shadow-counterfactual-and-fill-simulator-pipeline.md#m26-amendment-2026-06-08) | M26 shadow fill wiring |
+| [0029 § M39 amendment](0029-shadow-counterfactual-and-fill-simulator-pipeline.md#amendment--m39-2026-06-17) | M39 shadow close path + next-bar exit walk |
 | [0032](0032-paper-mode-architecture.md) | PAPER mode architecture |
 
 ## Observability, auth, control (M9)

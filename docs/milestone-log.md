@@ -6,6 +6,7 @@ For the current milestone plan, see [`docs/plans/`](plans/README.md). For deferr
 
 | ID | Outcome |
 |----|---------|
+| M39 | [M39 — Shadow-ledger close path + realized-PnL fidelity (W1+W2 shipped, D3 gate unblocked) (DONE):](archive/M39.md) |
 | M38 | [M38 — Exit-geometry repair + fill-acceptance guard (D1+D2 deployed; D3 gated) (DONE):](archive/M38.md) |
 | M37 | [M37 — Strategy-comparison infrastructure (concurrent shadow evaluation + backtest fill restoration + trade-record integrity) (DONE):](archive/M37.md) |
 | M36 | [M36 — Paper soak consecutive-loss-halt relaxation (DONE):](archive/M36.md) |

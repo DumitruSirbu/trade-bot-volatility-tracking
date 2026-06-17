@@ -96,6 +96,8 @@ const PERFORMANCE_FIXTURE = {
     sharpe: '1.2',
     sortino: '1.7',
     expectancyPerUnitRisk: '0.12',
+    forceCloseFraction: null,
+    missRate: null,
 };
 
 const COMPARISON_FIXTURE = {
@@ -107,6 +109,7 @@ const COMPARISON_FIXTURE = {
         netPnlDeltaUsd: '5.0',
         meanPnlDeltaUsd: '0.625',
         belowSampleFloor: false,
+        forceCloseAbstain: false,
     },
 };
 

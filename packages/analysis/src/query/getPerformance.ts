@@ -59,6 +59,8 @@ interface IPerformanceRow {
     readonly trade_count: string;
     readonly win_count: string;
     readonly net_pnl_usd: string | null;
+    readonly force_close_fraction: string | null;
+    readonly miss_rate: string | null;
     readonly label: string | null;
     readonly status: string | null;
 }
@@ -68,6 +70,8 @@ const PERFORMANCE_SQL = `
         COUNT(p.positions_id)::text                                                    AS trade_count,
         COALESCE(SUM(CASE WHEN p.realized_pnl > 0 THEN 1 ELSE 0 END), 0)::text         AS win_count,
         COALESCE(SUM(p.realized_pnl), 0)::text                                         AS net_pnl_usd,
+        NULL::text                                                                    AS force_close_fraction,
+        NULL::text                                                                    AS miss_rate,
         MAX(sv.name || '@v' || sv.version::text)                                       AS label,
         MAX(sv.status)                                                                 AS status
     FROM positions p
@@ -136,6 +140,26 @@ const SHADOW_PERFORMANCE_SQL = `
                 - COALESCE(CAST(sd.simulated_fill->>'feeUsdtExit' AS NUMERIC), 0)
             ELSE 0
         END), 0)::text                                                                 AS net_pnl_usd,
+        (
+            COALESCE(SUM(CASE
+                WHEN (sd.simulated_fill->>'missed')::boolean = false
+                 AND sd.simulated_fill->>'exitPrice' IS NOT NULL
+                 AND sd.simulated_fill->>'entryPrice' IS NOT NULL
+                 AND sd.simulated_fill->>'entryPrice' != '0'
+                 AND sd.simulated_fill->>'closeReason' = 'force_close'
+                THEN 1 ELSE 0
+            END), 0)::NUMERIC
+            / NULLIF(COUNT(*) FILTER (
+                WHERE (sd.simulated_fill->>'missed')::boolean = false
+                  AND sd.simulated_fill->>'exitPrice' IS NOT NULL
+                  AND sd.simulated_fill->>'entryPrice' IS NOT NULL
+                  AND sd.simulated_fill->>'entryPrice' != '0'
+            ), 0)::NUMERIC
+        )::NUMERIC(10,8)::text                                                        AS force_close_fraction,
+        (
+            (COUNT(*) FILTER (WHERE (sd.simulated_fill->>'missed')::boolean = true))::NUMERIC
+            / NULLIF(COUNT(*), 0)::NUMERIC
+        )::NUMERIC(10,8)::text                                                        AS miss_rate,
         MAX(sv.name || '@v' || sv.version::text)                                       AS label,
         MAX(sv.status)                                                                 AS status
     FROM shadow_decisions sd
@@ -209,6 +233,8 @@ export async function getPerformance(ds: DataSource, params: IGetPerformancePara
         sharpe: null,
         sortino: null,
         expectancyPerUnitRisk: null,
+        forceCloseFraction: aggregation.forceCloseFraction,
+        missRate: aggregation.missRate,
     };
 }
 
@@ -216,6 +242,8 @@ interface IAggregatedPerformance {
     readonly tradeCount: number;
     readonly winCount: number;
     readonly netPnlUsd: string;
+    readonly forceCloseFraction: string | null;
+    readonly missRate: string | null;
 }
 
 // Selects the aggregation source by version status: the active version's
@@ -231,6 +259,8 @@ async function aggregatePerformance(ds: DataSource, params: IGetPerformanceParam
         tradeCount: row !== undefined ? Number(row.trade_count) : 0,
         winCount: row !== undefined ? Number(row.win_count) : 0,
         netPnlUsd: row !== undefined && row.net_pnl_usd !== null ? row.net_pnl_usd : '0',
+        forceCloseFraction: row !== undefined ? (row.force_close_fraction ?? null) : null,
+        missRate: row !== undefined ? (row.miss_rate ?? null) : null,
     };
 }
 

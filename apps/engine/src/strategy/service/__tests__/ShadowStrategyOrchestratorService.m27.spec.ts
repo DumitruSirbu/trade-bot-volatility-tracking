@@ -303,6 +303,7 @@ function buildService(ticks: TickAggregateEntity[], signalOverride = buildOpenSi
             },
             params: buildStrategyParams(),
             ledger,
+            pendingDeferredWalks: new Map<string, unknown>(),
         },
     ];
 

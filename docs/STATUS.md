@@ -4,7 +4,7 @@ Living snapshot (~15 lines). **Single writer = scribe** at milestone close. Do n
 
 | Field | Value |
 |-------|-------|
-| **ACTIVE** | **M15** — Cloud go-live & scaling (gated on soak + testnet drill) |
-| **Last DONE** | **M38** — Exit-geometry repair + fill-acceptance guard (D1+D2 deployed; D3 gated) |
-| **Deploy** | M38 engine ready — awaiting post-deploy soak window confirmation before D3 gate |
-| **Next queue** | D3 (V3 promotion, gated on M37/M38 clean soak data); M15 (gated on testnet drill) |
+| **ACTIVE** | **M15** — Cloud go-live & scaling |
+| **Last DONE** | **M39** — Shadow-ledger close path + realized-PnL fidelity (W1+W2 shipped, D3 gate unblocked) |
+| **Deploy** | M39 W1+W2 complete, D3 gate open; paper soak live, next bar walk producing non-degenerate realized PnL |
+| **Next queue** | M15 (see plans/README.md); tech-debt MEDIUM on runOneShadow size (210 lines, deferred to M40+) |

@@ -38,6 +38,8 @@ const CONTAMINATED_PERFORMANCE = {
     sharpe: '0.42',
     sortino: '0.55',
     expectancyPerUnitRisk: '0.10',
+    forceCloseFraction: null,
+    missRate: null,
     // Operator error: blocklisted field nested in the performance payload
     apiKey: 'sk-binance-abc123-OPERATOR-ERROR',
 } as unknown as PerformanceByVersionViewParsed;

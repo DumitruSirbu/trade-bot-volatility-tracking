@@ -116,7 +116,7 @@ export interface IVirtualCloseInput {
     readonly riskDayUtcDate: string;
     readonly virtualOrderId: string; // references the open position
     readonly exitPrice: string; // decimal; price at which the position is closed
-    readonly closeReason: 'sl' | 'tp' | 'force_close' | 'intra_bar_stop' | 'reverse_signal';
+    readonly closeReason: 'sl' | 'tp' | 'force_close' | 'time_stop' | 'reverse_signal';
     readonly realizedPnl: string; // decimal; entry-to-exit PnL before fees
     readonly consecutiveLossHaltThreshold?: number;
 }

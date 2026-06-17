@@ -16,6 +16,8 @@ const ACTIVE_PERF: PerformanceByVersionViewParsed = {
     sharpe: '0.42',
     sortino: '0.55',
     expectancyPerUnitRisk: '0.10',
+    forceCloseFraction: null,
+    missRate: null,
 };
 
 function makeReport(label: string, netPnl: string, perRegimeKey: string, regimeTrades: number): BacktestReportParsed {

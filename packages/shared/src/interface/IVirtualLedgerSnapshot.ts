@@ -28,7 +28,7 @@ export interface IVirtualClosedTradeLogEntry {
     readonly symbol: string;
     readonly side: string;
     readonly riskDayUtcDate: string; // the risk day on which it closed
-    readonly closeReason: 'sl' | 'tp' | 'force_close' | 'intra_bar_stop' | 'reverse_signal';
+    readonly closeReason: 'sl' | 'tp' | 'force_close' | 'time_stop' | 'reverse_signal';
     readonly realizedPnl: string; // decimal; sign indicates profit (+) or loss (-)
     readonly closedAtMs: number;
     readonly closedAtEventId: string;

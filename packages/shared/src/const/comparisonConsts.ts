@@ -11,3 +11,12 @@
  * statistical justifications.)
  */
 export const MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN = 30;
+
+/**
+ * D3 abstain threshold (ADR 0019 criterion 12, shadow variant). When the
+ * force_close fraction of the shadow realized series exceeds this threshold
+ * the paired diff is dominated by ~0-PnL same-bar exits and the comparison
+ * result is meaningless. `compareVersions` sets `forceCloseAbstain: true`
+ * and the mean is suppressed. W2 reduces this fraction to below the floor.
+ */
+export const MAX_FORCE_CLOSE_FRACTION = 0.5;
