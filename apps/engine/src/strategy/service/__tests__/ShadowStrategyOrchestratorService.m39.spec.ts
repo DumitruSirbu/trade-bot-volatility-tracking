@@ -299,6 +299,7 @@ function buildRealLedgerService(
         },
         params: buildStrategyParams(),
         ledger,
+        pendingDeferredWalks: new Map<string, unknown>(),
     }));
 
     (service as any).shadows = resolvedShadows;
@@ -420,6 +421,7 @@ function buildShadow(ledger: VirtualPositionLedgerService) {
         strategy: { evaluate: jest.fn() },
         params: buildStrategyParams(),
         ledger,
+        pendingDeferredWalks: new Map<string, unknown>(),
     };
 }
 

@@ -342,6 +342,7 @@ function buildService(
         },
         params: buildStrategyParams(),
         ledger,
+        pendingDeferredWalks: new Map<string, unknown>(),
     }));
 
     (service as any).shadows = resolvedShadows;
