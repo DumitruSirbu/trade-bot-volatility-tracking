@@ -273,14 +273,17 @@ describe('VirtualPositionLedgerService gate — loss streak reset by a win (B9)'
     });
 });
 
-// ─── B10: force_close PnL sign governs win/loss classification ────────────────
+// ─── B10: force_close is skipped entirely from the consecutive-loss streak ────
+// force_close exits are neither arming losses nor streak-resetting wins.
+// They are skipped so N consecutive in-pass force-close exits never halt the
+// shadow version, while genuine sl/tp/time_stop losses still arm the streak.
 
 describe('VirtualPositionLedgerService gate — force_close PnL sign classification (B10)', () => {
-    it('positive PnL force_close counts as a win and resets the consecutive-loss streak', () => {
+    it('positive PnL force_close does NOT reset a pre-existing consecutive-loss streak', () => {
         const ledger = new VirtualPositionLedgerService();
         openAndClose(ledger, 'loss1', '-5.0');
 
-        // force_close with positive PnL → win → resets streak.
+        // force_close with positive PnL — skipped (not a win, not a reset).
         ledger.tryOpen(buildOpenInput({ eventId: 'o-fc', virtualOrderId: 'vo-fc' }));
         ledger.tryClose(
             buildCloseInput({
@@ -291,16 +294,16 @@ describe('VirtualPositionLedgerService gate — force_close PnL sign classificat
             }),
         );
 
-        // Streak: loss, force_close-win(reset) → streak = 0. No halt.
+        // Streak: sl-loss → force_close (skipped) → streak stays at 1, no halt.
         expect(ledger.isHalted(NOW_MS)).toBe(false);
-        expect(ledger.countConsecutiveLossesInRiskDay(RISK_DAY)).toBe(0);
+        expect(ledger.countConsecutiveLossesInRiskDay(RISK_DAY)).toBe(1);
     });
 
-    it('negative PnL force_close counts as a loss and advances the consecutive-loss streak', () => {
+    it('negative PnL force_close does NOT advance the consecutive-loss streak', () => {
         const ledger = new VirtualPositionLedgerService();
         openAndClose(ledger, 'loss1', '-5.0');
 
-        // force_close with negative PnL → loss → streak continues to 2.
+        // force_close with negative PnL — skipped (not a loss, no streak arm).
         ledger.tryOpen(buildOpenInput({ eventId: 'o-fc', virtualOrderId: 'vo-fc' }));
         ledger.tryClose(
             buildCloseInput({
@@ -311,8 +314,9 @@ describe('VirtualPositionLedgerService gate — force_close PnL sign classificat
             }),
         );
 
-        // Streak: loss, force_close-loss → consecutive = 2 → halt armed.
-        expect(ledger.isHalted(NOW_MS)).toBe(true);
+        // Streak: sl-loss → force_close (skipped) → streak = 1, NOT halted.
+        expect(ledger.isHalted(NOW_MS)).toBe(false);
+        expect(ledger.countConsecutiveLossesInRiskDay(RISK_DAY)).toBe(1);
     });
 });
 

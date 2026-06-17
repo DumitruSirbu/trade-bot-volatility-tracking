@@ -4,7 +4,7 @@ Living snapshot (~15 lines). **Single writer = scribe** at milestone close. Do n
 
 | Field | Value |
 |-------|-------|
-| **ACTIVE** | **M15** — Cloud go-live & scaling (gated on soak + testnet drill) |
+| **ACTIVE** | **M39 W1** — Shadow-ledger close path (W1 frees single slot via in-pass + rebuild close walk, W2 pending next-bar exit walk) |
 | **Last DONE** | **M38** — Exit-geometry repair + fill-acceptance guard (D1+D2 deployed; D3 gated) |
-| **Deploy** | M38 engine ready — awaiting post-deploy soak window confirmation before D3 gate |
-| **Next queue** | D3 (V3 promotion, gated on M37/M38 clean soak data); M15 (gated on testnet drill) |
+| **Deploy** | M39 W1 code complete, zero blockers/highs; W2 required before D3 gate |
+| **Next queue** | M39 W2 (next-bar exit walk, unblocks D3 gate); then M15 (cloud go-live, gated on TESTNET drill) |

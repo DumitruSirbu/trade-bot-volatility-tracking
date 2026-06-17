@@ -112,7 +112,7 @@ interface IShadowFillInput {
 // close timestamp derived from the breaching (or last) tick, never wall-clock.
 interface IShadowExitOutcome {
     readonly exitPrice: string;
-    readonly closeReason: 'sl' | 'tp' | 'force_close';
+    readonly closeReason: 'sl' | 'tp' | 'force_close' | 'time_stop';
     readonly closedAt: string | null;
 }
 
@@ -408,22 +408,36 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
             // Non-null assertions are safe under `shouldSimulateFill === true`
             // — same precondition that produced `openData`.
             const tradeSide = signal.tradeSide!;
+            const fill = openData.simulatedFill;
 
-            const result = shadow.ledger.tryOpen({
+            const openResult = shadow.ledger.tryOpen({
                 eventId: event.eventId,
                 nowMs,
                 riskDayUtcDate,
                 symbol: event.symbol,
                 side: sideToString(tradeSide),
-                entryPrice: openData.simulatedFill.entryPrice,
+                entryPrice: fill.entryPrice,
                 qty: openData.qty,
                 stopLoss: openData.stopLoss,
                 takeProfit: openData.takeProfit,
                 virtualOrderId: this.buildVirtualOrderId(shadow, event),
             });
 
-            if (!result.success) {
-                this.logger.debug(`shadow ledger tryOpen rejected ${shadow.discriminator} eventId=${event.eventId} reason=${result.reason ?? 'unknown'}`);
+            if (!openResult.success) {
+                this.logger.debug(`shadow ledger tryOpen rejected ${shadow.discriminator} eventId=${event.eventId} reason=${openResult.reason ?? 'unknown'}`);
+            } else {
+                // Close in the same pass using the fill's already-resolved forward-only
+                // exit. The single restricted-profile slot (max_open_positions=1) is
+                // otherwise permanently occupied, rejecting every later open with
+                // `max_open_positions_reached`. A distinct `:exit` eventId keeps
+                // `tryClose`'s idempotency guard from rejecting the close as a
+                // duplicate of the open. nowMs is deterministic — derived from the
+                // fill's resolved close tick, never wall-clock.
+                const closed = this.closeShadowInPass(shadow, event.symbol, fill, event.eventId, nowMs);
+
+                if (closed === null) {
+                    this.logger.warn(`shadow in-pass close returned null ${shadow.discriminator} eventId=${event.eventId}`);
+                }
             }
         }
     }
@@ -578,6 +592,30 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
         };
     }
 
+    // Close a resolved shadow fill in-pass (live path) or during ledger rebuild.
+    // Guards against asymmetric fills (one of exitPrice/closeReason is null while
+    // the other is not — indicates a corrupt fill JSONB row; skip + warn).
+    // Returns the closed log entry, or null when the close was declined or skipped.
+    private closeShadowInPass(
+        shadow: IResolvedShadow,
+        symbol: string,
+        fill: ISimulatedFill,
+        eventId: string,
+        fallbackMs: number,
+    ): ReturnType<VirtualPositionLedgerService['closeBySymbol']> {
+        if (fill.exitPrice === null || fill.closeReason === null) {
+            this.logger.warn(
+                `shadow in-pass close skipped — asymmetric fill ${shadow.discriminator} eventId=${eventId} exitPrice=${fill.exitPrice ?? 'null'} closeReason=${fill.closeReason ?? 'null'}`,
+            );
+
+            return null;
+        }
+
+        const closeNowMs = resolveCloseNowMs(fill.closedAt, fallbackMs);
+
+        return shadow.ledger.closeBySymbol(symbol, fill.exitPrice, closeNowMs, fill.closeReason, `${eventId}:exit`, this.effectiveConsecutiveLossHaltThreshold);
+    }
+
     private buildVirtualOrderId(shadow: IResolvedShadow, event: IVolatilityDetectedEvent): string {
         return `${shadow.discriminator}:${event.eventId}`;
     }
@@ -695,6 +733,20 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
 
             if (replayResult.success) {
                 replayedOpens += 1;
+
+                // M39 W1: a resolved-exit row (non-null exitPrice + closeReason)
+                // was opened AND closed in the same live pass. Replay the close
+                // too so the rebuilt ledger restores the net-zero state — without
+                // it, restart would leave the slot phantom-occupied and reject
+                // every post-restart open with `max_open_positions_reached`. The
+                // `:exit` eventId mirrors the live close path's idempotency key.
+                if (fill.exitPrice !== null || fill.closeReason !== null) {
+                    const closeResult = this.closeShadowInPass(shadow, row.symbol, fill, row.eventId, row.createdAt.getTime());
+
+                    if (closeResult === null) {
+                        this.logger.warn(`shadow rebuild in-pass close returned null ${shadow.discriminator} eventId=${row.eventId}`);
+                    }
+                }
             }
         }
 
@@ -722,6 +774,19 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
 
 function deriveRiskDayUtcDate(nowMs: number): string {
     return new Date(nowMs).toISOString().slice(0, 10);
+}
+
+// Resolve the deterministic in-pass close timestamp from the fill's `closedAt`
+// (ISO time of the resolved exit tick, never wall-clock). Falls back to the
+// caller-supplied `fallbackMs` when `closedAt` is null or fails to parse.
+function resolveCloseNowMs(closedAt: string | null, fallbackMs: number): number {
+    if (closedAt === null) {
+        return fallbackMs;
+    }
+
+    const parsed = new Date(closedAt).getTime();
+
+    return Number.isFinite(parsed) ? parsed : fallbackMs;
 }
 
 function sideToString(side: PositionSideEnum): string {

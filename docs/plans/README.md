@@ -6,6 +6,8 @@ Exactly **one** row may be `ACTIVE`. Status lives here only — not in plan fron
 
 | ID | Status | Summary (1 line) | ADRs | Modules |
 |----|--------|------------------|------|---------|
+| M39 | ACTIVE | Shadow-ledger close path + realized-PnL fidelity (W1 DONE: in-pass + rebuild close walk free single slot; W2 pending: next-bar exit walk non-degenerate PnL; D3 gated) | 0029, 0019 | strategy, analysis |
+| M38 | DONE | Exit-geometry repair + fill-acceptance guard (rebase momentum TP to fill price, reject + unwind wrong-side/over-slippage fills) | 0045, 0017, 0018, 0029 | strategy, execution, backtest |
 | M37 | DONE | Strategy-comparison infrastructure (concurrent shadow evaluation + backtest fill restoration + trade-record integrity) | 0017, 0018, 0029, 0015, 0004 | strategy, backtest, analysis, position |
 | M36 | DONE | Paper soak consecutive-loss-halt relaxation (disable 2-loss day-halt; keep full-day position flow + labeled-outcome collection) | 0042, 0004, 0029 | risk, strategy, config |
 | M35 | DONE | Trade-record integrity (entry-snapshot persistence + wrong-side/sub-cost TP geometry; MAE/MFE seed-timing) | 0013, 0011, 0004, 0003, 0043 | position, execution, strategy, risk |

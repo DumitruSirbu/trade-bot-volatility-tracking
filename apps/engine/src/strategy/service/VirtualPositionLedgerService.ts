@@ -15,10 +15,11 @@ import Decimal from 'decimal.js';
 import { SHADOW_TAKER_FEE_PCT, VIRTUAL_LEDGER_CONSECUTIVE_LOSS_HALT_THRESHOLD } from '../const';
 
 // Reason discriminator the orchestrator passes into the close-by-symbol path.
-// 'reverse_signal' is fired when the same shadow version emits an opposite-side
-// open on a later event; 'force_close' is fired by the end-of-window force-
-// close path (ADR 0029 §2.1.3 close paths 2 + 3).
-export type ShadowCloseBySymbolReason = 'reverse_signal' | 'force_close';
+// 'sl'/'tp'/'time_stop' are in-pass resolved-exit reasons from the fill simulator
+// (ADR 0029 §2.1.3 close path 1); 'force_close' is an end-of-window or in-pass
+// same-bar close; 'reverse_signal' fires when the same shadow version emits an
+// opposite-side open on a later event (close path 3).
+export type ShadowCloseBySymbolReason = 'sl' | 'tp' | 'force_close' | 'time_stop' | 'reverse_signal';
 
 // Internal-only extension of the shared closed-trade log entry. Adds the
 // risk-day on which the position was OPENED so trades-opened-today is counted
@@ -139,6 +140,15 @@ export class VirtualPositionLedgerService implements IVirtualPositionLedger {
         let streak = 0;
 
         for (const entry of dayClosed) {
+            // A force_close exit is neither an arming loss nor a streak-resetting
+            // win — it is an in-pass end-of-window close, not a strategy-driven
+            // outcome. Skipping it means N consecutive force_close exits never
+            // halt the version, while a genuine sl/tp/time_stop loss that lands
+            // slightly negative still arms the streak.
+            if (entry.closeReason === 'force_close') {
+                continue;
+            }
+
             if (new Decimal(entry.realizedPnl).isNegative()) {
                 streak += 1;
             } else {
