@@ -53,11 +53,6 @@ interface IResolvedShadow {
     readonly strategy: IStrategy;
     readonly params: IStrategyParams;
     readonly ledger: VirtualPositionLedgerService;
-    // M39 W2: in-memory queue of force_close exits awaiting the deferred
-    // next-bar re-walk, keyed by symbol. Populated when `runOneShadow` records
-    // a same-bar force_close; drained by `runDeferredExitWalks` once the next
-    // bar's ticks exist. NOT persisted — see `runDeferredExitWalks` doc for the
-    // documented restart behaviour.
     readonly pendingDeferredWalks: Map<string, IPendingDeferredWalk>;
 }
 
@@ -67,11 +62,19 @@ interface IResolvedShadow {
 interface IPendingDeferredWalk {
     readonly eventId: string;
     readonly barOpenMs: number;
-    readonly side: 'long' | 'short';
+    readonly side: PositionSideEnum;
     readonly entryPrice: string;
     readonly qty: string;
     readonly stopLoss: string;
     readonly takeProfit: string;
+}
+
+// M39 W2: grouped input for the deferred next-bar exit walk (≤2-argument
+// convention). `nextBarOpenMs` is the open time of the bar whose ticks are walked.
+interface INextBarWalkContext {
+    readonly pending: IPendingDeferredWalk;
+    readonly ticks: TickAggregateEntity[];
+    readonly nextBarOpenMs: number;
 }
 
 // W5c FIX 5: the four open-only sizing fields (qty / stopLoss / takeProfit /
@@ -470,7 +473,7 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
                     shadow.pendingDeferredWalks.set(event.symbol, {
                         eventId: event.eventId,
                         barOpenMs: event.entryCandleOpenTime,
-                        side: sideToString(tradeSide),
+                        side: tradeSide,
                         entryPrice: fill.entryPrice,
                         qty: openData.qty,
                         stopLoss: openData.stopLoss,
@@ -516,10 +519,14 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
                         continue;
                     }
 
-                    const upgradedExit = this.walkNextBarExit(pending, nextBarTicks, nextBarOpenMs);
+                    const upgradedExit = this.walkNextBarExit({ pending, ticks: nextBarTicks, nextBarOpenMs });
                     const upgradedFill = this.buildUpgradedFill(pending, upgradedExit);
 
-                    await this.shadowDecisions.updateSimulatedFill(shadow.discriminator, pending.eventId, upgradedFill);
+                    await this.shadowDecisions.updateSimulatedFill({
+                        shadowVersion: shadow.discriminator,
+                        eventId: pending.eventId,
+                        fill: upgradedFill,
+                    });
                     shadow.pendingDeferredWalks.delete(symbol);
 
                     this.logger.debug(
@@ -538,12 +545,13 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
     // the hit price (sl/tp); no breach closes at the bar's last tick as `time_stop`
     // — NOT force_close: a full bar elapsed without a breach is real bar exhaustion,
     // not the live-eval "next bar not yet available" placeholder W1 emitted.
-    private walkNextBarExit(pending: IPendingDeferredWalk, ticks: TickAggregateEntity[], nextBarOpenMs: number): IShadowExitOutcome {
+    private walkNextBarExit(ctx: INextBarWalkContext): IShadowExitOutcome {
+        const { pending, ticks, nextBarOpenMs } = ctx;
         const entryPrice = new Money(pending.entryPrice);
         const barExtremes = deriveBarExtremes(ticks, entryPrice);
 
         const stop = new HistoricalFillAdapter().simulateIntrabarStop(
-            pending.side,
+            sideToString(pending.side),
             new Money(pending.stopLoss),
             new Money(pending.takeProfit),
             ticks,
@@ -552,23 +560,7 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
             nextBarOpenMs,
         );
 
-        if (stop.hit !== null && stop.hitPrice !== null) {
-            const closedAt = stop.hitTsMs === null ? null : new Date(stop.hitTsMs).toISOString();
-
-            return {
-                exitPrice: stop.hitPrice.toFixed(),
-                closeReason: stop.hit === 'stop_loss' ? 'sl' : 'tp',
-                closedAt,
-            };
-        }
-
-        const lastTick = ticks[ticks.length - 1];
-
-        return {
-            exitPrice: lastTick.close.toFixed(),
-            closeReason: 'time_stop',
-            closedAt: lastTick.ts.toISOString(),
-        };
+        return resolveExitFromStopResult(stop, ticks, 'time_stop');
     }
 
     // M39 W2: build the upgraded `simulated_fill` JSONB from the deferred walk.
@@ -691,23 +683,7 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
     // close (the last tick close), the M26 next-bar-open ≈ bar-close proxy. `closedAt` is
     // derived from the relevant tick timestamp — deterministic, no wall-clock.
     private resolveShadowExit(stop: IStopSimulatorResult, ticks: TickAggregateEntity[]): IShadowExitOutcome {
-        if (stop.hit !== null && stop.hitPrice !== null) {
-            const closedAt = stop.hitTsMs === null ? null : new Date(stop.hitTsMs).toISOString();
-
-            return {
-                exitPrice: stop.hitPrice.toFixed(),
-                closeReason: stop.hit === 'stop_loss' ? 'sl' : 'tp',
-                closedAt,
-            };
-        }
-
-        const lastTick = ticks[ticks.length - 1];
-
-        return {
-            exitPrice: lastTick.close.toFixed(),
-            closeReason: 'force_close',
-            closedAt: lastTick.ts.toISOString(),
-        };
+        return resolveExitFromStopResult(stop, ticks, 'force_close');
     }
 
     private deriveShadowQty(_shadow: IResolvedShadow, entryPriceStr: string, stopLossPriceStr: string): string {
@@ -947,6 +923,35 @@ function sideToString(side: PositionSideEnum): 'long' | 'short' {
     }
 
     return 'short';
+}
+
+// M39 W2: map an intra-bar stop verdict to a close outcome. A breach (SL/TP)
+// closes at the hit price with the matching reason and the breaching tick's
+// timestamp; no breach closes at the bar's last tick under the caller-supplied
+// fallback reason (`force_close` for the same-bar live walk, `time_stop` for the
+// full next-bar deferred walk). `closedAt` is always tick-derived — no wall-clock.
+function resolveExitFromStopResult(
+    stop: IStopSimulatorResult,
+    ticks: TickAggregateEntity[],
+    fallbackCloseReason: 'force_close' | 'time_stop',
+): IShadowExitOutcome {
+    if (stop.hit !== null && stop.hitPrice !== null) {
+        const closedAt = stop.hitTsMs === null ? null : new Date(stop.hitTsMs).toISOString();
+
+        return {
+            exitPrice: stop.hitPrice.toFixed(),
+            closeReason: stop.hit === 'stop_loss' ? 'sl' : 'tp',
+            closedAt,
+        };
+    }
+
+    const lastTick = ticks[ticks.length - 1];
+
+    return {
+        exitPrice: lastTick.close.toFixed(),
+        closeReason: fallbackCloseReason,
+        closedAt: lastTick.ts.toISOString(),
+    };
 }
 
 // W5c FIX 4: stop-side validity check — a LONG's stop must sit BELOW entry, a

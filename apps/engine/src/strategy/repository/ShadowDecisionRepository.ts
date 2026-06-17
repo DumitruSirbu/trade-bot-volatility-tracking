@@ -7,6 +7,14 @@ import { POSTGRES_UNIQUE_VIOLATION_SQLSTATE } from '../../common/const';
 import { BaseRepository } from '../../common/repository/BaseRepository';
 import { ShadowDecisionEntity } from '../entity';
 
+// M39 W2: grouped input for the deferred-walk fill upgrade (≤2-argument
+// convention). Private to this repository — not part of the shared contract.
+interface IUpdateSimulatedFillInput {
+    readonly shadowVersion: string;
+    readonly eventId: string;
+    readonly fill: ISimulatedFill;
+}
+
 // M11a W0.5 (ADR 0029 §2.3.2). Persists shadow decisions for non-executed
 // versions (v0/v2/v3) over the same event tape v1 sees. The write path is
 // idempotent on UNIQUE(shadow_version, event_id) — a replay that re-emits
@@ -58,7 +66,8 @@ export class ShadowDecisionRepository extends BaseRepository<ShadowDecisionEntit
     // ledger is NOT touched (W1 already recorded the force_close close); only
     // the `simulated_fill` JSONB is rewritten so the analysis layer reads the
     // upgraded exit and the D3 gate improvement flows through automatically.
-    async updateSimulatedFill(shadowVersion: string, eventId: string, fill: ISimulatedFill): Promise<void> {
+    async updateSimulatedFill(input: IUpdateSimulatedFillInput): Promise<void> {
+        const { shadowVersion, eventId, fill } = input;
         await this.repository.update({ shadowVersion, eventId }, { simulatedFill: fill });
     }
 

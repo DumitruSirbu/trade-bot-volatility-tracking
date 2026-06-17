@@ -155,9 +155,6 @@ function buildShadowSideCte(name: string, versionParam: string): string {
 // Source selection uses the version's CURRENT status, not point-in-time; a version
 // that transitioned active→shadow mid-window loses its earlier active-stream history.
 // This is a known approximation; a full point-in-time union is deferred.
-// why: Postgres `AVG(NUMERIC)` returns a heuristic scale that varies across
-// PG versions and can drop sub-cent precision. We return SUM / COUNT only and
-// compute the mean in JS via shared decimal context.
 function buildPairedDiffSql(aStatus: string, bStatus: string): string {
     const sideA = aStatus === STRATEGY_STATUS_ACTIVE ? buildActiveSideCte('side_a', '$1') : buildShadowSideCte('side_a', '$1');
     const sideB = bStatus === STRATEGY_STATUS_ACTIVE ? buildActiveSideCte('side_b', '$2') : buildShadowSideCte('side_b', '$2');

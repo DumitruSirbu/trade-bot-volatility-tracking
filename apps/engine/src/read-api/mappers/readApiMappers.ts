@@ -411,6 +411,8 @@ export const PERFORMANCE_BY_VERSION_VIEW_KEYS: ReadonlyArray<keyof IPerformanceB
     'sharpe',
     'sortino',
     'expectancyPerUnitRisk',
+    'forceCloseFraction',
+    'missRate',
 ];
 
 // Linter pleaser: `PositionSideEnum`, `PositionStateEnum`, `ProtectiveOrderTypeEnum`

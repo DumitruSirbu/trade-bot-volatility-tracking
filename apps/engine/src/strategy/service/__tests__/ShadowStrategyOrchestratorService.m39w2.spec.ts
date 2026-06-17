@@ -440,7 +440,7 @@ describe('ShadowStrategyOrchestratorService M39 W2 — DW4: SL breach on next ba
         // CHECK — updateSimulatedFill called with sl close
         expect(shadowDecisionsMock.updateSimulatedFill).toHaveBeenCalledTimes(1);
 
-        const [calledVersion, calledEventId, fill] = (shadowDecisionsMock.updateSimulatedFill as jest.Mock).mock.calls[0];
+        const [{ shadowVersion: calledVersion, eventId: calledEventId, fill }] = (shadowDecisionsMock.updateSimulatedFill as jest.Mock).mock.calls[0];
         expect(calledVersion).toBe('sv2');
         expect(calledEventId).toBe(EVENT_ID);
         expect(fill.closeReason).toBe('sl');
@@ -480,7 +480,7 @@ describe('ShadowStrategyOrchestratorService M39 W2 — DW5: no breach on next ba
         // CHECK — updateSimulatedFill called with time_stop (full bar, no breach)
         expect(shadowDecisionsMock.updateSimulatedFill).toHaveBeenCalledTimes(1);
 
-        const [calledVersion, calledEventId, fill] = (shadowDecisionsMock.updateSimulatedFill as jest.Mock).mock.calls[0];
+        const [{ shadowVersion: calledVersion, eventId: calledEventId, fill }] = (shadowDecisionsMock.updateSimulatedFill as jest.Mock).mock.calls[0];
         expect(calledVersion).toBe('sv2');
         expect(calledEventId).toBe(EVENT_ID);
         expect(fill.closeReason).toBe('time_stop');
