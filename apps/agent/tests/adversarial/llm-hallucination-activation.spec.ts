@@ -79,6 +79,8 @@ const FIXTURE_PERFORMANCE: PerformanceByVersionViewParsed = {
     sharpe: '0.42',
     sortino: '0.55',
     expectancyPerUnitRisk: '0.10',
+    forceCloseFraction: null,
+    missRate: null,
 };
 
 const FIXTURE_DECISIONS: GetDecisionsResultParsed = {
