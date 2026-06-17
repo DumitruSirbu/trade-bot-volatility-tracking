@@ -254,12 +254,21 @@ export async function compareVersions(ds: DataSource, params: ICompareVersionsPa
 // non-null AND strictly greater than MAX_FORCE_CLOSE_FRACTION. A null fraction
 // (active version, or a shadow with zero traded fills) is NOT an abstain signal.
 // Compared as Decimal values to honour the money-is-Decimal invariant.
+// Defensive parse: the column is NUMERIC(10,8)::text from SQL so should always
+// be numeric, but an unexpected schema change could yield a non-parseable string —
+// throw a domain error rather than letting a raw DecimalError escape the caller.
 function exceedsForceCloseThreshold(forceCloseFraction: string | null): boolean {
     if (forceCloseFraction === null) {
         return false;
     }
 
-    return new Decimal(forceCloseFraction).greaterThan(new Decimal(MAX_FORCE_CLOSE_FRACTION));
+    const parsed = new Decimal(forceCloseFraction);
+
+    if (!parsed.isFinite()) {
+        throw new AnalysisValidationError('forceCloseFraction', `non-finite value from DB: ${forceCloseFraction}`);
+    }
+
+    return parsed.greaterThan(new Decimal(MAX_FORCE_CLOSE_FRACTION));
 }
 
 function validateVersionPairOrThrow(aVersionId: number, bVersionId: number): void {
