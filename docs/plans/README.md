@@ -6,10 +6,10 @@ Exactly **one** row may be `ACTIVE`. Status lives here only — not in plan fron
 
 | ID | Status | Summary (1 line) | ADRs | Modules |
 |----|--------|------------------|------|---------|
+| M15 | ACTIVE | Cloud go-live & scaling (D1 blocker resolved; next go-live milestone) | — | go-live |
 | M40 | DONE | Halt exempt closes + shadow fill regression + stuck-position sweeper (D1 go-live unblock, D2 stop-side re-anchor, D4 orphaned-row sweep) | 0046, 0004, 0021, 0029 | execution, strategy, position |
 | M41 | DONE | Decisions feed outcome clarity (D1) + zero-fill audit `cashflow` fix (D2) | 0022, 0006 | dashboard, shared, execution, analysis |
 | M42 | DONE | Paper stale-tick REST refresh before fill simulation (on-demand `fetchTickers` at fill time) | 0032 | paper-mode, market-data |
-| M15 | DEFERRED | Cloud go-live & scaling (blocked on M40 D1 go-live blocker) | — | go-live |
 | M39 | DONE | Shadow-ledger close path + realized-PnL fidelity (W1+W2 shipped, D3 gate unblocked) | 0029, 0019 | strategy, analysis |
 | M38 | DONE | Exit-geometry repair + fill-acceptance guard (rebase momentum TP to fill price, reject + unwind wrong-side/over-slippage fills) | 0045, 0017, 0018, 0029 | strategy, execution, backtest |
 | M37 | DONE | Strategy-comparison infrastructure (concurrent shadow evaluation + backtest fill restoration + trade-record integrity) | 0017, 0018, 0029, 0015, 0004 | strategy, backtest, analysis, position |
