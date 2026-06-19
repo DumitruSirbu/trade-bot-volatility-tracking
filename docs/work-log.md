@@ -1,5 +1,252 @@
+| 2026-06-19 | — | — | — | **M40 (close) — Halt-exempt closes + shadow fill regression + stuck-position sweeper** | (all agents: shared + engine + dashboard + qa + 4 reviewers + architect verdict + scribe) | **DONE.** Fixed three critical defects (D1 go-live blocker, D2 HIGH measurement integrity, D4 MEDIUM lifecycle hygiene). **D1:** Three halt gates (`:163`, `:565`, `:808`) scoped uniformly by `isOpenOrAddIntent` predicate — OPEN/ADD abort, REDUCE/CLOSE/FLATTEN execute end-to-end under halt; #101 INJ 2h12m unprotected window resolved. **D2:** Shadow `simulated_fill` collapsed June 10→M40 (187/187 gate-allowed v1 opens, 0 fills) due to stop-side validation against tick-derived entry instead of strategy's own `reconstructReferencePrice` anchor. Architect verdict: rejects typed-miss approach (censors live-held trades); implements re-anchor + tick-derived fill + intrabar walk (tick entry already past SL → immediate ≈−1R stop-out, not 0-qty miss). **D4:** `StuckPositionSweeper` (boot + periodic @Interval) sweeps orphaned `pending_open` (two-step: pending_open→reconciling→closed) and `RECONCILING`-parked (one-step + close-slot release) — owns D1 non-clean-under-halt residual. **C7:** `getPerformance.trade_count` never-filled exclusion. **Tests:** 61 new (D1:29, D2:15, D4:17). **Review:** 3 waves + architect verdict adjudication. **Blockers caught:** D1 non-clean residual ownership, D2 live parity (architect), D4 close-slot idempotency. **Zero blockers, zero highs at close.** **Post-deploy:** Engine restart required; no schema migration. **D2 re-qualification gate (B5):** non-zero fills + non-degenerate close_reason distribution over ≥1 soak day, then re-qualify STATUS + M37/M39 milestone-log notes. **M15 unblocked (D1 blocker resolved).** |
+| 2026-06-19 | — | — | — | **M41 — Decisions outcome column + zero-fill audit cashflow** | orchestrator | **DONE.** Operator report: green OPEN on risk rejects / unfilled approved opens. **D1:** `DecisionOutcomeEnum` + `mapDecisionOutcome()` in shared; `IDecisionView.outcome`; engine `mapDecision`, analysis `getDecisions` (`gate_allowed` in SQL); dashboard Outcome column + filter (Action no longer all-green for OPEN). **D2:** `recordZeroFillAuditRow` sets `cashflow: new Money(0)`. **Tests:** shared mapDecisionOutcome, readApi outcome cases, ExecutionServiceDelta cashflow, DecisionsFeed REJECTED badge, getDecisions outcome. **Docs:** `docs/plans/archive/M41-…`, `docs/milestone-log/archive/M41.md`. M40 scope untouched except D2 one-liner in `ExecutionService`. |
+| 2026-06-19 | — | — | — | **M42 — paper stale-tick REST refresh before fill simulation** | bot-engine-nestjs | **DONE.** Gate-approved OP/UNI opens at 14:05 UTC missed fills because `StreamingFillAdapter` refused WS tick cache age ~26 min. **Fix:** `PaperFillSimulator.ensureFreshTickCache()` emits `PAPER_TICK_REFRESH_REQUEST`; `MarketDataService.onPaperTickRefreshRequest` calls `fetchTickers()` and re-emits `PRICE_UPDATE_EVENT` so `PaperMarkPriceSubscriptionBridge` reseeds the adapter (no `PaperModeModule`→`ExchangeModule` cycle). **Tests:** 14 passing. **Docs:** plan `docs/plans/archive/M42-paper-stale-tick-rest-refresh.md`, outcome `docs/milestone-log/archive/M42.md`, wip `docs/wip/done/2026-06-19-decisions-open-badge-vs-positions-empty.md`. |
 | 2026-06-16 | — | — | — | **M38 — Exit-geometry repair + fill-acceptance guard (D1+D2 deployed; D3 gated) (DONE)** | (bot-engine-nestjs + bot-qa-engineer + 4 reviewers + scribe) | **DONE.** Repaired two high-impact execution defects blocking economic correctness. **D1 — TP rebase (execution layer, momentum-only):** `IProposedExit.tpRebaseEligible: boolean` + `atrDistance: MoneyValue | null` added (engine-local fields). `momentumCore` sets `tpRebaseEligible=true, atrDistance=atrTarget`; `meanReversionCore` sets `tpRebaseEligible=false, atrDistance=null`. New pure helper `rebaseMomentumTakeProfit` in `exitGeometryHelper.ts` computes ATR-based rebase target. `ExecutionService` rebases TP once pre-arm (before any DB write) — all 3 call sites (DB insert, arm, attach) use same rebased value. `BacktestOrchestrator.buildPosition` calls same helper at seam (live/backtest parity, ADR 0015). **D2 — Fill-acceptance guard + unwind (live-only):** New pure helper `evaluateFillDrift` (wrong-side-of-own-SL check + optional magnitude cap; shipped OFF: `MAX_SIGNAL_DRIFT_PCT = undefined`). New `FillAcceptanceUnwindService` emits synthetic FLATTEN close via `buildFlattenIntent → riskGate → ORDER_INTENT_APPROVED_EVENT`; critical security fix: `@OnEvent(ORDER_INTENT_EXPIRED_EVENT)` prevents slot leak on expired FLATTEN. `ExecutionService.rejectAndUnwindIfUnacceptable` evaluates pre-arm; on reject skips arm/attach/transition/POSITION_OPENED_EVENT, emits FLATTEN unwind → one CLOSED FORCE_CLOSE row; decisions row untouched. Registered in `ExecutionModule`. **D3 (V3 promotion):** GATED — requires M37 clean shadow PnL + post-D1/D2 soak window confirmation. **Tests:** 89 new across 5 files; full suite 3,703 passed, zero failures. **Review:** 1 round; security HIGH (slot-leak on FLATTEN expiry) fixed; quant/logic both CLEAN; clean-code 7 MUST-FIX violations (DTO grouping for arg count, blank-line placement, constant placement, function length, class rename) all resolved. **ADR 0045 (new):** `M38-fill-time-tp-rebase-and-fill-acceptance-guard.md` — rationale, D1/D2 design, D3 gate criteria. **Zero blockers, zero highs at close.** |
 |---|---|---|---|---|---|---|
+
+## 2026-06-18 — M40 D2.0 — shadow fill mechanism investigation
+
+**Goal (investigation-only, no fix code):** confirm the exact mechanism behind `shadow_decisions.simulated_fill`
+collapsing to ~0/day since ~June 10. The M40 plan §D2 listed three candidates: (a) signal-bar ticks absent
+at event time [leading], (b) tick-aggregate partition/retention, (c) deferred-walk durability.
+
+**Confirmed mechanism: NONE of (a)/(b)/(c). A fourth, previously-unidentified mechanism — the shadow
+stop-side validation guard (`isStopSideValid`, `ShadowStrategyOrchestratorService.ts:392/961`) rejects the
+open because the strategy's stop is computed against a DIFFERENT entry reference than the one the shadow
+validates against.**
+
+### The collapse (DB, soak `shadow_decisions`)
+
+Daily gate-allowed OPEN rows vs rows with a populated `simulated_fill`:
+
+| day | gate_open | with_fill |
+|-----|-----------|-----------|
+| 06-05 | 140 | 134 |
+| 06-06 | 104 | 97 |
+| 06-07 | 164 | 150 |
+| 06-08 | 106 | 96 |
+| 06-09 | 56 | 53 |
+| 06-10 | 0 | 0 |
+| 06-11 | 3 | 3 |
+| 06-12–13 | 0 | 0 |
+| 06-14 | 11 | **0** |
+| 06-15 | 73 | **0** |
+| 06-16 | 25 | **1** |
+| 06-17 | 61 | **0** |
+| 06-18 | 18 | **0** |
+
+From 06-14 onward gate-open volume recovered (11/73/25/61/18) but populated fills stayed ~0. All 187 unfilled
+gate-open rows since 06-10 are **v1 only** (the active `volatility-vwap:1`, mean_reversion); v0/v2/v3 have zero
+gate-allowed opens under the restricted shadow profile, so the regression is entirely in the active version's
+shadow series.
+
+### Mechanism (b) — RULED OUT
+
+All daily `tick_aggregates` partitions for `p20260610` … `p20260619` exist and are queryable (`pg_class`).
+No dropped/missing partition.
+
+### Mechanism (a) — RULED OUT (this was the plan's leading hypothesis; it is wrong)
+
+Decisive DB join: for all 187 gate-open-no-fill rows since 06-10, the signal-bar `tick_aggregates` over the
+half-open window `[barOpen, barOpen+5m)` (parsing `barOpen` as the trailing numeric segment of `event_id`):
+**187 / 187 have signal-bar ticks PRESENT, 0 absent.** So `loadTicksForBar` returns rows and
+`evidence.nextBarOpenPrice` is non-null — the "no next-bar evidence" decline path is never taken.
+
+Decisive log evidence (engine log level = `debug`, confirmed; 25,422 debug lines emitted in window, so debug
+logging is live, not suppressed). Over the 168h Docker retention window:
+- `no tick_aggregates for signal bar` (`loadSignalBarEvidence`, `:267`): **0 occurrences**
+- `no next-bar open (no signal-bar ticks)` (`:370`): **0 occurrences**
+- `invalid stop-loss side — skipping open` (`:393`): **79 occurrences**
+- `deferred walk completed` / `deferred walk failed`: **0 / 0**
+
+### Mechanism (c) — DOES NOT CONTRIBUTE MATERIALLY
+
+There are no force_close-only / present-but-W1-only rows in the regression window — the unfilled rows are
+**truly absent** (`simulated_fill IS NULL`), not present-but-not-upgraded. `with_fill` ≈ 0 means there is no
+synchronous W1 fill to later upgrade, so deferred-walk durability cannot be the gap. (`deferred walk completed`
+= 0 in the window is consistent: nothing reached the deferred queue because nothing produced a W1 force_close
+fill in the first place.)
+
+### Confirmed mechanism — shadow stop-side guard rejects on an entry-reference mismatch
+
+`runOneShadow` validates the strategy's stop against the **tick-derived** shadow entry
+(`evidence.nextBarOpenPrice` = signal-bar last-tick close, `:275/:382`) via
+`isStopSideValid(tradeSide, entryPriceStr, stopLossStr)` (`:392`). When the check fails it logs the WARN and
+takes the branch that leaves `openData = null` (it never enters the `else` that builds the fill), so
+`persistShadowDecision` writes `simulatedFill: openData?.simulatedFill ?? null` = **null** (`:770`).
+
+The stop itself is computed by the active mean-reversion strategy against a DIFFERENT reference:
+`meanReversionCore.buildMeanReversionExit` → `computeStructuralStop(tradeSide, reconstructReferencePrice(event), …)`
+(`meanReversionCore.ts:134-140`). `reconstructReferencePrice` = `vwapSession × (1 + vwapDeviationPct/100)`
+(`entryHelpers.ts:42`) — the **live event-derived** reference, NOT the tick-derived signal-bar close. The
+structural stop sits tight to that live reference; when the tick-derived `nextBarOpenPrice` diverges enough to
+land on the wrong side of the stop, `isStopSideValid` rejects.
+
+Every sampled WARN line confirms a wrong-side stop, e.g. `side:long entry:0.6805 stopLoss:0.68835` (stop ~1.15%
+ABOVE entry — invalid for a LONG; a long's stop must be below entry). The 79 logged rejections split 45 long /
+34 short, matching the unfilled-row direction split (113 long / 74 short across the longer DB window). This is
+the asymmetry HIGH-1 in §D2 already flagged: the shadow path is the only synchronous tick consumer, so it is the
+only path where the tick-derived entry can disagree with the strategy's `reconstructReferencePrice`-anchored stop.
+
+### Why ~June 10 (regression onset)
+
+M38's exit-geometry repair tightened the mean-reversion structural stop so it sits very close to
+`reconstructReferencePrice`. With the stop hugging the live reference, even a small divergence between the live
+reference and the tick-derived `nextBarOpenPrice` now flips the stop to the wrong side of the shadow entry —
+turning what used to be valid opens into `isStopSideValid` rejections. The June 10–13 gate-open drought
+(0–3/day) is a separate, lower-volume window; the clean signal is 06-14 onward where gate-open volume returned
+but fills did not.
+
+### Recommended fix shape (per §D2; final scope is the impl brief's call)
+
+The defect is an **entry-reference inconsistency inside the shadow path**, not a tick flush-timing/ordering gap
+and not partition/durability. The fix must keep the shadow entry **tick-derived** (HIGH-1 / B4: do NOT substitute
+`reconstructReferencePrice` — that would restate the live decision as the counterfactual fill and risk
+look-ahead). Two consistent remedies:
+
+1. **(preferred) Validate the stop-side against the same reference the stop was geometrically drawn from, then
+   keep the tick-derived `nextBarOpenPrice` as the fill entry.** The stop-side invariant is a property of the
+   strategy's `(reference, stop)` pair (`reconstructReferencePrice` vs `proposedExit.stopLossPrice`), which the
+   strategy already guarantees by construction (`meanReversionCore` draws the stop on the correct side of its own
+   reference and additionally guards `isDegenerateReversionGeometry`). Validating that pre-built stop against a
+   *different* (tick-derived) entry is the bug. The shadow should accept the strategy's stop and fill at the
+   tick-derived next-bar open, letting the intrabar walk decide sl/tp/time_stop/force_close honestly. (A
+   genuinely malformed strategy stop is still caught at the strategy / `reconstructReferencePrice` level; the
+   shadow guard is double-validating against the wrong anchor.)
+2. **(alternative, more conservative)** keep the guard but re-anchor the stop *distance* onto the tick-derived
+   entry the same way the live executor's TP-rebase does (M38 D1 `rebaseMomentumTakeProfit` pattern) — carry the
+   stop distance and re-apply it on the correct side of `nextBarOpenPrice`. This preserves the guard's
+   malformed-strategy protection while removing the reference mismatch. Mean-reversion stops are structural (not
+   ATR-distance: `atrDistance:null`, `tpRebaseEligible:false`), so a distance-rebase here needs its own
+   derivation and is the heavier change.
+
+Mechanism is purely a shadow-path validation/anchoring bug; no live trade path is touched, determinism holds
+(entry stays tick-derived, no `Date.now()`), and the shadow run stays fire-and-forget. **No ADR 0029 timing
+amendment is needed** (this is not a flush-timing contract change) — architect to confirm, but the evidence
+points to a pure shadow-guard anchoring fix in `ShadowStrategyOrchestratorService`.
+
+**B5 caveat for re-qualification:** the prod-verification gate must still confirm a non-degenerate `close_reason`
+distribution after the fix (not ~100% force_close) AND that the deferred-walk upgrade lands — mechanism (c) was
+not exercised in this window only because there were no W1 fills to upgrade; once fills are produced again, (c)'s
+durability must be re-checked against B3/B5.
+
+## 2026-06-19 — M40 D2 — ARCHITECT VERDICT: wrong-side-of-stop typed-miss vs. re-anchor (live-vs-shadow parity)
+
+**Scope:** investigation + adjudication only, no code. Settles the conflict between the shipped D2 typed-miss
+(`WRONG_SIDE_OF_STOP`) and the D2.0 / reviewers' re-anchor recommendation, traced from code (not docs).
+
+### 1. The decisive question, answered from code: live HOLDS these fills, it does NOT reject them.
+
+The live wrong-side-of-SL guard is genuinely active at runtime, but it operates on a **different quantity** than
+the shadow guard, so it does NOT see the divergence the shadow rejects on.
+
+- **Live guard is active and magnitude-independent.** `evaluateFillDrift` (`exitGeometryHelper.ts:45-49`)
+  computes `isWrongSideOfStop` and returns `{ shouldReject: true, reason: 'wrong_side_of_sl' }` unconditionally —
+  *before* the `MAX_SIGNAL_DRIFT_PCT` magnitude leg (`:53-65`). The magnitude leg ships disabled
+  (`executionConsts.ts:231` `MAX_SIGNAL_DRIFT_PCT = undefined`), but the wrong-side leg runs regardless. Its
+  caller `rejectAndUnwindIfUnacceptable` (`ExecutionService.ts:1035-1057`) is invoked on every OPEN/ADD confirmed
+  fill (`:946`, `isOpenIntent`). The check is NOT dormant. **(implementer's premise "live rejects too" is testable
+  and turns out false — see next.)**
+
+- **Live keys the check on `avgFillPrice` = the ACTUAL exchange/paper taker fill, NOT a tick-reconstruction.**
+  `evaluateFillDrift({ avgFillPrice: fillSummary.avgFillPrice, … })` (`ExecutionService.ts:1037-1043`).
+  `fillSummary` comes from `fillAccumulator.toSummary(snapshot)` where `snapshot` is the order-execution result of
+  `runSubmitStateMachine` (`:205`, `:252`, `:924`). In paper, that fill price is the **live taker price at
+  order-submission time** — ask for LONG opens, bid for SHORT opens, from the live tick cache
+  (`PaperFillSimulator.deriveReferencePrice`, `:285-288`; `translateToFillIntent`, `:262-277`). In live it is the
+  real Binance fill. Either way it is a *near-event live taker price*, within taker-slippage of
+  `reconstructReferencePrice` (the event-time reference the strategy drew its SL against).
+
+- **The strategy's SL is anchored on `reconstructReferencePrice` (event-derived), and the SL is never moved by
+  the live fill.** `meanReversionCore.buildMeanReversionExit` → `computeStructuralStop(tradeSide,
+  reconstructReferencePrice(event), resolveDeviationWickPrice(event), …)` (`meanReversionCore.ts:134-140`).
+  `reconstructReferencePrice = vwapSession × (1 + vwapDeviationPct/100)` (`entryHelpers.ts:42-46`). Its own comment
+  (`entryHelpers.ts:41`) is the smoking gun: *"Used as the proposed entry price in dry-run … live fills replace it
+  downstream."* Live replaces the **entry** with the actual fill; the **SL stays where the strategy drew it**, a
+  hair beyond the wick relative to the event reference. So in live, fill and SL are both within taker-slippage of
+  the same event reference → `isWrongSideOfStop` is false → **live HOLDS the position.** A live wrong-side reject
+  fires only on a genuine fat-tail gap between submission and the event reference, which is exactly the rare
+  malformed-geometry case D2 was designed for.
+
+- **The shadow keys the same check on a DIFFERENT quantity: `nextBarOpenPrice` = the signal-bar LAST-TICK CLOSE**
+  (`ShadowStrategyOrchestratorService.ts:275`, used as `entryPriceStr` at `:382`, validated at `:392`). This is a
+  *different temporal point* than both the event reference and the live taker fill. The DB evidence is decisive:
+  187/187 v1 gate-allowed opens since 06-10 rejected, sampled WARN `side:long entry:0.6805 stopLoss:0.68835` =
+  stop ~1.15% ABOVE a LONG entry. A 1.15% gap is an order of magnitude larger than taker slippage — it is the
+  signal-bar-close-vs-event-reference divergence, NOT a fill-acceptance event. Live, fed the taker price instead,
+  never sees a gap this size and therefore never rejects these.
+
+**Conclusion (1):** Live **HOLDS** these positions; the shadow **REJECTS** them. The typed-miss is therefore
+**censoring trades the live arm actually takes** — the shadow and live diverge under the shipped D2. The
+reviewers/D2.0 are correct; the implementer's parity premise ("re-anchoring would make shadow diverge from live")
+is inverted — the shadow is *already* diverged, and the typed-miss freezes that divergence in place.
+
+### 2. Verdict on the D2 approach: (B) re-anchor — fix shape #1. Reject (A) typed-miss.
+
+Keep the shadow entry **tick-derived** (`nextBarOpenPrice`) — do NOT substitute `reconstructReferencePrice` as the
+fill (that would restate the live decision as its own counterfactual and risk look-ahead; HIGH-1/B4 stands).
+**Validate the stop-side against the reference the stop was geometrically drawn from** (`reconstructReferencePrice`),
+which the strategy already guarantees by construction (`meanReversionCore` draws the SL on the correct side of its
+own reference and additionally guards `isDegenerateReversionGeometry`, `:159-168`). Then **fill at the tick-derived
+`nextBarOpenPrice`, keep the strategy's SL price level unchanged, and let the intrabar walk decide
+sl/tp/time_stop/force_close.** This is fix shape #1 and it restores parity: live holds → shadow holds and lets the
+walk adjudicate the outcome honestly, instead of recording a fabricated rejection live never makes.
+
+The malformed-strategy protection the original guard claimed (`isStopSideValid`) is **double-counted**: a
+genuinely malformed stop (drawn on the wrong side of its *own* reference) is already caught at the strategy layer.
+Re-pointing the shadow's stop-side validation to `(reconstructReferencePrice, stopLossPrice)` preserves that
+protection against a truly malformed strategy while removing the spurious tick-entry mismatch.
+
+### 3. Behaviour when the tick-derived entry is already past the (unmoved) SL.
+
+Under fix shape #1 the SL is the strategy's price level, NOT rebased. The walk then handles the geometry honestly:
+
+- If `nextBarOpenPrice` is already on the wrong side of the (unchanged) strategy SL at fill, the **intrabar walk
+  records an immediate stop-out on the first tick of the walk window** — `close_reason = stop_loss`, fill at the
+  SL price level (or the entry if the walk models entry-then-immediate-breach; the existing `walkNextBarExit` SL
+  detection owns this). **Realized PnL = the entry-to-SL distance** (a small structural loss, ≈ −1R bounded by the
+  structural stop), which is exactly what a live position opened at that price and protected by that SL would
+  realize. This is faithful to live: live would hold, the SL would protect, and the position would stop out for
+  the same bounded loss. It is NOT a fabricated 0-qty miss.
+- This deliberately replaces the current outcome (a `missed:true`, `qty:'0'` row that produces **no PnL and no
+  close_reason**), which is the censorship. The re-anchor turns a censored non-event into a modeled bounded-loss
+  trade — restoring the close_reason distribution the B5 re-qualification gate requires (not ~100% force_close /
+  not ~100% miss).
+
+**ADR 0045 §D1.1 compliance:** fix shape #1 does **NOT** rebase the SL — it fills at the tick entry and leaves
+`stopLossPrice` exactly as the strategy emitted it. ADR 0045 §D1.1 ("SL is never rebased", `:52-53`; D2
+wrong-side check, `:108-113`) forbids *moving the SL anchor*; it says nothing against filling at a tick entry and
+letting an immediate stop-out resolve. The mean-reversion SL is structural (`atrDistance:null`,
+`tpRebaseEligible:false`, `meanReversionCore.ts:150-151`), so there is no distance to rebase and none is rebased.
+**No §D1.1 violation.** (This is precisely why fix shape #1 is preferred over D2.0's "alternative" #2, which WOULD
+carry-and-reapply a stop *distance* onto the tick entry — that flirts with a structural-SL rebase and is the
+heavier, §D1.1-adjacent change. Reject #2; take #1.)
+
+### 4. The ADR 0029 "Clarifying note (M40 D2)" must be REVISED.
+
+As written (`0029-…md:715-723`) the note is **incorrect on its central claim**: *"This mirrors the live arm's
+`evaluateFillDrift` `wrong_side_of_sl` FLATTEN-unwind contract."* It does not mirror live — it diverges from live.
+Live evaluates wrong-side against `avgFillPrice` (the actual taker fill, within slippage of the SL anchor) and
+**holds** these positions; the shadow evaluates against `nextBarOpenPrice` (signal-bar close, ~1% off the SL
+anchor) and **rejects** them. The two guards key on different quantities, so the shadow rejection is not the
+counterfactual of the live FLATTEN-unwind — it is an artifact of validating a correctly-built SL against the wrong
+entry reference. The note's §D1.1 reasoning ("rebasing the SL would corrupt realized risk") is true *in the
+abstract* but is a non-sequitur here, because fix shape #1 does not rebase the SL at all.
+
+**Required revision:** replace the note with a record that (a) the shipped `WRONG_SIDE_OF_STOP` typed-miss was a
+parity defect (it censored trades live holds), (b) the shadow stop-side check is validated against
+`reconstructReferencePrice` — the anchor the strategy drew the SL from — and the fill stays tick-derived
+(`nextBarOpenPrice`), and (c) when the tick entry is already past the unchanged SL, the intrabar walk records an
+immediate structural stop-out (bounded ≈ −1R loss), not a 0-qty miss. The §D1.1 "SL never rebased" invariant is
+**reaffirmed and not touched** by this fix.
+
+**Routing:** this verdict reverses the shipped D2 implementation behaviour (typed-miss → fill+walk) and the ADR
+0029 amendment. Hand to the orchestrator for an implementation wave on
+`ShadowStrategyOrchestratorService` (shadow-path only; no live trade path touched, determinism holds — entry stays
+tick-derived, no `Date.now()`), with the ADR 0029 note revision routed through the architect/scribe.
+
+---
+
 | 2026-06-13 | — | — | — | **M34 — Slot-reservation leak fix (DONE)** | (architect + plan review + QA + 3-reviewer wave + fix wave + scribe) | **DONE.** Fixed live production bug: after 3 normal closes (take_profit / time_stop), next OPEN rejected `max_positions_reached` despite 0 open DB positions. Root cause: `approveDeRisking` returns `reservationId: null` → `releaseReservationSafely(null)` no-op → CONFIRMED reservations never released on normal close path; only `reconcileClose` released them. Engine restart was the only workaround. **BLOCKER caught in plan review (quant):** ADD operations mint a second CONFIRMED reservation on same `(symbol, slot)` — original `.find()` fix would have re-introduced the leak for added positions; changed to loop over all CONFIRMED matches. **Architecture:** `releaseConfirmedReservationsFor(symbol, slot)` (loop, CONFIRMED-only filter, idempotent, count return) on `ReservationLedger`; dedicated `SlotReleaseListener` on `POSITION_CLOSED_EVENT` (enum validation + null backstop); `releaseSlotForClosedPosition` on `RiskGateService`; `positionSlot` added to `IPositionClosedEvent`; backtest close sites call multi-release on per-run ledger (no event bus); `assertSlotAccountingInvariant` at reconciliation quiescence (distinct-slot count, WARN-only, dedup). **Max-positions locked at 3:** at ρ≈0.8, σ²·(1/N + (N−1)/N·ρ) → ~95%+ undiversifiable at N≥3; increase requires `PositionSlotEnum` redesign + correlation bucketing, not a config change. **Tests:** 68 adversarial QA tests added (incident replay, ADD multi-release, CONFIRMED-bias race, FLATTEN, invariant firing/silence, double-release, backtest parity); 294 engine tests green. **Review:** 1 plan round (quant + logic — ADD BLOCKER caught); 1 impl round (security 0 blockers/highs, logic 0 issues, clean-code 4 blank-line must-fixes + extraction + rename). Fix wave clean. **ADR amendments pending:** 0004 (slot release lifecycle + variance math), 0009 (normal-close release), 0010 (idempotency contract) — see tech-debt. **Zero blockers, zero highs at close.** |
 |---|---|---|---|---|---|---|
 | 2026-06-13 | — | — | — | **M33 — Live exit enforcement (time-stop + paper protective simulation + entry cashflow) (DONE)** | (3-wave dispatch + 3 review rounds: scribe) | **DONE.** All three linked defects from live-exit-enforcement-gap closed: (D1) live time-stop enforcer event-driven on price.update with in-memory deadline index + fast-path + synchronous SharedCloseCoordinator.tryAcquire before await (GBT H1 — time-stop WINS); (D2) paper mode: exchange-side attach no longer disarms local monitor (paper monitor stays enforcer in parity with backtest); SL/TP prices persisted at open time, phase4c re-arm re-arms paper exchange_side rows from persisted prices. (D3) entry cashflow explicit zero at call site. **Architecture:** PositionTimeStopEnforcer (127 lines, event-driven, gate-routed close intents with exitReason=TIME_STOP), SharedCloseCoordinator (in-memory Set-based dedup registry, single provider in ExecutionModule, forwardRef to PositionModule), findTimeStopCandidatesBySymbol repository query (authoritative predicate for PENDING_OPEN + OPEN rows with deadline), phase4cRearmLocalMonitor (boot re-arm logic). **Tests:** 27 new (12 PositionTimeStopEnforcer, 8 SharedCloseCoordinator, 4 LocalProtectiveMonitor paper, 3 persistence); 214 total passing; D-TS-5-adv proves time-stop WINS with delayed-await assertion. **Review:** 3 rounds. R1: 5 HIGHs (slot-leak on exception, reconciliation flatten missing expiry listener, emit reason literals not const, enforcer predicate, paper disarm logic), 8 MEDIUMs clean-code. R2: 2 must-fix, 3 highs remaining; after fixes 0 blockers. R3: continuity re-review CLEAN. **ADRs amended:** 0008 §7 (paper SL/TP + restart re-arm), 0011 §9 (time-stop enforcer + shared coordinator), 0012 §1c (explicit zero cashflow), 0015 §4.6.1 (live-vs-backtest time-stop divergence). **Post-deploy:** pg_dump → restart → 10-min smoke → MRVL positionId=7 (past deadline 2h) closed on first price.update post-deploy with exitReason='time_stop', open_exposure recomputed to 0, no DI cycle, zero errors. **Tech-debt:** 3 MEDIUM items added (deadline index hardening L1, reconciliation-tick fallback Q2, PENDING_OPEN indexing). **Zero blockers, zero highs at close.** |

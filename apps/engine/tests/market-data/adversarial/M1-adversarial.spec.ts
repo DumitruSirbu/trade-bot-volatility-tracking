@@ -495,6 +495,7 @@ function buildMarketDataService(emitter: EventEmitter2, registry: SymbolStateReg
     return new MarketDataService(
         {} as never,
         emitter,
+        { exchangeEnv: 'testnet' } as never,
         universe as never,
         registry,
         context as never,

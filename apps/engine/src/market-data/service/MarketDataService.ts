@@ -1,15 +1,31 @@
 import { Inject, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Interval } from '@nestjs/schedule';
-import { IClosedBarTriggerInput, IPriceUpdateEvent, ITriggerResult } from '@bot/shared';
+import { ExchangeEnvironmentEnum, IClosedBarTriggerInput, IPriceUpdateEvent, ITriggerResult } from '@bot/shared';
 
-import { CANDLE_CLOSED_EVENT, PRICE_UPDATE_EVENT, TICK_AGGREGATE_EVENT, VOLATILITY_DETECTED_EVENT } from '../../common/const';
+import { CANDLE_CLOSED_EVENT, PAPER_TICK_REFRESH_REQUEST, PRICE_UPDATE_EVENT, TICK_AGGREGATE_EVENT, VOLATILITY_DETECTED_EVENT } from '../../common/const';
+import { AppConfigService } from '../../config/service';
 import { Money, MoneyValue, parseMoney } from '../../common/utils/money';
 import { sanitizeExchangeError } from '../../exchange/utils';
-import { APPROACHING_TRIGGER_FRACTION, BAR_CLOSE_SWEEP_MS, BREADTH_WINDOW_5M_MS, CANDLE_5M_INTERVAL_MS, OI_CHANGE_15M_MS, OI_CHANGE_5M_MS } from '../const';
+import {
+    APPROACHING_TRIGGER_FRACTION,
+    BAR_CLOSE_SWEEP_MS,
+    BREADTH_WINDOW_5M_MS,
+    CANDLE_5M_INTERVAL_MS,
+    OI_CHANGE_15M_MS,
+    OI_CHANGE_5M_MS,
+    PAPER_TICK_REFRESH_MIN_INTERVAL_MS,
+} from '../const';
 import { computeIdiosyncrasyScore, computeIndicatorSnapshot, computeRegimeLabel } from '../indicator';
 import { EXCHANGE_CLIENT, IExchangeClient, ITickerSnapshot } from '../../exchange/interface';
-import { ICandleClosedEvent, IEscalationBaseline, IFlowLiquidityContext, IIndicatorSnapshot, ITickAggregateEvent } from '../interface';
+import {
+    ICandleClosedEvent,
+    IEscalationBaseline,
+    IFlowLiquidityContext,
+    IIndicatorSnapshot,
+    IPaperTickRefreshRequest,
+    ITickAggregateEvent,
+} from '../interface';
 import { toVolatilityDetectedEvent } from '../marketData.mapper';
 import { SymbolMarketState } from '../state';
 import { evaluateTrigger } from '../trigger';
@@ -42,11 +58,17 @@ export class MarketDataService implements OnApplicationBootstrap {
 
     private readonly escalationBaselines = new Map<string, IEscalationBaseline>();
 
+    // M42 security MEDIUM: last PAPER REST tick-refresh time (event `nowMs`) per
+    // symbol — coalesces a burst of stale-symbol refresh requests into one
+    // `fetchTickers()` call within PAPER_TICK_REFRESH_MIN_INTERVAL_MS.
+    private readonly lastPaperTickRefreshMs = new Map<string, number>();
+
     private streaming = false;
 
     constructor(
         @Inject(EXCHANGE_CLIENT) private readonly exchangeClient: IExchangeClient,
         private readonly eventEmitter: EventEmitter2,
+        private readonly appConfig: AppConfigService,
         private readonly universe: UniverseService,
         private readonly registry: SymbolStateRegistry,
         private readonly context: MarketContextService,
@@ -388,6 +410,54 @@ export class MarketDataService implements OnApplicationBootstrap {
         const event: IPriceUpdateEvent = { symbol, price: price.toFixed(), timestampMs };
 
         this.eventEmitter.emit(PRICE_UPDATE_EVENT, event);
+    }
+
+    // M42 (ADR 0032 §D15): when PAPER fill simulation finds a missing/stale
+    // per-symbol tick cache, it requests a REST refresh here. We re-use the same
+    // emitPriceUpdate path as the WS ticker pump so PaperMarkPriceSubscriptionBridge
+    // seeds StreamingFillAdapter without a PaperModeModule → ExchangeModule edge.
+    @OnEvent(PAPER_TICK_REFRESH_REQUEST)
+    async onPaperTickRefreshRequest(payload: IPaperTickRefreshRequest): Promise<void> {
+        if (this.appConfig.exchangeEnv !== ExchangeEnvironmentEnum.PAPER) {
+            return;
+        }
+
+        if (this.isPaperTickRefreshThrottled(payload.symbol, payload.nowMs)) {
+            return;
+        }
+
+        // Record BEFORE the await so concurrent requests in the same window
+        // coalesce — the first caller through wins, the rest short-circuit above.
+        this.lastPaperTickRefreshMs.set(payload.symbol, payload.nowMs);
+
+        try {
+            const tickers = await this.exchangeClient.fetchTickers();
+            const ticker = tickers.find((entry) => entry.symbol === payload.symbol);
+
+            if (ticker === undefined || ticker.last === null) {
+                this.logger.warn(`paper tick refresh: no REST ticker for symbol=${payload.symbol}`);
+
+                return;
+            }
+
+            this.emitPriceUpdate(ticker.symbol, parseMoney(ticker.last), payload.nowMs);
+            this.logger.log(`paper tick refresh: seeded symbol=${payload.symbol} from REST (stale WS cache)`);
+        } catch (cause) {
+            this.logger.warn(`paper tick refresh failed symbol=${payload.symbol}: ${sanitizeExchangeError(cause)}`);
+        }
+    }
+
+    // True when a PAPER REST refresh for this symbol already ran inside the
+    // min-interval window — repeated requests collapse to the first call. Uses the
+    // event's deterministic `nowMs`, never wall-clock, so paper stays reproducible.
+    private isPaperTickRefreshThrottled(symbol: string, nowMs: number): boolean {
+        const lastMs = this.lastPaperTickRefreshMs.get(symbol);
+
+        if (lastMs === undefined) {
+            return false;
+        }
+
+        return nowMs - lastMs < PAPER_TICK_REFRESH_MIN_INTERVAL_MS;
     }
 
     // !ticker@arr reports cumulative 24h quote volume, not per-tick volume. The

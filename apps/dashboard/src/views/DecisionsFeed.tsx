@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { HelpCircle } from 'lucide-react';
 import type { IDecisionView } from '@bot/shared';
-import { SignalActionEnum } from '@bot/shared';
+import { DecisionOutcomeEnum, SignalActionEnum } from '@bot/shared';
 
 import { ApiError } from '@/api/apiClient';
 import { useDecisionsRecent, type IDecisionFilters, DECISIONS_PAGE_SIZE } from '@/api/queries';
@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { MultiSelect, type IMultiSelectOption } from '@/components/ui/multi-select';
 import { Tooltip } from '@/components/ui/tooltip';
 
-const COLUMN_COUNT = 6;
+const COLUMN_COUNT = 7;
 
 const ACTION_OPTIONS: IMultiSelectOption[] = [
     { value: SignalActionEnum.OPEN, label: 'OPEN' },
@@ -18,6 +18,13 @@ const ACTION_OPTIONS: IMultiSelectOption[] = [
     { value: SignalActionEnum.REDUCE, label: 'REDUCE' },
     { value: SignalActionEnum.CLOSE, label: 'CLOSE' },
     { value: SignalActionEnum.SKIP, label: 'SKIP' },
+];
+
+const OUTCOME_OPTIONS: IMultiSelectOption[] = [
+    { value: DecisionOutcomeEnum.FILLED, label: 'FILLED' },
+    { value: DecisionOutcomeEnum.APPROVED, label: 'APPROVED' },
+    { value: DecisionOutcomeEnum.REJECTED, label: 'REJECTED' },
+    { value: DecisionOutcomeEnum.SKIPPED, label: 'SKIPPED' },
 ];
 
 const TooltipEntry = ({ term, def }: { term: string; def: string }): React.ReactElement => (
@@ -46,12 +53,21 @@ const COLUMN_HELP: Record<string, React.ReactNode> = {
     ),
     action: (
         <div>
-            <p>Strategy decision for this trigger:</p>
-            <TooltipEntry term="OPEN" def="New position opened" />
-            <TooltipEntry term="ADD" def="Scaled into an existing position" />
-            <TooltipEntry term="REDUCE" def="Partial exit — position size reduced" />
-            <TooltipEntry term="CLOSE" def="Full exit — position closed entirely" />
-            <TooltipEntry term="SKIP" def="No trade taken; see Reason for why" />
+            <p>Strategy intent for this trigger (not the same as execution outcome):</p>
+            <TooltipEntry term="OPEN" def="Intent to open a new position" />
+            <TooltipEntry term="ADD" def="Intent to scale into an existing position" />
+            <TooltipEntry term="REDUCE" def="Intent to partially exit" />
+            <TooltipEntry term="CLOSE" def="Intent to close entirely" />
+            <TooltipEntry term="SKIP" def="No trade intent; see Outcome and Reason" />
+        </div>
+    ),
+    outcome: (
+        <div>
+            <p>Gate and execution result derived from persisted fields:</p>
+            <TooltipEntry term="FILLED" def="Linked to a position (`position_id` set)" />
+            <TooltipEntry term="APPROVED" def="Risk gate passed; order may still be unfilled (see Reason)" />
+            <TooltipEntry term="REJECTED" def="Risk gate blocked the open intent — no position created" />
+            <TooltipEntry term="SKIPPED" def="Strategy chose not to trade" />
         </div>
     ),
     flowType: (
@@ -102,20 +118,36 @@ const COLUMN_HELP: Record<string, React.ReactNode> = {
             <TooltipEntry term="same_direction_exposure_cap" def="Too much total exposure in the same direction" />
             <TooltipEntry term="sl_outside_liquidation" def="Stop-loss would be beyond liquidation price" />
             <TooltipEntry term="reconciling_hold" def="Position reconciliation in progress; no new trades" />
+            <TooltipEntry term="no_eligible_slot" def="No open slot available for this symbol/direction" />
+            <TooltipEntry term="tp_below_cost" def="Take-profit would not cover fees — geometry rejected" />
         </div>
     ),
 };
 
 const actionVariant = (action: SignalActionEnum): 'success' | 'warning' | 'secondary' | 'destructive' => {
     switch (action) {
-        case SignalActionEnum.OPEN:
         case SignalActionEnum.ADD:
             return 'success';
         case SignalActionEnum.REDUCE:
             return 'warning';
         case SignalActionEnum.CLOSE:
             return 'destructive';
+        case SignalActionEnum.OPEN:
         case SignalActionEnum.SKIP:
+        default:
+            return 'secondary';
+    }
+};
+
+const outcomeVariant = (outcome: DecisionOutcomeEnum): 'success' | 'warning' | 'secondary' | 'destructive' => {
+    switch (outcome) {
+        case DecisionOutcomeEnum.FILLED:
+            return 'success';
+        case DecisionOutcomeEnum.APPROVED:
+            return 'warning';
+        case DecisionOutcomeEnum.REJECTED:
+            return 'destructive';
+        case DecisionOutcomeEnum.SKIPPED:
         default:
             return 'secondary';
     }
@@ -136,15 +168,17 @@ const formatTimestamp = (iso: string): string => {
 // loaded page (the engine accepts a single value per filter — MVP scope).
 const toServerFilter = (selected: string[]): string | undefined => (selected.length === 1 ? selected[0] : undefined);
 
-const applyClientFilter = (rows: IDecisionView[], selectedActions: string[], selectedSymbols: string[]): IDecisionView[] => {
+const applyClientFilter = (rows: IDecisionView[], selectedActions: string[], selectedOutcomes: string[], selectedSymbols: string[]): IDecisionView[] => {
     const actionSet = new Set(selectedActions);
+    const outcomeSet = new Set(selectedOutcomes);
     const symbolSet = new Set(selectedSymbols);
 
     return rows.filter((row) => {
         const actionOk = actionSet.size < 2 || actionSet.has(row.action);
+        const outcomeOk = outcomeSet.size === 0 || outcomeSet.has(row.outcome);
         const symbolOk = symbolSet.size < 2 || symbolSet.has(row.symbol);
 
-        return actionOk && symbolOk;
+        return actionOk && outcomeOk && symbolOk;
     });
 };
 
@@ -179,6 +213,9 @@ const DecisionRow = ({ decision }: { decision: IDecisionView }): React.ReactElem
         <td className="py-3 pr-6">
             <Badge variant={actionVariant(decision.action)}>{decision.action.toUpperCase()}</Badge>
         </td>
+        <td className="py-3 pr-6">
+            <Badge variant={outcomeVariant(decision.outcome)}>{decision.outcome.toUpperCase()}</Badge>
+        </td>
         <td className="py-3 pr-6 text-xs text-muted-foreground whitespace-nowrap">{decision.flowType}</td>
         <td className="py-3 pr-6 text-right font-mono text-xs tabular-nums">{decision.signalScore ?? '—'}</td>
         <td className="py-3 text-sm text-muted-foreground max-w-xs truncate" title={decision.reason ?? undefined}>
@@ -197,6 +234,7 @@ const MessageRow = ({ children, tone = 'muted' }: { children: React.ReactNode; t
 
 export const DecisionsFeed = (): React.ReactElement => {
     const [selectedActions, setSelectedActions] = React.useState<string[]>([]);
+    const [selectedOutcomes, setSelectedOutcomes] = React.useState<string[]>([]);
     const [selectedSymbols, setSelectedSymbols] = React.useState<string[]>([]);
     // Cursor stack: index 0 is page 1 (null cursor). The last entry is the
     // cursor used to fetch the page currently on screen.
@@ -207,6 +245,14 @@ export const DecisionsFeed = (): React.ReactElement => {
     const handleActionChange = React.useCallback(
         (next: string[]) => {
             setSelectedActions(next);
+            resetToFirstPage();
+        },
+        [resetToFirstPage],
+    );
+
+    const handleOutcomeChange = React.useCallback(
+        (next: string[]) => {
+            setSelectedOutcomes(next);
             resetToFirstPage();
         },
         [resetToFirstPage],
@@ -231,8 +277,8 @@ export const DecisionsFeed = (): React.ReactElement => {
     const { data, isLoading, isError, error } = useDecisionsRecent(currentCursor, filters);
 
     const loadedItems = data?.items ?? [];
-    const visibleItems = applyClientFilter(loadedItems, selectedActions, selectedSymbols);
-    const isClientFilterActive = selectedActions.length > 1 || selectedSymbols.length > 1;
+    const visibleItems = applyClientFilter(loadedItems, selectedActions, selectedOutcomes, selectedSymbols);
+    const isClientFilterActive = selectedActions.length > 1 || selectedOutcomes.length >= 1 || selectedSymbols.length > 1;
 
     const symbolOptions = React.useMemo<IMultiSelectOption[]>(() => {
         const fromPage = loadedItems.map((item) => item.symbol);
@@ -257,6 +303,7 @@ export const DecisionsFeed = (): React.ReactElement => {
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
                 <MultiSelect label="Action" options={ACTION_OPTIONS} selected={selectedActions} onChange={handleActionChange} />
+                <MultiSelect label="Outcome" options={OUTCOME_OPTIONS} selected={selectedOutcomes} onChange={handleOutcomeChange} />
                 <MultiSelect
                     label="Symbol"
                     options={symbolOptions}
@@ -279,6 +326,7 @@ export const DecisionsFeed = (): React.ReactElement => {
                             <ColumnHeader label="Time" help={COLUMN_HELP.time} firstColumn />
                             <ColumnHeader label="Symbol" help={COLUMN_HELP.symbol} />
                             <ColumnHeader label="Action" help={COLUMN_HELP.action} />
+                            <ColumnHeader label="Outcome" help={COLUMN_HELP.outcome} />
                             <ColumnHeader label="Flow Type" help={COLUMN_HELP.flowType} />
                             <ColumnHeader label="Score" help={COLUMN_HELP.score} align="right" />
                             <ColumnHeader label="Reason" help={COLUMN_HELP.reason} tooltipClassName="w-80" />

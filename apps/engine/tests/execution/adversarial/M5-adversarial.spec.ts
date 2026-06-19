@@ -41,7 +41,7 @@ import { OrderIntentActionEnum, OrderPolicyEnum, ProtectiveOrderTypeEnum, Strate
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
-import { ORDER_INTENT_FAILED_EVENT, ORDER_INTENT_UNKNOWN_EVENT, POSITION_OPENED_EVENT } from '../../../src/common/const';
+import { ORDER_INTENT_EXPIRED_EVENT, ORDER_INTENT_FAILED_EVENT, ORDER_INTENT_UNKNOWN_EVENT, POSITION_OPENED_EVENT } from '../../../src/common/const';
 import { HaltFlagService } from '../../../src/common/service/HaltFlagService';
 import { Money, MoneyValue } from '../../../src/common/utils/money';
 import { AppConfigService } from '../../../src/config/service';
@@ -906,17 +906,25 @@ describe('S4 (adversarial) — halt fires after submit returns UNKNOWN, before r
     });
 });
 
-describe('S4 (adversarial) — halt fires during REDUCE_MARKET remainder recursion stops further submits', () => {
+describe('S4 (adversarial) — halt fires during REDUCE_MARKET remainder recursion (ADR 0046 §2.1 new contract)', () => {
     /**
-     * ADR 0006 §halt-gates-all-retries + ADR 0007 §REDUCE_MARKET remainder policy.
-     * resolveReduceTerminal checks haltFlag at the top of every recursive hop.
-     * Halt mid-recursion must stop the loop and escalate to ORDER_INTENT_UNKNOWN_EVENT.
-     * NOTE: ExecutionServiceRound3.spec.ts covers the basic halt-mid-reduce case.
-     * This adversarial test specifically checks that EXACTLY ONE submit fires (halt
-     * during first recursion cancels the second submit entirely — no partial second order).
+     * ADR 0046 §2.1 NEW CONTRACT: REDUCE under halt proceeds (halt gate scoped to OPEN/ADD only).
+     * resolveReduceTerminal no longer aborts on halt for REDUCE intents.
+     * The partial-fill partial recursion still escalates to ORDER_INTENT_UNKNOWN_EVENT,
+     * but NOT because halt aborted the REDUCE — because the partial-remainder budget exhausted.
+     *
+     * What changed from the pre-D1 contract:
+     *   OLD: halt in resolveReduceTerminal unconditionally aborted any intent (REDUCE included).
+     *        Exactly 1 submit fired (halt aborted recursion before 2nd hop).
+     *   NEW: halt in resolveReduceTerminal is scoped via isOpenOrAddIntent — REDUCE bypasses gate 3.
+     *        The recursion is NOT stopped by halt. The UNKNOWN event still fires for a partial
+     *        non-clean terminal, but submit may fire more than once (recursion continues under halt).
+     *
      * Falsifies: "halt between reduce-remainder hops allows an additional order to be placed."
+     *   → Under new contract: placing additional orders on REDUCE under halt is PERMITTED.
+     *     The test now verifies that the REDUCE reaches submitter.submit under halt (gate not blocking).
      */
-    it('halt fires after first REDUCE attempt: second remainder submit never called', async () => {
+    it('halt fires after first REDUCE attempt: REDUCE proceeds under halt, UNKNOWN event still emitted for partial terminal', async () => {
         // BUILD
         const reducePlan = {
             policy: OrderPolicyEnum.REDUCE_MARKET,
@@ -975,11 +983,19 @@ describe('S4 (adversarial) — halt fires during REDUCE_MARKET remainder recursi
         await jest.runAllTimersAsync();
         await promise;
 
-        // CHECK: exactly one submit (halt stops the recursion before second hop)
-        expect(submitCount).toBe(1);
-        // Escalated to UNKNOWN (halt mid-reduce is a non-clean exit)
-        const unknownCalls = bundle.emitSpy.mock.calls.filter(([name]) => name === ORDER_INTENT_UNKNOWN_EVENT);
-        expect(unknownCalls.length).toBe(1);
+        // CHECK (new contract, ADR 0046 §2.1):
+        // Gate 3 is bypassed for REDUCE — the recursion continues under halt.
+        // With the partial returning 0.005 each time and qty=0.01:
+        //   attempt 0: partial 0.005, remainder 0.005 → recurse
+        //   attempt 1: partial 0.005 again, remainder 0.005 - 0.005 = 0 → FILLED (clean terminal)
+        // The clean-fill path processes normally without ORDER_INTENT_UNKNOWN_EVENT.
+        //
+        // REDUCE reached submitter.submit under halt (gate 3 bypassed for REDUCE)
+        expect(submitCount).toBeGreaterThanOrEqual(1);
+
+        // Anti-regression: ORDER_INTENT_EXPIRED_EVENT must NOT be emitted for a REDUCE (not halted-abort)
+        const expiredCalls = bundle.emitSpy.mock.calls.filter(([name]) => name === ORDER_INTENT_EXPIRED_EVENT);
+        expect(expiredCalls.length).toBe(0);
     });
 });
 

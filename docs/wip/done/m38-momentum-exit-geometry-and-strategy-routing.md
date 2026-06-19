@@ -2,7 +2,7 @@
 
 **Written:** 2026-06-15  
 **Source:** Live 24-hour trade analysis (positions closed 2026-06-14 23:50 → 2026-06-15 16:25 UTC)  
-**Status:** Open — M37 must complete first; this doc is the brief for the next milestone
+**Status:** Implemented — recommendations landed in **M38** (DONE). Archived for forensics/traceability.
 
 ---
 

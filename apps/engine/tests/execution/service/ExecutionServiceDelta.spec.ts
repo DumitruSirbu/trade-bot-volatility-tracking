@@ -987,10 +987,12 @@ describe('ExecutionService — zero-fill audit row (must-fix #14)', () => {
         const callArg = (transactions.recordTerminal as jest.Mock).mock.calls[0][0] as {
             positionId: null;
             qty: MoneyValue;
+            cashflow: MoneyValue;
             clientOrderId: string;
         };
         expect(callArg.positionId).toBeNull();
         expect(callArg.qty.toFixed()).toBe('0');
+        expect(callArg.cashflow.toFixed()).toBe('0');
         expect(callArg.clientOrderId).toBeTruthy();
     });
 

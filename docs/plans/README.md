@@ -6,7 +6,10 @@ Exactly **one** row may be `ACTIVE`. Status lives here only — not in plan fron
 
 | ID | Status | Summary (1 line) | ADRs | Modules |
 |----|--------|------------------|------|---------|
-| M15 | ACTIVE | Cloud go-live & scaling | — | go-live |
+| M40 | DONE | Halt exempt closes + shadow fill regression + stuck-position sweeper (D1 go-live unblock, D2 stop-side re-anchor, D4 orphaned-row sweep) | 0046, 0004, 0021, 0029 | execution, strategy, position |
+| M41 | DONE | Decisions feed outcome clarity (D1) + zero-fill audit `cashflow` fix (D2) | 0022, 0006 | dashboard, shared, execution, analysis |
+| M42 | DONE | Paper stale-tick REST refresh before fill simulation (on-demand `fetchTickers` at fill time) | 0032 | paper-mode, market-data |
+| M15 | DEFERRED | Cloud go-live & scaling (blocked on M40 D1 go-live blocker) | — | go-live |
 | M39 | DONE | Shadow-ledger close path + realized-PnL fidelity (W1+W2 shipped, D3 gate unblocked) | 0029, 0019 | strategy, analysis |
 | M38 | DONE | Exit-geometry repair + fill-acceptance guard (rebase momentum TP to fill price, reject + unwind wrong-side/over-slippage fills) | 0045, 0017, 0018, 0029 | strategy, execution, backtest |
 | M37 | DONE | Strategy-comparison infrastructure (concurrent shadow evaluation + backtest fill restoration + trade-record integrity) | 0017, 0018, 0029, 0015, 0004 | strategy, backtest, analysis, position |
@@ -54,5 +57,6 @@ Exactly **one** row may be `ACTIVE`. Status lives here only — not in plan fron
 | M12-execution-plan | DONE | M12 dispatch checklist | 0033, 0034 | — |
 | M13-execution-plan | DONE | M13 dispatch checklist | 0033–0038 | — |
 | M14-execution-plan | DONE | M14 dispatch checklist | 0039–0041 | — |
+| M38-impl-brief | DONE | M38 dispatch brief (D1 + D2) — engine agent | 0045 | — |
 
 Done milestone specs live in [`archive/`](archive/). Active and deferred specs stay in this directory.

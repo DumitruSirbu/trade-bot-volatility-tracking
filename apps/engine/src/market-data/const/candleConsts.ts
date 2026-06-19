@@ -31,3 +31,10 @@ export const SESSION_BAR_MAX = 288;
 // Hard cap on the event-anchored VWAP window. The anchor normally re-anchors on a
 // high-volume regime shift, but absent one this bounds the array (24/7 process).
 export const EVENT_ANCHORED_BAR_MAX = 288;
+
+// M42 security MEDIUM: minimum interval between PAPER REST tick-refresh calls for
+// the SAME symbol. A burst of stale-symbol paper fills fans out into many
+// `fetchTickers()` calls against the live Binance endpoint (weight-limit risk);
+// repeated refresh requests for one symbol inside this window coalesce to a single
+// REST call. Keyed off the event's deterministic `nowMs`, never wall-clock.
+export const PAPER_TICK_REFRESH_MIN_INTERVAL_MS = 2 * 1000;

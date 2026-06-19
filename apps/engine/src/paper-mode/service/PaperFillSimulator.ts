@@ -14,11 +14,13 @@ import {
     type ITierSlippageParams,
 } from '@bot/shared';
 import { Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Decimal } from 'decimal.js';
 import { createHmac, randomUUID } from 'node:crypto';
 
+import { PAPER_TICK_REFRESH_REQUEST } from '../../common/const';
 import { BootstrapSubkeyDeriver } from '../../boot-mode-history/service/BootstrapSubkeyDeriver';
-import { PAPER_FILL_LATENCY_MS } from '../const';
+import { PAPER_FILL_LATENCY_MS, PAPER_MISSED_REASON_NO_TICK_CACHED, STREAMING_FILL_STALE_TICK_MS } from '../const';
 import { PaperSimulatorIdempotencyRepository } from '../repository/PaperSimulatorIdempotencyRepository';
 import { isPositiveDecimalString } from '../utils/priceUtils';
 import { StreamingFillAdapter } from './StreamingFillAdapter';
@@ -98,6 +100,7 @@ export class PaperFillSimulator {
         private readonly subkeys: BootstrapSubkeyDeriver,
         private readonly idempotencyRepo: PaperSimulatorIdempotencyRepository,
         private readonly streamingAdapter: StreamingFillAdapter,
+        private readonly eventEmitter: EventEmitter2,
     ) {}
 
     // Simulate (or replay) the fill for a single order intent. The contract:
@@ -138,6 +141,12 @@ export class PaperFillSimulator {
         // `applyFill` used as the reference and produced fillPrice=0 +
         // fee=0 + slippagePct=0 for every PAPER trade — invalidating the
         // soak's accounting math.
+        //
+        // M41 D2 — if the WS-fed cache is missing or older than
+        // STREAMING_FILL_STALE_TICK_MS, request a REST refresh via
+        // MarketDataService before giving up on the fill.
+        await this.ensureFreshTickCache(intent.symbol, nowMs);
+
         const snapshot = this.streamingAdapter.getLastSnapshot(intent.symbol);
 
         if (snapshot === null) {
@@ -177,6 +186,24 @@ export class PaperFillSimulator {
         });
 
         return { fill, orderSeed, simulatedFillId };
+    }
+
+    private async ensureFreshTickCache(symbol: string, nowMs: number): Promise<void> {
+        const snapshot = this.streamingAdapter.getLastSnapshot(symbol);
+
+        if (this.isTickCacheUsable(snapshot, nowMs)) {
+            return;
+        }
+
+        await this.eventEmitter.emitAsync(PAPER_TICK_REFRESH_REQUEST, { symbol, nowMs });
+    }
+
+    private isTickCacheUsable(snapshot: IFillSnapshot | null, nowMs: number): boolean {
+        if (snapshot === null) {
+            return false;
+        }
+
+        return nowMs - snapshot.ts <= STREAMING_FILL_STALE_TICK_MS;
     }
 
     // Per ADR 0032 §D3:
@@ -307,7 +334,7 @@ export class PaperFillSimulator {
             qty: '0',
             feeUsdt: '0',
             slippagePct: '0',
-            missedReason: 'no_tick_cached',
+            missedReason: PAPER_MISSED_REASON_NO_TICK_CACHED,
             lowFidelity: false,
             tsMs: nowMs,
         };

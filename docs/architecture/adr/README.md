@@ -52,6 +52,7 @@ Also see [live-vs-backtest-contract.md](../live-vs-backtest-contract.md) for the
 | [0008](0008-sl-tp-attach.md) | SL/TP attach & protective-order fallback (M5) |
 | [0011](0011-local-sltp-fallback-and-held-symbols.md) | Local SL/TP fallback & held-symbol subscription (M6) |
 | [0045](0045-m38-fill-time-tp-rebase-and-fill-acceptance-guard.md) | M38 — Fill-time TP rebase + fill-acceptance guard (D1/D2) |
+| [0046](0046-halt-exempts-risk-reducing-intents.md) | M40 — Halt blocks new risk only; risk-reducing closes always permitted |
 | [0030](0030-in-engine-rate-limit-token-bucket-policy.md) | In-engine rate-limit token-bucket policy (M11a) |
 
 ## Position, reconciliation, recovery

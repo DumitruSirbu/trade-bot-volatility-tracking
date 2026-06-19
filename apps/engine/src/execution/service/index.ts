@@ -8,3 +8,4 @@ export * from './OrderPolicyRouter';
 export * from './PositionTimeStopEnforcer';
 export * from './ProtectiveOrderAttacher';
 export * from './SharedCloseCoordinator';
+export * from './StuckPositionSweeper';

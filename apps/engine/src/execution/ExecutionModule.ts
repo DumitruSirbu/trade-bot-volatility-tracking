@@ -17,6 +17,7 @@ import {
     PositionTimeStopEnforcer,
     ProtectiveOrderAttacher,
     SharedCloseCoordinator,
+    StuckPositionSweeper,
 } from './service';
 
 // M5 ExecutionModule. The single legitimate caller of the exchange order API: subscribes to
@@ -40,6 +41,7 @@ import {
         PositionTimeStopEnforcer,
         ProtectiveOrderAttacher,
         SharedCloseCoordinator,
+        StuckPositionSweeper,
         ExecutionService,
     ],
     // M33 Fix 1b — export SharedCloseCoordinator so PositionModule's ReconciliationService

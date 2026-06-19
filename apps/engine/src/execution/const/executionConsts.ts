@@ -105,6 +105,19 @@ export const SYNTHETIC_CLOSE_EVENT_ID_PREFIX = 'synthetic-close-';
 export const ORDER_INTENT_EXPIRED_REASON_HALTED = 'halted';
 export const ORDER_INTENT_EXPIRED_REASON_DRY_RUN = 'dry_run';
 
+// --- M40 D4: stuck-position sweep (orphaned pending_open + RECONCILING-parked) ---
+//
+// D4 (M40): how long a non-terminal row must sit without progressing before the stuck-
+// position sweep finalizes it. A large multiple of the protective-attach timeout
+// (RETRY_PROTECTIVE_MS = 5s) so a genuinely in-flight row is never swept prematurely.
+// PAPER-only for the RECONCILING branch (where the live reconciler races); the
+// PENDING_OPEN branch runs in both modes. The reference timestamp is the row's
+// `openedAt` — the schema carries no per-row last-transition timestamp, and a
+// RECONCILING-parked row was opened far earlier than it parked, so `openedAt + threshold`
+// is a strictly-conservative lower bound on "stuck long enough" for both shapes.
+export const STUCK_POSITION_SWEEP_INTERVAL_MS = 300_000; // 5 min periodic check
+export const STUCK_POSITION_THRESHOLD_MS = 900_000; // 15 min stuck threshold
+
 // --- M31 escalation reasons + event classes (zombie-position lifecycle) ---
 //
 // `reason` values carried on ORDER_INTENT_UNKNOWN_EVENT when a reduce/close path aborts and
@@ -117,6 +130,10 @@ export const ENTRY_AUDIT_PERSIST_FAILED_REASON = 'entry_audit_persist_failed';
 // eventClass stamped on the PENDING_OPEN -> OPEN promote transition that precedes a closing
 // fill (ADR 0009 §6.3 two-step promote through `open`).
 export const PENDING_OPEN_PROMOTE_EVENT_CLASS = 'execution.reduce.fill.terminal.pending_promote';
+
+// eventClass stamped on the stuck-position sweep transition that finalizes a RECONCILING-parked
+// position to closed via RECONCILED_MISSING (labels the producer for downstream listeners).
+export const STUCK_SWEEP_EVENT_CLASS = 'execution.stuck_position_sweep.reconciled_missing';
 
 // --- reject-classification taxonomy (ADR 0006 §4) ---
 //

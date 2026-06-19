@@ -16,6 +16,7 @@
 
 import { DataSource } from 'typeorm';
 import type { FlowTypeEnum, IDecisionView, SignalActionEnum } from '@bot/shared';
+import { mapDecisionOutcome } from '@bot/shared';
 
 import { DECISIONS_ROW_CAP, SYMBOL_MAX_LENGTH, SYMBOL_REGEX } from '../const/index.js';
 import { AnalysisValidationError, validateDateRangeOrThrow } from '../util/analysisValidation.js';
@@ -45,6 +46,7 @@ interface IDecisionRowWithoutSnapshot {
     readonly event_id: string;
     readonly signal_type: string;
     readonly action: string;
+    readonly gate_allowed: boolean | null;
     readonly reason: string | null;
     readonly strategy_version_id: string;
     readonly position_id: string | null;
@@ -66,6 +68,7 @@ export async function getDecisions(ds: DataSource, params: IGetDecisionsParams):
             d.event_id                      AS event_id,
             d.signal_type                   AS signal_type,
             d.action                        AS action,
+            d.gate_allowed                  AS gate_allowed,
             d.reason                        AS reason,
             d.strategy_version_id::text     AS strategy_version_id,
             d.position_id::text             AS position_id,
@@ -94,17 +97,24 @@ export async function getDecisions(ds: DataSource, params: IGetDecisionsParams):
 }
 
 function mapRowToDecisionView(row: IDecisionRowWithoutSnapshot): IDecisionView {
+    const positionId = row.position_id;
+
     return {
         id: row.decisions_id,
         occurredAt: new Date(row.ts).toISOString(),
         symbol: row.symbol,
         action: row.action as SignalActionEnum,
+        outcome: mapDecisionOutcome({
+            action: row.action,
+            gateAllowed: row.gate_allowed,
+            positionId,
+        }),
         flowType: row.signal_type as FlowTypeEnum,
         signalScore: extractSignalScore(row.market_snapshot),
         reason: row.reason,
         strategyVersionId: row.strategy_version_id,
         eventId: row.event_id,
-        positionId: row.position_id,
+        positionId,
     };
 }
 

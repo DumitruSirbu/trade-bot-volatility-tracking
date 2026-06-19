@@ -81,6 +81,7 @@ function buildService(emitter: EventEmitter2, registry: SymbolStateRegistry, cal
     return new MarketDataService(
         {} as never,
         emitter,
+        { exchangeEnv: 'testnet' } as never,
         universe as never,
         registry,
         context as never,

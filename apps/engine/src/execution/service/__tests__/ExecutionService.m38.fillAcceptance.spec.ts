@@ -8,7 +8,7 @@
  *           POSITION_OPENED_EVENT emitted, no emitSyntheticClose
  *   FA2  — D2 reject LONG fill at SL (wrong-side): emitSyntheticClose called with FORCE_CLOSE,
  *           arm NOT called, attach NOT called, POSITION_OPENED_EVENT NOT emitted,
- *           reservation confirmed (not leaked)
+ *           reservation released (not confirmed — avoids phantom slot occupancy)
  *   FA3  — D2 reject SHORT fill at SL (wrong-side): same pattern as FA2 for SHORT
  *   FA4  — D1 + D2 interact: LONG momentum fill with drift, D2 passes, arm receives
  *           fill+atrDistance (rebased TP), NOT the frozen signal TP
@@ -19,9 +19,19 @@
  *   FA7  — D1 fallback: tpRebaseEligible=true but atrDistance=null → arm receives frozen TP,
  *           no crash
  *   FA8  — Boundary: atrDistance=0 → rebased TP equals fill price; no unexpected behavior
+ *   FA9  — PENDING_OPEN closing fill: promote syncs in-memory state before save → CLOSING reachable
  */
 
-import { ExitReasonEnum, IMarketSnapshot, OrderIntentActionEnum, PositionSideEnum, PositionSlotEnum, ProtectiveOrderTypeEnum, StopTypeEnum } from '@bot/shared';
+import {
+    ExitReasonEnum,
+    IMarketSnapshot,
+    OrderIntentActionEnum,
+    PositionSideEnum,
+    PositionSlotEnum,
+    PositionStateEnum,
+    ProtectiveOrderTypeEnum,
+    StopTypeEnum,
+} from '@bot/shared';
 
 import { Money } from '../../../common/utils/money';
 import { POSITION_OPENED_EVENT } from '../../../common/const';
@@ -193,6 +203,7 @@ function buildService(
         positions?: any;
         positionService?: any;
         protectiveAttacher?: any;
+        riskGate?: any;
     } = {},
 ): ExecutionService {
     const {
@@ -215,6 +226,10 @@ function buildService(
                 exchangeOrderId: 'tp-order-id',
             }),
         },
+        riskGate = {
+            releaseReservation: jest.fn(),
+            confirmReservation: jest.fn(),
+        },
     } = overrides;
 
     return new ExecutionService(
@@ -229,7 +244,7 @@ function buildService(
         positionService, // positionService
         { recordTerminal: jest.fn().mockResolvedValue(undefined) } as any, // transactions
         { findById: jest.fn().mockResolvedValue({ direction: 'both' }) } as any, // strategyVersions
-        { evaluate: jest.fn() } as any, // riskGate
+        riskGate, // riskGate
         { isHalted: jest.fn().mockReturnValue(false), getReason: jest.fn() } as any, // haltFlag
         positionCloseCoordinator, // positionCloseCoordinator
         {} as any, // exchangeClient
@@ -351,6 +366,22 @@ describe('ExecutionService M38 — FA2: LONG fill at SL (wrong-side) → emitSyn
 
         const openedEmit = emitSpy.mock.calls.find(([eventName]) => eventName === POSITION_OPENED_EVENT);
         expect(openedEmit).toBeUndefined();
+    });
+
+    it('releaseReservation is called (not confirmReservation) so the slot is not phantom-occupied', async () => {
+        const releaseSpy = jest.fn();
+        const confirmSpy = jest.fn();
+        const service = buildService({
+            riskGate: { releaseReservation: releaseSpy, confirmReservation: confirmSpy },
+        });
+
+        const event = buildApprovedEvent({ tradeSide: PositionSideEnum.LONG });
+        const fillSummary = buildFillSummary(SL_PRICE);
+
+        await (service as any).openOrAddPositionAndAttachProtection(event, {}, { fillSummary }, Date.now());
+
+        expect(releaseSpy).toHaveBeenCalledWith('test-reservation');
+        expect(confirmSpy).not.toHaveBeenCalled();
     });
 });
 
@@ -585,5 +616,77 @@ describe('ExecutionService M38 — FA8: atrDistance=0 → rebased TP equals fill
         const armCall = armSpy.mock.calls[0][0];
         // rebased TP = fill + 0 = fill
         expect(armCall.takeProfitPrice.toFixed(8)).toBe(new Money(FILL_PRICE).toFixed(8));
+    });
+});
+
+// ─── FA9: PENDING_OPEN closing fill — in-memory promote before save ───────────
+
+describe('ExecutionService M38 — FA9: PENDING_OPEN closing fill promotes in-memory state before save', () => {
+    it('applyReduceFillToPosition saves OPEN (not PENDING_OPEN) and reaches CLOSING transition', async () => {
+        const closeQty = '225';
+        const pendingRow = {
+            ...buildPositionRow(112, PositionSideEnum.LONG),
+            state: PositionStateEnum.PENDING_OPEN,
+            qty: new Money(closeQty),
+        };
+
+        const transitionMock = jest.fn().mockImplementation(async (_id: number, toState: PositionStateEnum) => {
+            if (toState === PositionStateEnum.OPEN) {
+                return { ...pendingRow, state: PositionStateEnum.OPEN };
+            }
+
+            if (toState === PositionStateEnum.CLOSING) {
+                return { ...pendingRow, state: PositionStateEnum.CLOSING, qty: new Money(0) };
+            }
+
+            return pendingRow;
+        });
+
+        const finalizeMock = jest.fn().mockResolvedValue({
+            ...pendingRow,
+            state: PositionStateEnum.CLOSED,
+            qty: new Money(0),
+            exitReason: ExitReasonEnum.TIME_STOP,
+        });
+
+        const savedRows: Array<{ state: PositionStateEnum }> = [];
+        const service = buildService({
+            positions: {
+                createOpen: jest.fn(),
+                findOpenBySymbolAndSlot: jest.fn().mockResolvedValue(pendingRow),
+                save: jest.fn().mockImplementation(async (row: typeof pendingRow) => {
+                    savedRows.push({ state: row.state });
+
+                    return row;
+                }),
+            },
+            positionService: {
+                transition: transitionMock,
+                adjustQty: jest.fn(),
+                finalizeRealizedPnl: finalizeMock,
+            },
+        });
+
+        const event = buildApprovedEvent({
+            intentAction: OrderIntentActionEnum.CLOSE,
+            tradeSide: PositionSideEnum.LONG,
+        });
+        (event.intent as { exitReason?: ExitReasonEnum }).exitReason = ExitReasonEnum.TIME_STOP;
+
+        const fillSummary = {
+            filledQty: new Money(closeQty),
+            avgFillPrice: new Money(FILL_PRICE),
+            filledNotional: new Money(new Money(FILL_PRICE).times(new Money(closeQty)).toFixed(8)),
+            feeTotal: new Money('0.5'),
+        };
+
+        await (service as any).applyReduceFillToPosition(event, { clientOrderId: 'coid-close', exchangeOrderId: 'eoid-close', state: 'FILLED' }, fillSummary);
+
+        expect(savedRows).toHaveLength(1);
+        expect(savedRows[0].state).toBe(PositionStateEnum.OPEN);
+
+        const closingCall = transitionMock.mock.calls.find(([, toState]) => toState === PositionStateEnum.CLOSING);
+        expect(closingCall).toBeDefined();
+        expect(finalizeMock).toHaveBeenCalled();
     });
 });

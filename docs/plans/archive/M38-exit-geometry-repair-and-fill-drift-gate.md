@@ -19,7 +19,7 @@
 The persona quant (`VWAP-Edge`) ran an independent analysis of the live paper-soak over the
 **trailing 48 hours** (closed positions `2026-06-14 20:25 → 2026-06-16 04:50 UTC`, queried directly
 against the soak DB on `2026-06-16 04:57 UTC`). This milestone is the result. It **confirms** the
-three problems first flagged in `docs/wip/m38-momentum-exit-geometry-and-strategy-routing.md`
+three problems first flagged in `docs/wip/done/m38-momentum-exit-geometry-and-strategy-routing.md`
 (2026-06-15, 24h window) on a fresh, larger window — and **extends** the diagnosis with one finding
 that contradicts a claim in the WIP brief.
 
@@ -598,8 +598,8 @@ D1/D2 code.)
 
 ## References
 
-- WIP source brief: `docs/wip/m38-momentum-exit-geometry-and-strategy-routing.md`
-- Predecessor: `docs/plans/M37-strategy-comparison-infrastructure.md` (instruments)
+- WIP source brief: `docs/wip/done/m38-momentum-exit-geometry-and-strategy-routing.md`
+- Predecessor: `docs/plans/archive/M37-strategy-comparison-infrastructure.md` (instruments)
 - ADR 0019 (promotion gate); ADR 0015 + `docs/.../live-vs-backtest-contract.md` (parity); ADR 0007
   (ADD/reduce re-anchor rules); ADR 0008 (synchronous-arm window)
 
