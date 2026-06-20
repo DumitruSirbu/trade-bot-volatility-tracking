@@ -26,3 +26,4 @@ export {
 export { isMissedFill, type ITickSnapshot } from './missedFillDetector.js';
 export { simulateIntrabarStop, type ITickAggregateSnapshot } from './intraBarStopEvaluator.js';
 export { applyFill, applyIntraBarStop } from './fillSimulatorCore.js';
+export { mapDecisionOutcome, type IDecisionOutcomeInput } from './mapDecisionOutcome.js';

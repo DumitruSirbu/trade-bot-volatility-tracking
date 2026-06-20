@@ -381,19 +381,45 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
             // and limit reference.
             const entryPriceStr = evidence.nextBarOpenPrice;
 
-            // W5c FIX 4: validate stop-loss side against the trade direction.
-            // A malformed strategy that emits `stopLoss > entry` for a LONG
-            // (or `stopLoss < entry` for a SHORT) would size normally here
-            // (`deriveShadowQty` uses `.abs()` on the stop distance) but the
-            // resulting position would "stop" by hitting take-profit — silent
-            // incorrect behaviour. We skip the open with a WARN log; the row
-            // is still persisted as a gate-allowed-but-not-filled record so
-            // the soak sees the malformed-strategy footprint.
-            if (!isStopSideValid(signal.tradeSide, entryPriceStr, stopLossStr)) {
+            // M40 (D2 re-anchor — architect verdict 2026-06-19): validate the
+            // stop-side against the reference the strategy DREW the stop from
+            // (`reconstructReferencePrice`), NOT the tick-derived entry. The live
+            // arm keys its wrong-side guard on the actual taker fill (within
+            // slippage of the SL anchor) and HOLDS these positions; validating the
+            // correctly-built SL against `nextBarOpenPrice` (the signal-bar close,
+            // ~1% off the anchor) censored trades live actually takes. Re-pointing
+            // the check to the SL's own anchor catches ONLY a genuinely malformed
+            // strategy geometry (stop on the wrong side of its own reference),
+            // which `meanReversionCore` already guards by construction.
+            //
+            // The fill stays tick-derived (`entryPriceStr = nextBarOpenPrice`); we
+            // do NOT substitute the reference into the fill (that would restate the
+            // live decision and risk look-ahead — HIGH-1/B4). The SL price level is
+            // NOT rebased (ADR 0045 §D1.1). When the tick entry is already past the
+            // unmoved SL, the intrabar walk in `simulateShadowFill` records an
+            // immediate structural stop-out (close_reason = stop_loss, ≈ −1R) via
+            // the normal fill branch below — not a fabricated 0-qty miss.
+            const stopAnchorStr = reconstructReferencePrice(stampedEvent).toFixed();
+
+            if (!isStopSideValid(signal.tradeSide, stopAnchorStr, stopLossStr)) {
                 this.logger.warn(
-                    { symbol: event.symbol, side: signal.tradeSide, entry: entryPriceStr, stopLoss: stopLossStr },
-                    'Shadow: invalid stop-loss side — skipping open',
+                    { symbol: event.symbol, side: signal.tradeSide, stopAnchor: stopAnchorStr, stopLoss: stopLossStr },
+                    'Shadow: malformed strategy geometry — stop on wrong side of its own anchor — skipping open',
                 );
+
+                // M40 (D2 re-anchor): `WRONG_SIDE_OF_STOP` is now reserved ONLY for
+                // genuinely-malformed strategy geometry (stop wrong side of the
+                // anchor it was drawn from). A null `openData` would write
+                // `simulatedFill: null`, indistinguishable from a no-ticks miss;
+                // `qty: '0'` + `missed: true` marks the never-filled rejection and
+                // skips the deferred walk (guard at the `!openData.simulatedFill.missed`
+                // check below).
+                openData = {
+                    qty: '0',
+                    stopLoss: stopLossStr,
+                    takeProfit: takeProfitStr,
+                    simulatedFill: buildMissedShadowFill(MissedReasonEnum.WRONG_SIDE_OF_STOP),
+                };
             } else {
                 const qtyForLedger = this.deriveShadowQty(shadow, entryPriceStr, stopLossStr);
                 const simulatedFill = this.simulateShadowFill({

@@ -26,3 +26,7 @@ export const PAPER_EXCHANGE_ORDER_ID_PREFIX = 'paper-fill:';
 // Stale-tick threshold for StreamingFillAdapter: a tick older than this is
 // considered too cold to fill against. Mirrors M5's submit-network-timeout.
 export const STREAMING_FILL_STALE_TICK_MS = 5_000;
+
+// Internal adapter missed-reason when StreamingFillAdapter has no usable tick.
+// ISimulatedFillCore keeps string reasons; public ISimulatedFill maps to MissedReasonEnum separately.
+export const PAPER_MISSED_REASON_NO_TICK_CACHED = 'no_tick_cached';

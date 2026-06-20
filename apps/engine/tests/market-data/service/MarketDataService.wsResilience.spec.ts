@@ -62,6 +62,7 @@ function buildScaffold(exchangeClient: { watchTickers: jest.Mock }): {
     const service = new MarketDataService(
         exchangeClient as never,
         emitter,
+        { exchangeEnv: 'testnet' } as never,
         universe as never,
         registry,
         context as never,

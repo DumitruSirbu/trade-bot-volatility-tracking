@@ -67,7 +67,12 @@ interface IPerformanceRow {
 
 const PERFORMANCE_SQL = `
     SELECT
-        COUNT(p.positions_id)::text                                                    AS trade_count,
+        -- Exclude swept never-filled rows (reconciled-missing closes have
+        -- realized_pnl IS NULL) from the trade_count/win-rate denominator.
+        -- Without this filter the count inflated the denominator and depressed
+        -- win-rate. win_count / net_pnl_usd already skip NULL (the > 0 predicate and
+        -- SUM both ignore NULL), so only the count needs the explicit guard.
+        COUNT(p.positions_id) FILTER (WHERE p.realized_pnl IS NOT NULL)::text          AS trade_count,
         COALESCE(SUM(CASE WHEN p.realized_pnl > 0 THEN 1 ELSE 0 END), 0)::text         AS win_count,
         COALESCE(SUM(p.realized_pnl), 0)::text                                         AS net_pnl_usd,
         NULL::text                                                                    AS force_close_fraction,

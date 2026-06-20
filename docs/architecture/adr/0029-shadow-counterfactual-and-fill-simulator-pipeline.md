@@ -711,3 +711,26 @@ contradicts the analysis layer).
 - **`reverse_signal` status.** After W1, the `reverse_signal` close path is effectively
   dead in steady state (the prior event already closed the position in-pass). It is
   retained **only** for the restart-window edge case and is flagged for removal post-M39.
+
+> **Clarifying note (M40 D2) — gate-allowed shadow OPEN: stop-side is validated against the SL anchor, the
+> fill stays tick-derived, and the walk adjudicates the outcome (restores shadow↔live parity).**
+> A gate-allowed shadow OPEN validates its stop-side against the **same reference the strategy drew the stop
+> from** — `reconstructReferencePrice` — then **fills at the tick-derived `nextBarOpenPrice`**, leaves the
+> structural SL price level **unchanged**, and lets the intrabar walk decide `sl`/`tp`/`time_stop`/`force_close`.
+> When the tick entry is already past the unmoved structural SL, the walk records an **immediate structural
+> stop-out** (`close_reason = stop_loss`, bounded ≈ −1R) — exactly what a live position opened at that price and
+> protected by that SL realizes — **NOT** a 0-qty `WRONG_SIDE_OF_STOP` miss.
+>
+> `WRONG_SIDE_OF_STOP` is reserved **only** for genuinely malformed strategy geometry: a stop drawn on the wrong
+> side of its **own** `reconstructReferencePrice` anchor. The strategy already guards this by construction
+> (`meanReversionCore` draws the SL on the correct side of its reference and rejects degenerate geometry), so in
+> steady state the typed miss does not fire on correctly-built signals.
+>
+> This **corrects** the earlier shipped behavior, which validated a correctly-built SL against `nextBarOpenPrice`
+> (the signal-bar close, ~1.15% off the SL anchor) and recorded a `WRONG_SIDE_OF_STOP` typed miss on 187/187 v1
+> opens. That **diverged from live**: the live `evaluateFillDrift` `wrong_side_of_sl` guard keys on `avgFillPrice`
+> — the actual taker fill, within taker-slippage of the SL anchor — so live **holds** these positions. Validating
+> the SL against the wrong entry reference censored trades the live arm takes; keying the check on the SL anchor
+> and letting the walk resolve the fill restores parity. The structural SL is a price level (Bollinger wick
+> boundary), not an anchor+distance TP, and this fix **does not rebase it** — ADR 0045 §D1.1 ("SL is never
+> rebased") is reaffirmed and untouched.

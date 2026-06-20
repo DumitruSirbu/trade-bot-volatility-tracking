@@ -1,5 +1,6 @@
 import {
     AuthScopeEnum,
+    DecisionOutcomeEnum,
     ExitReasonEnum,
     FlowTypeEnum,
     PositionSideEnum,
@@ -301,6 +302,25 @@ describe('ReadApi DTO key snapshots (ADR 0022 §2.3 — anti-leakage)', () => {
         const [view] = result.items;
 
         expect(Object.keys(view).sort()).toEqual([...DECISION_VIEW_KEYS].sort());
+    });
+
+    it('DECISION view maps outcome from gate_allowed and position_id', async () => {
+        const harness = buildHarness();
+
+        harness.decisions.rows.push(
+            buildDecision({ id: 10, action: SignalActionEnum.OPEN, gateAllowed: false, positionId: null, reason: 'no_eligible_slot' }),
+            buildDecision({ id: 11, action: SignalActionEnum.OPEN, gateAllowed: true, positionId: null, reason: 'momentum_follow' }),
+            buildDecision({ id: 12, action: SignalActionEnum.OPEN, gateAllowed: true, positionId: 99, reason: 'momentum_follow' }),
+            buildDecision({ id: 13, action: SignalActionEnum.SKIP, gateAllowed: null, positionId: null, reason: 'baseline_no_trade' }),
+        );
+
+        const result = await harness.metricsController.listDecisions({});
+        const byId = Object.fromEntries(result.items.map((item) => [item.id, item]));
+
+        expect(byId['10'].outcome).toBe(DecisionOutcomeEnum.REJECTED);
+        expect(byId['11'].outcome).toBe(DecisionOutcomeEnum.APPROVED);
+        expect(byId['12'].outcome).toBe(DecisionOutcomeEnum.FILLED);
+        expect(byId['13'].outcome).toBe(DecisionOutcomeEnum.SKIPPED);
     });
 
     it('ACCOUNT EQUITY view exposes EXACTLY the IAccountEquityView keys (even from null snapshot)', async () => {

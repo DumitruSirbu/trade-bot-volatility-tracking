@@ -35,6 +35,7 @@ import { AppConfigService } from '../../config/service';
 import { PaperSimulatorIdempotencyEntity } from '../entity/PaperSimulatorIdempotencyEntity';
 import { PaperSimulatorIdempotencyRepository } from '../repository/PaperSimulatorIdempotencyRepository';
 import { PAPER_MARK_TO_MARKET_EVENT } from '../service/PaperAccountStateService';
+import { PAPER_MISSED_REASON_NO_TICK_CACHED } from '../const';
 import { PaperFillSimulator } from '../service/PaperFillSimulator';
 import { StreamingFillAdapter } from '../service/StreamingFillAdapter';
 
@@ -82,6 +83,12 @@ function buildSubkeys(): BootstrapSubkeyDeriver {
     return new BootstrapSubkeyDeriver({ authBootstrapSecret: BOOTSTRAP_SECRET } as unknown as AppConfigService);
 }
 
+function buildEventEmitterStub(): EventEmitter2 {
+    return {
+        emitAsync: jest.fn().mockResolvedValue(true),
+    } as unknown as EventEmitter2;
+}
+
 describe('M11a R4 Item 3A — PaperFillSimulator derives non-zero reference price from cached snapshot', () => {
     it('cached snapshot with ask=40_005 produces a fill with non-zero price + fee + slippage (market intent)', async () => {
         // BUILD
@@ -116,7 +123,7 @@ describe('M11a R4 Item 3A — PaperFillSimulator derives non-zero reference pric
                 } as ISimulatedFillCore;
             }),
         } as unknown as StreamingFillAdapter;
-        const simulator = new PaperFillSimulator(buildSubkeys(), buildIdempotencyRepoStub(), adapterStub);
+        const simulator = new PaperFillSimulator(buildSubkeys(), buildIdempotencyRepoStub(), adapterStub, buildEventEmitterStub());
 
         // OPERATE
         const result = await simulator.simulateFill(
@@ -140,7 +147,7 @@ describe('M11a R4 Item 3A — PaperFillSimulator derives non-zero reference pric
             getLastSnapshot: jest.fn(() => null),
             simulateOrderFill: jest.fn(),
         } as unknown as StreamingFillAdapter;
-        const simulator = new PaperFillSimulator(buildSubkeys(), buildIdempotencyRepoStub(), adapterStub);
+        const simulator = new PaperFillSimulator(buildSubkeys(), buildIdempotencyRepoStub(), adapterStub, buildEventEmitterStub());
 
         // OPERATE
         const result = await simulator.simulateFill(
@@ -152,7 +159,7 @@ describe('M11a R4 Item 3A — PaperFillSimulator derives non-zero reference pric
 
         // CHECK — missed-fill semantics; shared core never called.
         expect(result.fill.filled).toBe(false);
-        expect(result.fill.missedReason).toBe('no_tick_cached');
+        expect(result.fill.missedReason).toBe(PAPER_MISSED_REASON_NO_TICK_CACHED);
         expect(adapterStub.simulateOrderFill).not.toHaveBeenCalled();
     });
 });

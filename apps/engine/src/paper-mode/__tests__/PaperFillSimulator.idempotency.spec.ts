@@ -15,6 +15,8 @@
 
 import { CoinTierEnum, IOrderIntent, ISimulatedFillCore, OrderIntentActionEnum, CorrelationModeEnum, FlowTypeEnum, PositionSideEnum } from '@bot/shared';
 
+import { EventEmitter2 } from '@nestjs/event-emitter';
+
 import { BootstrapSubkeyDeriver } from '../../boot-mode-history/service/BootstrapSubkeyDeriver';
 import { AppConfigService } from '../../config/service';
 import { PaperSimulatorIdempotencyEntity } from '../entity/PaperSimulatorIdempotencyEntity';
@@ -121,6 +123,12 @@ function buildStreamingAdapterStub(fill: ISimulatedFillCore | null): { adapter: 
 
 const BOOTSTRAP_SECRET = 'b'.repeat(64);
 
+function buildEventEmitterStub(): EventEmitter2 {
+    return {
+        emitAsync: jest.fn().mockResolvedValue(true),
+    } as unknown as EventEmitter2;
+}
+
 function buildSubkeys(): BootstrapSubkeyDeriver {
     return new BootstrapSubkeyDeriver({ authBootstrapSecret: BOOTSTRAP_SECRET } as unknown as AppConfigService);
 }
@@ -141,7 +149,7 @@ describe('PaperFillSimulator — D3 idempotency-ledger replay', () => {
         const store: IFakeIdempotencyStore = { rows: [] };
         const repo = buildFakeRepo(store);
         const stub = buildStreamingAdapterStub(SAMPLE_FILL);
-        const simulator = new PaperFillSimulator(buildSubkeys(), repo, stub.adapter);
+        const simulator = new PaperFillSimulator(buildSubkeys(), repo, stub.adapter, buildEventEmitterStub());
 
         const intent = buildIntent('evt-1');
         const context = buildContext('evt-1');
@@ -163,7 +171,7 @@ describe('PaperFillSimulator — D3 idempotency-ledger replay', () => {
         const store: IFakeIdempotencyStore = { rows: [] };
         const repo = buildFakeRepo(store);
         const stub = buildStreamingAdapterStub(SAMPLE_FILL);
-        const simulator = new PaperFillSimulator(buildSubkeys(), repo, stub.adapter);
+        const simulator = new PaperFillSimulator(buildSubkeys(), repo, stub.adapter, buildEventEmitterStub());
 
         const intent = buildIntent('evt-2');
         const context = buildContext('evt-2');
@@ -188,7 +196,7 @@ describe('PaperFillSimulator — D3 idempotency-ledger replay', () => {
         const store: IFakeIdempotencyStore = { rows: [] };
         const repo = buildFakeRepo(store);
         const stubBefore = buildStreamingAdapterStub(SAMPLE_FILL);
-        const simulatorBefore = new PaperFillSimulator(buildSubkeys(), repo, stubBefore.adapter);
+        const simulatorBefore = new PaperFillSimulator(buildSubkeys(), repo, stubBefore.adapter, buildEventEmitterStub());
 
         const intent = buildIntent('evt-3');
         const context = buildContext('evt-3');
@@ -209,7 +217,7 @@ describe('PaperFillSimulator — D3 idempotency-ledger replay', () => {
             fillPrice: '999.99',
             qty: '0.999',
         });
-        const simulatorAfter = new PaperFillSimulator(buildSubkeys(), repo, stubAfter.adapter);
+        const simulatorAfter = new PaperFillSimulator(buildSubkeys(), repo, stubAfter.adapter, buildEventEmitterStub());
 
         const after = await simulatorAfter.simulateFill(intent, context, CoinTierEnum.TIER_1, 5_000);
 
@@ -227,7 +235,7 @@ describe('PaperFillSimulator — D3 idempotency-ledger replay', () => {
         const store: IFakeIdempotencyStore = { rows: [] };
         const repo = buildFakeRepo(store);
         const stub = buildStreamingAdapterStub(SAMPLE_FILL);
-        const simulator = new PaperFillSimulator(buildSubkeys(), repo, stub.adapter);
+        const simulator = new PaperFillSimulator(buildSubkeys(), repo, stub.adapter, buildEventEmitterStub());
 
         await simulator.simulateFill(buildIntent('evt-A'), buildContext('evt-A'), CoinTierEnum.TIER_1, 5_000);
         await simulator.simulateFill(buildIntent('evt-B'), buildContext('evt-B'), CoinTierEnum.TIER_1, 5_000);

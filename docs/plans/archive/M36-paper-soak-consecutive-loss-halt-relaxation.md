@@ -463,9 +463,9 @@ destructive op, no `-v`, no down/revert, no `TRUNCATE`/`DELETE`.
 
 - Precedent (identical two-condition pattern): M25 paper exploration enablement —
   [docs/plans/archive/M25-paper-exploration-enablement.md](archive/M25-paper-exploration-enablement.md)
-- Paper exploration profile ADR (to be amended): [docs/architecture/adr/0042-paper-exploration-profile.md](../architecture/adr/0042-paper-exploration-profile.md)
-- Risk management + halt legs: [docs/architecture/adr/0004-risk-management.md](../architecture/adr/0004-risk-management.md)
-- Shadow ledger / virtual gate: [docs/architecture/adr/0029-*](../architecture/adr/README.md)
+- Paper exploration profile ADR (to be amended): [docs/architecture/adr/0042-paper-exploration-profile.md](../../architecture/adr/0042-paper-exploration-profile.md)
+- Risk management + halt legs: [docs/architecture/adr/0004-risk-management.md](../../architecture/adr/0004-risk-management.md)
+- Shadow ledger / virtual gate: [docs/architecture/adr/0029-*](../../architecture/adr/README.md)
 
 ### Key source files
 

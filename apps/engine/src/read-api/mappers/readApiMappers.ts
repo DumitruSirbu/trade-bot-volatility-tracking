@@ -7,6 +7,7 @@ import {
     IPerformanceByVersionView,
     IPositionDetailView,
     IRiskStateView,
+    mapDecisionOutcome,
     PositionSideEnum,
     PositionSlotEnum,
     PositionStateEnum,
@@ -144,11 +145,18 @@ export function mapPositionDetail(input: IPositionDetailMapInput): IPositionDeta
 // ---------------------------------------------------------------------------
 
 export function mapDecision(decision: DecisionEntity): IDecisionView {
+    const positionId = decision.positionId === null || decision.positionId === undefined ? null : String(decision.positionId);
+
     return {
         id: String(decision.id),
         occurredAt: decision.ts.toISOString(),
         symbol: decision.symbol,
         action: decision.action as SignalActionEnum,
+        outcome: mapDecisionOutcome({
+            action: decision.action,
+            gateAllowed: decision.gateAllowed,
+            positionId,
+        }),
         flowType: decision.signalType as FlowTypeEnum,
         // ADR 0022 §2.3.1: `null` distinguishes "skip decision had no score"
         // from "score was literally 0"; empty-string `reason` likewise ambiguous.
@@ -156,7 +164,7 @@ export function mapDecision(decision: DecisionEntity): IDecisionView {
         reason: decision.reason ?? null,
         strategyVersionId: String(decision.strategyVersionId),
         eventId: decision.eventId,
-        positionId: decision.positionId === null || decision.positionId === undefined ? null : String(decision.positionId),
+        positionId,
     };
 }
 
@@ -379,6 +387,7 @@ export const DECISION_VIEW_KEYS: ReadonlyArray<keyof IDecisionView> = [
     'occurredAt',
     'symbol',
     'action',
+    'outcome',
     'flowType',
     'signalScore',
     'reason',

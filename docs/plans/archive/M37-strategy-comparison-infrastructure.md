@@ -714,18 +714,18 @@ was made**, and the active strategy was **not** switched.
 
 ## References
 
-- Same-event comparison + paired bootstrap: [ADR 0017](../architecture/adr/0017-walk-forward-and-same-event-comparison.md),
-  [ADR 0018](../architecture/adr/0018-statistical-significance-paired-block-bootstrap.md)
-- Strategy version lineage + promotion gate: [ADR 0016](../architecture/adr/0016-strategy-version-lineage-and-promotion.md),
-  [ADR 0019](../architecture/adr/0019-promotion-gate.md)
-- Shadow counterfactual + fill-simulator pipeline: [ADR 0029](../architecture/adr/0029-shadow-counterfactual-and-fill-simulator-pipeline.md)
-- Backtest module + live/backtest parity: [ADR 0015](../architecture/adr/0015-backtest-module.md),
-  [live-vs-backtest-contract.md](../architecture/live-vs-backtest-contract.md)
-- Risk management (gate checks, liquidation/depth): [ADR 0004](../architecture/adr/0004-risk-management.md)
+- Same-event comparison + paired bootstrap: [ADR 0017](../../architecture/adr/0017-walk-forward-and-same-event-comparison.md),
+  [ADR 0018](../../architecture/adr/0018-statistical-significance-paired-block-bootstrap.md)
+- Strategy version lineage + promotion gate: [ADR 0016](../../architecture/adr/0016-strategy-version-lineage-and-promotion.md),
+  [ADR 0019](../../architecture/adr/0019-promotion-gate.md)
+- Shadow counterfactual + fill-simulator pipeline: [ADR 0029](../../architecture/adr/0029-shadow-counterfactual-and-fill-simulator-pipeline.md)
+- Backtest module + live/backtest parity: [ADR 0015](../../architecture/adr/0015-backtest-module.md),
+  [live-vs-backtest-contract.md](../../architecture/live-vs-backtest-contract.md)
+- Risk management (gate checks, liquidation/depth): [ADR 0004](../../architecture/adr/0004-risk-management.md)
 - Trade-record integrity precedents: M35 (`exit_reason` labeling / wrong-side & sub-cost TP guards),
-  M33 (live exit enforcement); position instrumentation [ADR 0013](../architecture/adr/0013-position-instrumentation.md),
-  funding/PnL [ADR 0012](../architecture/adr/0012-funding-and-pnl.md)
-- Decision data-capture completeness: [ADR 0043](../architecture/adr/0043-m27-decision-data-capture-completeness.md)
+  M33 (live exit enforcement); position instrumentation [ADR 0013](../../architecture/adr/0013-position-instrumentation.md),
+  funding/PnL [ADR 0012](../../architecture/adr/0012-funding-and-pnl.md)
+- Decision data-capture completeness: [ADR 0043](../../architecture/adr/0043-m27-decision-data-capture-completeness.md)
 - Forced-continuation bias marker (carry-over constraint): [M36](M36-paper-soak-consecutive-loss-halt-relaxation.md)
 
 ### Key source files

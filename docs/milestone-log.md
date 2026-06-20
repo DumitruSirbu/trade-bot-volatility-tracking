@@ -6,6 +6,9 @@ For the current milestone plan, see [`docs/plans/`](plans/README.md). For deferr
 
 | ID | Outcome |
 |----|---------|
+| M40 | [M40 — Halt-exempt closes + shadow fill regression + stuck-position sweeper (DONE):](archive/M40.md) |
+| M41 | [M41 — Decisions feed outcome + zero-fill audit cashflow (DONE):](archive/M41.md) |
+| M42 | [M42 — Paper stale-tick REST refresh before fill simulation (DONE):](archive/M42.md) |
 | M39 | [M39 — Shadow-ledger close path + realized-PnL fidelity (W1+W2 shipped, D3 gate unblocked) (DONE):](archive/M39.md) |
 | M38 | [M38 — Exit-geometry repair + fill-acceptance guard (D1+D2 deployed; D3 gated) (DONE):](archive/M38.md) |
 | M37 | [M37 — Strategy-comparison infrastructure (concurrent shadow evaluation + backtest fill restoration + trade-record integrity) (DONE):](archive/M37.md) |

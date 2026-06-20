@@ -26,11 +26,11 @@
 //    - changing symbol selection resets cursorStack to [null]
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { IDecisionView, IPaginated } from '@bot/shared';
-import { FlowTypeEnum, SignalActionEnum } from '@bot/shared';
+import { DecisionOutcomeEnum, FlowTypeEnum, SignalActionEnum } from '@bot/shared';
 
 import { DecisionsFeed } from './DecisionsFeed';
 
@@ -51,14 +51,16 @@ const toServerFilter = (selected: string[]): string | undefined => (selected.len
 
 // Inline re-specification of applyClientFilter — same contract as the
 // implementation; integration tests for the component cover the wiring.
-const applyClientFilter = (rows: IDecisionView[], selectedActions: string[], selectedSymbols: string[]): IDecisionView[] => {
+const applyClientFilter = (rows: IDecisionView[], selectedActions: string[], selectedOutcomes: string[], selectedSymbols: string[]): IDecisionView[] => {
     const actionSet = new Set(selectedActions);
+    const outcomeSet = new Set(selectedOutcomes);
     const symbolSet = new Set(selectedSymbols);
 
     return rows.filter((row) => {
         const actionOk = actionSet.size < 2 || actionSet.has(row.action);
+        const outcomeOk = outcomeSet.size === 0 || outcomeSet.has(row.outcome);
         const symbolOk = symbolSet.size < 2 || symbolSet.has(row.symbol);
-        return actionOk && symbolOk;
+        return actionOk && outcomeOk && symbolOk;
     });
 };
 
@@ -72,6 +74,7 @@ function makeDecision(overrides: Partial<IDecisionView> = {}): IDecisionView {
         occurredAt: '2026-05-28T10:00:00.000Z',
         symbol: 'BTCUSDT',
         action: SignalActionEnum.SKIP,
+        outcome: DecisionOutcomeEnum.SKIPPED,
         flowType: FlowTypeEnum.LOW_QUALITY_NOISE,
         signalScore: null,
         reason: null,
@@ -118,39 +121,44 @@ describe('toServerFilter — pure function contract', () => {
 // ---------------------------------------------------------------------------
 
 describe('applyClientFilter — pure function contract', () => {
-    const btcSkip = makeDecision({ symbol: 'BTCUSDT', action: SignalActionEnum.SKIP });
-    const ethOpen = makeDecision({ symbol: 'ETHUSDT', action: SignalActionEnum.OPEN });
-    const solAdd = makeDecision({ symbol: 'SOLUSDT', action: SignalActionEnum.ADD });
+    const btcSkip = makeDecision({ symbol: 'BTCUSDT', action: SignalActionEnum.SKIP, outcome: DecisionOutcomeEnum.SKIPPED });
+    const ethOpen = makeDecision({ symbol: 'ETHUSDT', action: SignalActionEnum.OPEN, outcome: DecisionOutcomeEnum.APPROVED });
+    const solAdd = makeDecision({ symbol: 'SOLUSDT', action: SignalActionEnum.ADD, outcome: DecisionOutcomeEnum.FILLED, positionId: '99' });
 
     it('returns all rows when both selected arrays are empty', () => {
-        const result = applyClientFilter([btcSkip, ethOpen, solAdd], [], []);
+        const result = applyClientFilter([btcSkip, ethOpen, solAdd], [], [], []);
         expect(result).toHaveLength(3);
     });
 
     it('returns all rows when action set has fewer than 2 entries (size 1)', () => {
-        const result = applyClientFilter([btcSkip, ethOpen, solAdd], ['skip'], []);
+        const result = applyClientFilter([btcSkip, ethOpen, solAdd], ['skip'], [], []);
         expect(result).toHaveLength(3);
     });
 
     it('returns all rows when symbol set has fewer than 2 entries (size 1)', () => {
-        const result = applyClientFilter([btcSkip, ethOpen, solAdd], [], ['BTCUSDT']);
+        const result = applyClientFilter([btcSkip, ethOpen, solAdd], [], [], ['BTCUSDT']);
         expect(result).toHaveLength(3);
     });
 
+    it('filters by a single outcome selection (client-only — no server filter)', () => {
+        const result = applyClientFilter([btcSkip, ethOpen, solAdd], [], ['rejected'], []);
+        expect(result).toHaveLength(0);
+    });
+
     it('filters by action when action set has ≥ 2 entries', () => {
-        const result = applyClientFilter([btcSkip, ethOpen, solAdd], ['skip', 'open'], []);
+        const result = applyClientFilter([btcSkip, ethOpen, solAdd], ['skip', 'open'], [], []);
         expect(result).toHaveLength(2);
         expect(result.map((r) => r.action).sort()).toEqual(['open', 'skip']);
     });
 
     it('filters by symbol when symbol set has ≥ 2 entries', () => {
-        const result = applyClientFilter([btcSkip, ethOpen, solAdd], [], ['BTCUSDT', 'ETHUSDT']);
+        const result = applyClientFilter([btcSkip, ethOpen, solAdd], [], [], ['BTCUSDT', 'ETHUSDT']);
         expect(result).toHaveLength(2);
         expect(result.map((r) => r.symbol).sort()).toEqual(['BTCUSDT', 'ETHUSDT']);
     });
 
     it('applies both filters simultaneously when both sets have ≥ 2 entries', () => {
-        const result = applyClientFilter([btcSkip, ethOpen, solAdd], ['skip', 'open'], ['BTCUSDT', 'ETHUSDT']);
+        const result = applyClientFilter([btcSkip, ethOpen, solAdd], ['skip', 'open'], [], ['BTCUSDT', 'ETHUSDT']);
         // btcSkip: action=skip (in set), symbol=BTCUSDT (in set) → pass
         // ethOpen: action=open (in set), symbol=ETHUSDT (in set) → pass
         // solAdd:  action=add (NOT in set) → excluded
@@ -158,25 +166,31 @@ describe('applyClientFilter — pure function contract', () => {
     });
 
     it('excludes a row whose action is not in the action set', () => {
-        const result = applyClientFilter([btcSkip, ethOpen], ['open', 'add'], []);
+        const result = applyClientFilter([btcSkip, ethOpen], ['open', 'add'], [], []);
         expect(result).toHaveLength(1);
         expect(result[0].action).toBe(SignalActionEnum.OPEN);
     });
 
     it('excludes a row whose symbol is not in the symbol set', () => {
-        const result = applyClientFilter([btcSkip, ethOpen], [], ['ETHUSDT', 'SOLUSDT']);
+        const result = applyClientFilter([btcSkip, ethOpen], [], [], ['ETHUSDT', 'SOLUSDT']);
         expect(result).toHaveLength(1);
         expect(result[0].symbol).toBe('ETHUSDT');
     });
 
     it('returns an empty array when no rows match the combined filters', () => {
-        const result = applyClientFilter([btcSkip, ethOpen], ['open', 'add'], ['SOLUSDT', 'BNBUSDT']);
+        const result = applyClientFilter([btcSkip, ethOpen], ['open', 'add'], [], ['SOLUSDT', 'BNBUSDT']);
         expect(result).toHaveLength(0);
     });
 
     it('returns all rows when input is empty', () => {
-        const result = applyClientFilter([], ['open', 'skip'], ['BTCUSDT', 'ETHUSDT']);
+        const result = applyClientFilter([], ['open', 'skip'], [], ['BTCUSDT', 'ETHUSDT']);
         expect(result).toHaveLength(0);
+    });
+
+    it('filters by outcome when outcome set has ≥ 2 entries', () => {
+        const result = applyClientFilter([btcSkip, ethOpen, solAdd], [], ['skipped', 'approved'], []);
+        expect(result).toHaveLength(2);
+        expect(result.map((r) => r.outcome).sort()).toEqual(['approved', 'skipped']);
     });
 });
 
@@ -454,5 +468,51 @@ describe('DecisionsFeed — loading and error states', () => {
         renderFeed();
 
         expect(screen.getByText(/no decisions match/i)).toBeTruthy();
+    });
+
+    it('filters by a single rejected outcome in the component', async () => {
+        mockQueryResult = {
+            data: paginatedPage([
+                makeDecision({ action: SignalActionEnum.OPEN, outcome: DecisionOutcomeEnum.REJECTED, reason: 'no_eligible_slot' }),
+                makeDecision({ action: SignalActionEnum.OPEN, outcome: DecisionOutcomeEnum.APPROVED }),
+            ]),
+            isLoading: false,
+            isError: false,
+            error: null,
+        };
+        renderFeed();
+
+        const outcomeTrigger = screen.getAllByRole('button').find((btn) => btn.textContent?.includes('Outcome:'));
+        if (outcomeTrigger === undefined) throw new Error('Outcome filter trigger not found');
+        await userEvent.click(outcomeTrigger);
+
+        const rejectedOption = screen.getAllByRole('button').find((btn) => btn.textContent?.includes('REJECTED'));
+        if (rejectedOption === undefined) throw new Error('REJECTED option not found');
+        await userEvent.click(rejectedOption);
+
+        await waitFor(() => {
+            const table = screen.getByRole('table');
+            expect(within(table).getByText('REJECTED')).toBeTruthy();
+            expect(within(table).queryByText('APPROVED')).toBeNull();
+        });
+    });
+
+    it('renders Outcome badge separately from Action (rejected open intent)', () => {
+        mockQueryResult = {
+            data: paginatedPage([
+                makeDecision({
+                    action: SignalActionEnum.OPEN,
+                    outcome: DecisionOutcomeEnum.REJECTED,
+                    reason: 'no_eligible_slot',
+                }),
+            ]),
+            isLoading: false,
+            isError: false,
+            error: null,
+        };
+        renderFeed();
+
+        expect(screen.getByText('OPEN')).toBeTruthy();
+        expect(screen.getByText('REJECTED')).toBeTruthy();
     });
 });

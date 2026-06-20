@@ -11,7 +11,7 @@ Scratch and investigation docs **before** they become milestone plans or ADRs.
 
 ## Active (root)
 
-- [m38-momentum-exit-geometry-and-strategy-routing.md](m38-momentum-exit-geometry-and-strategy-routing.md) — TP geometry stale at fill time, entry staleness gate, V3 hybrid promotion; M38 brief base (2026-06-15)
+- [2026-06-17-halt-blocks-protective-close-and-shadow-fill-regression.md](2026-06-17-halt-blocks-protective-close-and-shadow-fill-regression.md) — **CRITICAL**: global halt short-circuits protective closes (time-stop + SL frozen 2h12m on #101 INJ); shadow `simulated_fill` collapsed to ~0/day since Jun 10 (contradicts M37/M39); zombie `pending_open` #38 (2026-06-17) → **M40**
 - [live-exit-enforcement-gap.md](live-exit-enforcement-gap.md) — stuck open positions; live time-stop / paper SL-TP gap (2026-06-12)
 - [slot-model-and-correlated-leg-gaps.md](slot-model-and-correlated-leg-gaps.md) — slot C / correlated leg; gated by M30 soak (open)
 
@@ -19,6 +19,8 @@ Scratch and investigation docs **before** they become milestone plans or ADRs.
 
 | Doc | Milestone(s) |
 |-----|----------------|
+| [2026-06-19-decisions-open-badge-vs-positions-empty.md](done/2026-06-19-decisions-open-badge-vs-positions-empty.md) | **M42** (stale-tick fill) + **M41** (outcome UX + cashflow audit, open) — Decisions OPEN vs empty Positions (2026-06-19) |
+| [m38-momentum-exit-geometry-and-strategy-routing.md](done/m38-momentum-exit-geometry-and-strategy-routing.md) | **M38** — TP geometry stale at fill time, entry staleness gate, V3 hybrid promotion (2026-06-15) |
 | [documentation-structure-reorganization.md](done/documentation-structure-reorganization.md) | **Meta** — docs hub, archive layout, agent routing (2026-06-12; implemented) |
 | [first-three-paper-fills-and-zombie-positions.md](done/first-three-paper-fills-and-zombie-positions.md) | **M31** — zombie lifecycle |
 | [main-architector-paper-soak-fill-and-gate-analysis.md](done/main-architector-paper-soak-fill-and-gate-analysis.md) | **M24–M27** — P0–P5 fill/gate/observability |

@@ -253,6 +253,41 @@ describe('getPerformance', () => {
         expect(view.tradeCount).toBe(1);
     });
 
+    // ── M40 D4 (StuckPositionSweeper) denominator guard ──────────────────────
+
+    it('swept never-filled closed row (realized_pnl IS NULL) is EXCLUDED from trade_count — FILTER clause present', async () => {
+        // why: StuckPositionSweeper finalizes orphaned pending_open rows via
+        // RECONCILED_MISSING, writing realized_pnl=null (they never traded).
+        // Without `FILTER (WHERE realized_pnl IS NOT NULL)`, these rows inflate
+        // the trade_count denominator and depress the win-rate. The active-version
+        // SQL must carry the explicit filter predicate.
+        //
+        // The stub returns trade_count='2' (DB applied the filter; only 2 of 3
+        // closed rows have non-null pnl) to prove the gate is exercised in the SQL.
+        let capturedSql = '';
+        const ds = stubDataSource(async (sql) => {
+            if (isVersionLookupSql(sql)) {
+                return [{ label: 'active@v1', status: 'active' }];
+            }
+
+            capturedSql = sql;
+
+            // 3 closed rows: 2 real trades (pnl non-null), 1 swept orphan (pnl=null).
+            // The DB returns count=2 after applying FILTER (WHERE realized_pnl IS NOT NULL).
+            return [{ trade_count: '2', win_count: '1', net_pnl_usd: '50.00', label: 'active@v1', status: 'active' }];
+        });
+
+        const view = await getPerformance(ds as never, { versionId, from, to });
+
+        // SQL carries the denominator filter predicate
+        expect(capturedSql).toContain('FILTER (WHERE p.realized_pnl IS NOT NULL)');
+        // The swept row is excluded from the count
+        expect(view.tradeCount).toBe(2);
+        // win_count / net_pnl_usd remain correct (they already ignore null via > 0 / SUM)
+        expect(view.winRate).toBe((1 / 2).toFixed(6));
+        expect(view.netPnlUsd).toBe('50');
+    });
+
     it('shadow aggregation uses created_at (not closed_at) as the window key', async () => {
         // why: shadow rows have no closed_at column; the simulated close lives inside
         // JSONB. Using closed_at would always miss shadow rows and yield tradeCount=0.

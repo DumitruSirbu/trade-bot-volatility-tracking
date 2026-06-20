@@ -433,11 +433,15 @@ describe('ShadowStrategyOrchestratorService — W5c FIX 1 reverse-signal close o
 });
 
 describe('ShadowStrategyOrchestratorService — W5c FIX 4 stop-side validation', () => {
-    // W5c FIX 4 paired test: a LONG signal with `stopLoss > entry` is a
+    // W5c FIX 4 + M40 D2 updated contract: a LONG signal with `stopLoss > entry` is a
     // malformed strategy output. We must NOT call tryOpen (sizing with
     // `.abs()` would silently produce a position that "stops" by hitting
-    // take-profit). Expectation: warn + persist a gate-allowed row with
-    // null simulatedFill, ledger unchanged.
+    // take-profit).
+    //
+    // M40 D2 change: instead of persisting `simulatedFill: null` (indistinguishable
+    // from a missing-tick-data miss), the wrong-side-of-stop path now persists a typed
+    // rejected fill: `{ missed: true, missedReason: 'wrong_side_of_stop' }` with `qty: '0'`.
+    // This makes the rejection distinguishable in the DB from the no-ticks miss.
     it('skips the open and does NOT call tryOpen when a LONG has stopLoss > entry', async () => {
         const invalidLong: ISignal = {
             ...buildOpenSignal(),
@@ -459,12 +463,17 @@ describe('ShadowStrategyOrchestratorService — W5c FIX 4 stop-side validation',
         expect(tryOpenSpy).not.toHaveBeenCalled();
         expect(capturedLedger.countOpenPositions()).toBe(0);
 
-        // Row still persisted (audit footprint) but with null simulatedFill /
-        // qty so a downstream PnL aggregator does not count it.
+        // Row still persisted (audit footprint). M40 D2: simulatedFill is now a typed
+        // rejected fill (non-null, missed=true, missedReason=WRONG_SIDE_OF_STOP) and
+        // qty='0' — distinguishable from the no-ticks null miss.
         const row = mocks.shadowDecisions.insertShadowDecision.mock.calls[0][0];
         expect(row.action).toBe(SignalActionEnum.OPEN);
-        expect(row.simulatedFill).toBeNull();
-        expect(row.qty).toBeNull();
+        // D2 new contract: non-null simulatedFill tagged with WRONG_SIDE_OF_STOP
+        expect(row.simulatedFill).not.toBeNull();
+        expect(row.simulatedFill?.missed).toBe(true);
+        expect(row.simulatedFill?.missedReason).toBe('wrong_side_of_stop');
+        // qty='0' (not null — the position was rejected, not absent)
+        expect(row.qty).toBe('0');
     });
 });
 

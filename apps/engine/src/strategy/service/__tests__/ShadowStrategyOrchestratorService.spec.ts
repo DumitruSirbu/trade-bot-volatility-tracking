@@ -845,21 +845,33 @@ describe('ShadowStrategyOrchestratorService — adversarial: invalid stop-loss s
     });
 });
 
-// ─── Edge: zero-quantity scenario (zero stop distance) → tryOpen not called ───
+// ─── Edge: zero-quantity scenario (zero stop distance) ───────────────────────
+// M40 D2 re-anchor update: stopLoss === tick-entryPrice (both = ENTRY_PRICE_STR = '30450')
+// now PASSES the re-anchored stop-side check because the anchor (reconstructReferencePrice
+// = 30000 × 1.03 = 30900) is above the tick-entry, so stop=30450 < anchor=30900 for LONG
+// → isStopSideValid returns true. deriveShadowQty sees zero distance and returns '0'.
+// simulateShadowFill runs and produces missed:false. The fill branch is reached and
+// tryOpen IS called with qty='0' (the ledger rejects it internally as a zero-qty open).
+// The prior assertion `tryOpen NOT called` was keyed to the OLD stop-side check anchor
+// (tick-derived entry); it is updated here to the corrected behavior.
 
-describe('ShadowStrategyOrchestratorService — adversarial: zero stop distance produces qty=0, open not submitted', () => {
-    it('when stopLoss equals entryPrice, deriveShadowQty returns 0 and tryOpen is not called', async () => {
-        // stopLoss === entryPrice → stop distance = 0 → qty = 0
-        // BUT: isStopSideValid would ALSO catch stopLoss === entryPrice for LONG
-        // (stop.lt(entry) is false when equal), so the open is skipped at the
-        // stop-side validation stage before deriveShadowQty runs.
+describe('ShadowStrategyOrchestratorService — adversarial: zero stop distance produces qty=0', () => {
+    it('when stopLoss equals tick-entryPrice, deriveShadowQty returns 0 and tryOpen IS called with qty=0 (fill branch reached)', async () => {
+        // stopLoss = '30450' = ENTRY_PRICE_STR = tick close.
+        // anchor = reconstructReferencePrice = 30000 × 1.03 = 30900.
+        // isStopSideValid(LONG, anchor='30900', stop='30450') → 30450 < 30900 → true (valid).
+        // deriveShadowQty(entry='30450', stop='30450') → distance=0 → qty='0'.
+        // simulateShadowFill runs (missed:false). tryOpen IS called with qty='0'.
         const invalidSignal = buildOpenSignal(PositionSideEnum.LONG, ENTRY_PRICE_STR, TAKE_PROFIT_STR);
         const { service, ledger } = buildService([buildCrossingTick()], invalidSignal);
         const event = buildVolatilityEvent();
 
         await service.runShadows(event, NOW_MS);
 
-        expect(ledger.tryOpen as jest.Mock).not.toHaveBeenCalled();
+        // tryOpen IS called — the fill branch was reached; zero-qty is an internal
+        // ledger decision (tryOpen returns !success), not a pre-fill censorship.
+        expect(ledger.tryOpen as jest.Mock).toHaveBeenCalledTimes(1);
+        expect((ledger.tryOpen as jest.Mock).mock.calls[0][0]).toMatchObject({ qty: '0' });
     });
 });
 

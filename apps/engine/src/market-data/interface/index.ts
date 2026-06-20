@@ -16,3 +16,4 @@ export * from './ITickAggregateEvent';
 export * from './IOpenInterestSampledEvent';
 export * from './IFundingRateObservedEvent';
 export * from './IInstrumentRefreshedEvent';
+export * from './IPaperTickRefreshRequest';

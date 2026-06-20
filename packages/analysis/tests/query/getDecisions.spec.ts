@@ -16,6 +16,7 @@ function fixtureRow(idx: number, snapshot: unknown = null): Record<string, unkno
         event_id: `evt-${idx}`,
         signal_type: 'inflow',
         action: 'long',
+        gate_allowed: true,
         reason: 'fixture',
         strategy_version_id: '3',
         position_id: null,
@@ -36,6 +37,7 @@ describe('getDecisions', () => {
         expect(result.items).toHaveLength(1);
         expect(result.items[0].id).toBe('1');
         expect(result.items[0].eventId).toBe('evt-1');
+        expect(result.items[0].outcome).toBe('approved');
         expect(result.snapshots).toBeNull();
     });
 

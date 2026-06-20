@@ -7,6 +7,11 @@ export const HEALTH_PING_EVENT = 'common.health.ping';
 export const PRICE_UPDATE_EVENT = 'marketData.price.update';
 export const VOLATILITY_DETECTED_EVENT = 'marketData.volatility.detected';
 
+// M41 D2 (ADR 0032 §D15). Paper fill simulation requests a REST tick refresh when the
+// StreamingFillAdapter cache is missing or stale. MarketDataService handles it by
+// fetchTickers + PRICE_UPDATE_EVENT — keeps PaperModeModule free of ExchangeModule.
+export const PAPER_TICK_REFRESH_REQUEST = 'paper.tick.refresh.request';
+
 // Universe-membership transitions (M2 persists these to universe_membership).
 export const UNIVERSE_SYMBOL_ENTERED_EVENT = 'marketData.universe.symbolEntered';
 export const UNIVERSE_SYMBOL_LEFT_EVENT = 'marketData.universe.symbolLeft';

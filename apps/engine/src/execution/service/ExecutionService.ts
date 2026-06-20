@@ -160,7 +160,10 @@ export class ExecutionService {
             return;
         }
 
-        if (this.haltFlag.isHalted()) {
+        // ADR 0046 §2.1: a halt blocks new risk only — OPEN/ADD aborts here; REDUCE/CLOSE/FLATTEN
+        // execute under halt so protective exits (time-stop, SL, M38 unwind, operator flatten)
+        // survive to CLOSED. `isOpenOrAddIntent` is the single, uniform halt-scoping authority.
+        if (this.haltFlag.isHalted() && this.isOpenOrAddIntent(event.intent.intentAction)) {
             this.logger.warn(`halt flag set (${this.haltFlag.getReason() ?? 'no-reason'}); short-circuiting eventId=${event.intent.eventId}`);
             this.releaseReservationSafely(event.reservationId);
             this.events.emit(ORDER_INTENT_EXPIRED_EVENT, {
@@ -505,10 +508,14 @@ export class ExecutionService {
     // command per CQS; the caller's try/catch owns the abort path.
     private async promotePendingOpenBeforeClose(event: IOrderIntentApprovedEvent, submitResult: ILiveSubmitResult, position: PositionEntity): Promise<void> {
         try {
-            await this.positionService.transition(position.id, PositionStateEnum.OPEN, {
+            const promoted = await this.positionService.transition(position.id, PositionStateEnum.OPEN, {
                 nowMs: Date.now(),
                 eventClass: PENDING_OPEN_PROMOTE_EVENT_CLASS,
             });
+            // Keep the in-memory row aligned with the DB promote — the closing-fill path saves
+            // this entity before CLOSING; a stale PENDING_OPEN here reverts the promote and
+            // blocks pending_open → closing (fill-acceptance FLATTEN unwind regression).
+            position.state = promoted.state;
         } catch (cause) {
             this.logger.error(
                 `pending_open promote failed positionId=${position.id} sourceState=${position.state}: ${this.describe(cause)} - escalating to M6`,
@@ -562,7 +569,10 @@ export class ExecutionService {
     // the recover-by-clientOrderId path. Honors the halt flag between attempts (must-fix #6).
     private async runSubmitStateMachine(event: IOrderIntentApprovedEvent, plan: IOrderPlanInternal): Promise<ILiveSubmitResult> {
         for (let attemptN = 0; attemptN <= MAX_PERMANENT_RETRY_ATTEMPTS; attemptN++) {
-            if (this.haltFlag.isHalted()) {
+            // ADR 0046 §2.1: same predicate as the :163 entry gate — `isOpenOrAddIntent` is the
+            // uniform halt-scoping authority. Keeps the two gates consistent: an intent permitted
+            // at :163 is not aborted here, so a de-risking close reaches submitter.submit under halt.
+            if (this.haltFlag.isHalted() && this.isOpenOrAddIntent(event.intent.intentAction)) {
                 return this.buildResult(SubmitStateEnum.ABORTED, this.idForAttempt(event, attemptN), attemptN, null, 'halted');
             }
 
@@ -805,7 +815,11 @@ export class ExecutionService {
         // fires mid-reduce-remainder, return CANCELLED with whatever has already filled so
         // executeLive routes through the reduce-class escalation path (must-fix #1) — never
         // continue placing more orders against a halted engine.
-        if (this.haltFlag.isHalted()) {
+        // ADR 0046 §2.1: same halt-scoping predicate as :163/:565 via `isOpenOrAddIntent`. NOTE:
+        // `event` is NOT in scope here — this method takes `intent` directly, so the predicate
+        // reads `intent.intentAction`. This path only ever runs for REDUCE_MARKET, so scoping it
+        // to OPEN/ADD stops aborting the de-risking close: the reduce remainder proceeds under halt.
+        if (this.haltFlag.isHalted() && this.isOpenOrAddIntent(intent.intentAction)) {
             this.logger.warn(`halt flag set during reduce remainder ${intent.symbol} clientOrderId=${clientOrderId} - aborting recursion`);
             const haltedSnapshot = await this.submitter.fetchByClientId(intent.symbol, clientOrderId);
             const haltedFillSummary = haltedSnapshot === null ? null : this.fillAccumulator.toSummary(haltedSnapshot);
@@ -1016,7 +1030,7 @@ export class ExecutionService {
     // createPositionFromFill (the PENDING_OPEN row exists) and BEFORE the synchronous arm — so a
     // doomed position never arms (ADR 0008 §2 window stays closed for surviving positions). The
     // drift value is logged on every evaluation. On reject the position is unwound via a synthetic
-    // FLATTEN (one CLEAN CLOSED row, FORCE_CLOSE) and the reservation is confirmed; the caller skips
+    // FLATTEN (one CLEAN CLOSED row, FORCE_CLOSE) and the PENDING reservation is released; the caller skips
     // arm/attach/transition/POSITION_OPENED_EVENT. Returns true when the fill was rejected.
     private async rejectAndUnwindIfUnacceptable(ctx: IFillAcceptanceContext): Promise<boolean> {
         const { event, positionRow, fillSummary } = ctx;
@@ -1042,9 +1056,11 @@ export class ExecutionService {
         return true;
     }
 
-    // Unwind a rejected open fill via a synthetic FLATTEN (one CLEAN CLOSED row, FORCE_CLOSE)
-    // and confirm the reservation so it is not leaked. The caller skips arm/attach/transition/
-    // POSITION_OPENED_EVENT.
+    // Unwind a rejected open fill via a synthetic FLATTEN (one CLEAN CLOSED row, FORCE_CLOSE).
+    // Release the OPEN reservation immediately — it is still PENDING and must not be CONFIRMED
+    // (that would phantom-occupy the slot if the synthetic close fails). A successful unwind
+    // releases the slot again via POSITION_CLOSED_EVENT (idempotent). The caller skips
+    // arm/attach/transition/POSITION_OPENED_EVENT.
     private async unwindRejectedFill(ctx: IFillAcceptanceContext, reason?: string): Promise<void> {
         const { event, positionRow, fillSummary } = ctx;
 
@@ -1061,7 +1077,7 @@ export class ExecutionService {
             slot: event.approvedSlot,
             strategyVersionId: event.strategyVersionId,
         });
-        this.confirmReservationSafely(event.reservationId);
+        this.releaseReservationSafely(event.reservationId);
     }
 
     // Weighted-average entry on ADD (ADR 0007 §3 + must-fix #4). Uses the slot-scoped
@@ -1359,6 +1375,7 @@ export class ExecutionService {
                 price: new Money(0),
                 qty: new Money(0),
                 fee: new Money(0),
+                cashflow: new Money(0),
                 clientOrderId,
                 exchangeOrderId: null,
             });
