@@ -34,7 +34,7 @@
 | D2 | Long-book reward:risk inverted: ATR TP ~0.9–1.6% vs VWAP structural SL ~2.5–3.4% → RR ≈ 0.5–0.6 on longs (shorts ≈1.0). 9 `tp_below_cost` gate rejects, **all 9 tier2** — the 2× tier2 slippage (0.50%) alone exceeds the entire ATR TP distance (§SL/TP lines 99–119; §Q2 lines 187–193; §4.1③ lines 266–282). | **HIGH (structural)** | **D2 — IN, ships first (no B5 dependency).** Tier-aware long-book RR repair. **Investigation-first** (D2.0) to size the exact gap, then the smallest geometric change that lifts long-side RR toward ≥ ~1.4 **without** rebasing the structural SL (ADR 0045 §D1 line 52) and **without** weakening the `tp_below_cost` gate (which is working). |
 | D3 | Time-stop dead signals: 17/27 exits at the 15-min time-stop with +0.3% MFE — non-events, weak entries (§exit-dist lines 43–58; §3 lines 207–210). Analysis: this is a **selectivity** problem, not a stop/TP tuning problem. | **MEDIUM** | **D3 — INVESTIGATION ONLY (no code in M43).** D1's flow-route removes the dominant dead bucket (`catalyst_risk` = 11 of the 17 time-stops). Quantify the residual after D1, then decide a *future* milestone on `require_exhaustion_confirmation`. **Do not tune the time-stop.** |
 | D4 | tier2 dollar drag (tier2 −31.05, tier2 longs −27.42); 9 `tp_below_cost` rejects all tier2 (§tier-split lines 78–87; §4.1③). | LOW (known) | **Out (reinforces policy).** Consistent with locked tier-1-only live start. No exposure change. D2's RR fix must be **tier-aware** so it does not silently re-enable tier2 TPs. |
-| D5 | Shadow opens emit `simulated_fill: null` on the `!hasNextBarEntry` path — `evidence.nextBarOpenPrice === null`, i.e. **no signal-bar `tick_aggregates` at event time** (§cross-version lines 122–139; §4.1① lines 234–247). | **HIGH (improves B5 fidelity).** | **D5 = the M40 D2 unfinished residual** — the **signal-bar-tick timing gap** (M40 D2 §Fix mechanism (a)/(b), M40 archive lines 145–177). v3 is **already wired identically to v0/v1/v2** through the shared `runOneShadow → shouldSimulateFill → simulateShadowFill` path (`ShadowStrategyOrchestratorService.ts:245-247, 280-443`) — there is **no v3-specific wiring to add**. M40 chose the re-anchor fix (which fixed v1 wrong-side-of-stop censoring) but did **not** implement the timing fix for the `!hasNextBarEntry` path. **First action: confirm whether the post-M40 restart already reduced the `!hasNextBarEntry` rate** (the re-anchor may have unmasked the true count). If still material, the fix is a **bounded retry / backfill of signal-bar evidence**, shared across all versions (benefits v1/v2/v3 equally). |
+| D5 | Shadow opens emit `simulated_fill: null` on the `!hasNextBarEntry` path — `evidence.nextBarOpenPrice === null`, i.e. **no signal-bar `tick_aggregates` at event time** (§cross-version lines 122–139; §4.1① lines 234–247). | **HIGH finding, non-gating in M43** (improves B5 fidelity; no M43 deliverable blocks on B5). | **D5 = the M40 D2 unfinished residual** — the **signal-bar-tick timing gap** (M40 D2 §Fix mechanism (a)/(b), M40 archive lines 145–177). v3 is **already wired identically to v0/v1/v2** through the shared `runOneShadow → shouldSimulateFill → simulateShadowFill` path (`ShadowStrategyOrchestratorService.ts:245-247, 280-443`) — there is **no v3-specific wiring to add**. M40 chose the re-anchor fix (which fixed v1 wrong-side-of-stop censoring) but did **not** implement the timing fix for the `!hasNextBarEntry` path. **First action: confirm whether the post-M40 restart already reduced the `!hasNextBarEntry` rate** (the re-anchor may have unmasked the true count). If still material, the fix is a **bounded retry / backfill of signal-bar evidence**, shared across all versions (benefits v1/v2/v3 equally). |
 
 ---
 
@@ -149,12 +149,18 @@ comparison:
 1. The `catalyst_risk` bucket on the soak window (`from` ≥ recorded restart timestamp) holds **≥
    `MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN` (30)** closed, force-close-excluded events, **or** the operator
    explicitly signs off in the work-log that the original §4.1② n=14 window remains the decisive evidence and
-   the structural path-statistic (0/14 TP, MAE≈4×MFE) is unchanged in the extended window.
+   the structural path-statistic (0/14 TP, MAE≈4×MFE) is unchanged in the extended window. **The n=14 sign-off
+   must address regime** (the §"Sample-size discipline" / analysis §4.1④ ≥2-regime rule): the 0/14 evidence is
+   single-regime, so the sign-off either (a) records that no regime transition occurred in the extended window,
+   **or** (b) explicitly accepts single-regime risk on the conservative grounds that **0/N-never-reached-TP is a
+   structural path-fact, not a fitted parameter** — a `catalyst_risk` spike that never continues to the TP band
+   is a mechanism of the flow class, not a regime artefact, so the route-to-skip cannot increase risk in any
+   regime (it is subtractive). State which of (a)/(b) applies so the sign-off is complete.
 2. The bucket's directional signal is **unchanged in sign** in the extended window (still net-negative with no
    TP reach) — recompute and record. If the extended window contradicts §4.1② (the bucket turns net-positive
    with TP reaches), **do not ship D1a**; re-investigate.
 
-This floor is **evaluated and recorded in a `compareVersions` / `compareVersions`-style analysis artefact or a
+This floor is **evaluated and recorded in a `compareVersions`-style analysis artefact or a
 documented operator sign-off in the work-log** (per reviewer H1) — there is no harness surface that enforces
 soak criteria, so the record is the executable surface.
 
@@ -180,9 +186,15 @@ promote v3 it must build, with its own ADR entry and acceptance test:
 
   1. **B5 closed** (above).
   2. **The paired-bootstrap CI on ΔPnL (v3 − v2) excludes zero**, consistent with ADR 0019 criterion 5 and
-     `compareVersions` behavior — **not** a bare `v3 ≥ v2` point estimate. (At n≈27 the per-trade PnL SD ≈4.2
-     USDT gives SE(mean Δ) ≈ 0.81 USDT/trade, so a strict point inequality promotes on noise.) The comparison
-     is **paired on `event_id`**, never two independent aggregates.
+     `compareVersions` behavior — **not** a bare `v3 ≥ v2` point estimate. (At n≈27 the **v2 per-trade PnL** SD
+     ≈4.2 USDT gives SE ≈ 0.81 USDT/trade — an **order-of-magnitude proxy for orientation only**, not the CI
+     basis. 4.2 is the SD of the v2 realized per-trade series, **not** the SD of the paired delta
+     Δ = PnL_v3 − PnL_v2: on `trend_initiation` v3 and v2 run identical momentum, so those pairs are highly
+     correlated and SD(Δ) shrinks below 4.2 there, while the routed bucket has Δ = −PnL_v2 with full v2
+     variance — net SD(Δ) can fall either side of 4.2. The qualitative conclusion is unchanged: a strict point
+     inequality promotes on noise.) **The CI is computed by the paired bootstrap on the empirical paired-Δ
+     distribution — do NOT analytically derive it from σ_v2/√n.** The comparison is **paired on `event_id`**,
+     never two independent aggregates.
   3. **The win is mechanism-attributable, not noise.** Partition the shared `event_id` set into
      **{routed buckets: `catalyst_risk` + `forced_exhaustion`}** vs **{non-routed: `trend_initiation`}** and
      compute paired ΔPnL within each partition. Require **(a)** ΔPnL_routed > 0 and accounting for the
@@ -191,10 +203,15 @@ promote v3 it must build, with its own ADR entry and acceptance test:
      not edge, and **fails** the criterion.
   4. **Minimum paired-event count.** The routed-bucket paired, force-close-excluded event count is **≥
      `MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN` (30)** — below this, `compareVersions` suppresses `meanPnlDeltaUsd`
-     (`belowSampleFloor: true`) so criterion 2 is mechanically uncomputable. At the analysis fill pace
-     (≈26–27 closed/24h), reaching **30 paired (both-traded), force-close-excluded** events takes **≈1.2–1.3
-     soak days**, not 1.0 — budget accordingly. This is a **soak floor**, explicitly weaker than ADR 0019
-     criterion 6 and documented as such.
+     (`belowSampleFloor: true`) so criterion 2 is mechanically uncomputable. **Define "paired" before budgeting
+     (per reviewer QR2-3):** the day-budget below assumes **whole-book paired** — an `event_id` appearing in
+     **both versions'** `shadow_decisions` rows, regardless of whether either opened a position. At the analysis
+     close pace (≈26–27 closed/24h), reaching 30 whole-book paired, force-close-excluded events takes **≈1.2–1.3
+     soak days**, not 1.0 — budget accordingly. **If the operator instead requires 30 routed-bucket paired where
+     both versions actually opened** (note v3 skips `catalyst_risk`, so those are not "both-opened"), the pace is
+     lower and the budget is **materially longer** — recompute it from the both-opened pace in the routed buckets
+     before committing the window. This is a **soak floor**, explicitly weaker than ADR 0019 criterion 6 and
+     documented as such.
 
   If criterion 1 fails → B5 not closed → do not run the comparison. If 2–4 fail → do not promote. **Promotion
   on selectivity alone is forbidden** (analysis §5).
@@ -230,6 +247,16 @@ material):**
   subtractive** — a `trend_initiation` event is unaffected (still opens), only `catalyst_risk` flips to skip;
   (d) **live == backtest** for the same event (parity test), since v2 runs in the harness. `forced_exhaustion`
   remains a *follow* in v2 (NOT faded) — asserted, so D1a's scope is explicit.
+  > **Seam scoping (per reviewer LR2-1) — the "never re-classifies" claim is the live and backtest seams
+  > only.** On the **live** seam (`StrategyService` → `evaluate(event, snapshot)`) and the **backtest** seam the
+  > strategy consumes `event.flowType` already stamped by the orchestrator, so v2's branch reads the
+  > single-source-of-truth stamp and the parity test is **live == backtest**. The **shadow** seam **legitimately
+  > re-classifies per-shadow**: `runOneShadow` calls `classifyFlowType(event, shadow.params)` and builds
+  > `stampedEvent = { ...event, flowType }` (`ShadowStrategyOrchestratorService.ts:284,286`) by design (ADR 0003
+  > §4). `momentumCore.ts` therefore reads the **re-classified** `flow_type` in the shadow seam — this is
+  > correct, not a violation. **QA must NOT write a live == shadow parity test** for this branch; the parity
+  > assertion is live == backtest. A shadow `catalyst_risk → SKIP` is driven by the per-shadow classification,
+  > which may differ from the orchestrator stamp, and that is expected.
 - **A2a (paired-event floor recorded):** before D1a ships, the work-log records — via a `compareVersions`-style
   analysis artefact or a documented operator sign-off (per reviewer H1; there is no harness surface) — that the
   `catalyst_risk` bucket on `from ≥ recorded restart ts` meets the §D1a floor (≥30 force-close-excluded events
