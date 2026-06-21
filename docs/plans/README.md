@@ -6,6 +6,7 @@ Exactly **one** row may be `ACTIVE`. Status lives here only — not in plan fron
 
 | ID | Status | Summary (1 line) | ADRs | Modules |
 |----|--------|------------------|------|---------|
+| M43 | DRAFT | Strategy selectivity (flow-routing `catalyst_risk → skip` via v3 promotion or v2 fallback, B5-gated) + tier-aware long-book reward:risk geometry repair | 0019, 0003, 0045 | strategy, backtest, analysis |
 | M15 | ACTIVE | Cloud go-live & scaling (D1 blocker resolved; next go-live milestone) | — | go-live |
 | M40 | DONE | Halt exempt closes + shadow fill regression + stuck-position sweeper (D1 go-live unblock, D2 stop-side re-anchor, D4 orphaned-row sweep) | 0046, 0004, 0021, 0029 | execution, strategy, position |
 | M41 | DONE | Decisions feed outcome clarity (D1) + zero-fill audit `cashflow` fix (D2) | 0022, 0006 | dashboard, shared, execution, analysis |
