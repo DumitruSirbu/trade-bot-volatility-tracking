@@ -30,7 +30,7 @@
 
 | # | Finding (analysis ref) | Severity | M43 scope |
 |---|------------------------|----------|-----------|
-| D1 | `catalyst_risk` mis-route: v2 follows catalyst-driven spikes as if they were trends; 14/27 trades, **−39.29 USDT**, 0/14 ever reached the TP band, MAE ~4× MFE (§flow-split lines 63–75; §4.1② lines 249–264). `forced_exhaustion` is a **second mis-route in the same family** — v2 *follows* 4 trades the design says to *fade* (§2.1 lines 150–154). v3 (hybrid router) already routes `catalyst_risk → skip` and `forced_exhaustion → mean-reversion` (`V3HybridRouterStrategy.ts:11,14,26`). | **HIGH (structural)** | **D1 — SPLIT into two independent paths (see §D1 scope decision).** **D1a (the shipping path): v2 direct fallback** — add `catalyst_risk → skip` to v2's momentum entry (the proven −39 USDT bucket), gated only on a recomputed paired floor, NOT on v3 promotion. **D1b (v3 promotion) is DEFERRED out of M43** — the engine's promotion path (`PromotionService.promote` requires `status='draft'`; `PromotionGateService` runs only the 12-criterion OOS-backtest gate; the engine resolves the active strategy by `ACTIVE_STRATEGY_VERSION_ID` env-var PK, not by `status`) has **no soak-data promotion mechanism**, so v3 promotion cannot execute as M43 originally described. v3 promotion (which intentionally also flips direction on `forced_exhaustion`) requires its own milestone once the engine gains a soak-promotion path. |
+| D1 | `catalyst_risk` mis-route: v2 follows catalyst-driven spikes as if they were trends; 24h window 14/27 trades, **−39.29 USDT**, 0/14 ever reached the TP band, MAE ~4× MFE (§flow-split lines 63–75; §4.1② lines 249–264). **7-day evidence (live soak DB, opened ≥ now−7d, 2026-06-14→06-21): 104 closed trades, −141.76 USDT, 28.8% win rate, net-negative on all 4 tier×side cells; see §"7-day catalyst_risk evidence" for the TP-reach caveat.** `forced_exhaustion` is a **second mis-route in the same family** — v2 *follows* 4 trades the design says to *fade* (§2.1 lines 150–154). v3 (hybrid router) already routes `catalyst_risk → skip` and `forced_exhaustion → mean-reversion` (`V3HybridRouterStrategy.ts:11,14,26`). | **HIGH (structural)** | **D1 — SPLIT into two independent paths (see §D1 scope decision).** **D1a (the shipping path): v2 direct fallback** — add `catalyst_risk → skip` to v2's momentum entry (the proven −39 USDT bucket), gated only on a recomputed paired floor, NOT on v3 promotion. **D1b (v3 promotion) is DEFERRED out of M43** — the engine's promotion path (`PromotionService.promote` requires `status='draft'`; `PromotionGateService` runs only the 12-criterion OOS-backtest gate; the engine resolves the active strategy by `ACTIVE_STRATEGY_VERSION_ID` env-var PK, not by `status`) has **no soak-data promotion mechanism**, so v3 promotion cannot execute as M43 originally described. v3 promotion (which intentionally also flips direction on `forced_exhaustion`) requires its own milestone once the engine gains a soak-promotion path. |
 | D2 | Long-book reward:risk inverted: ATR TP ~0.9–1.6% vs VWAP structural SL ~2.5–3.4% → RR ≈ 0.5–0.6 on longs (shorts ≈1.0). 9 `tp_below_cost` gate rejects, **all 9 tier2** — the 2× tier2 slippage (0.50%) alone exceeds the entire ATR TP distance (§SL/TP lines 99–119; §Q2 lines 187–193; §4.1③ lines 266–282). | **HIGH (structural)** | **D2 — IN, ships first (no B5 dependency).** Tier-aware long-book RR repair. **Investigation-first** (D2.0) to size the exact gap, then the smallest geometric change that lifts long-side RR toward ≥ ~1.4 **without** rebasing the structural SL (ADR 0045 §D1 line 52) and **without** weakening the `tp_below_cost` gate (which is working). |
 | D3 | Time-stop dead signals: 17/27 exits at the 15-min time-stop with +0.3% MFE — non-events, weak entries (§exit-dist lines 43–58; §3 lines 207–210). Analysis: this is a **selectivity** problem, not a stop/TP tuning problem. | **MEDIUM** | **D3 — INVESTIGATION ONLY (no code in M43).** D1's flow-route removes the dominant dead bucket (`catalyst_risk` = 11 of the 17 time-stops). Quantify the residual after D1, then decide a *future* milestone on `require_exhaustion_confirmation`. **Do not tune the time-stop.** |
 | D4 | tier2 dollar drag (tier2 −31.05, tier2 longs −27.42); 9 `tp_below_cost` rejects all tier2 (§tier-split lines 78–87; §4.1③). | LOW (known) | **Out (reinforces policy).** Consistent with locked tier-1-only live start. No exposure change. D2's RR fix must be **tier-aware** so it does not silently re-enable tier2 TPs. |
@@ -123,6 +123,39 @@ why it belongs to **deferred D1b** (v3 already routes it correctly via the mean-
 **explicitly excluded from D1a**: D1a is subtractive-only and handles `catalyst_risk → skip` exclusively. The
 `forced_exhaustion` fade waits for the v3-promotion milestone.
 
+### 7-day `catalyst_risk` evidence (extended window — live soak DB, 2026-06-14 → 06-21)
+
+The §4.1② 24h read was n=14, single regime. The decision is now backed by a **7-day** window (positions
+`opened_at ≥ now() − 7 days`, `state='closed'`, `flow_type_at_entry='catalyst_risk'`). Headline numbers
+(reproducible against the live `positions` table):
+
+| Metric (7-day) | catalyst_risk | trend_initiation (control) |
+|---|---|---|
+| Closed trades | **104** | 29 |
+| Net realized PnL | **−141.76 USDT** | −13.56 USDT |
+| Win rate | **28.8%** (30/104) | 37.9% (11/29) |
+| Avg win / avg loss | +3.85 / −3.48 | — |
+
+Exit-reason split (catalyst_risk, 7-day): `time_stop` 60 (**−134.84**), `take_profit` 30 (+63.82),
+`stop_loss` 10 (**−69.96**), `reconciled_missing`/`force_close` 4 (−0.77). Tier×side: every cell is
+net-negative — tier2 long **−56.28**, tier1 short −48.93, tier1 long −22.56, tier2 short −13.98.
+
+Daily breakdown (opened-day, net PnL): 06-14 +4.48, 06-15 −51.37, 06-16 −17.63, 06-17 −11.24, 06-18 −40.23,
+06-19 +3.95, 06-20 −43.59, 06-21 +13.87 — **5 of 8 days net-negative; 3 small net-positive days**. The
+day-to-day sign flips (positive↔negative) span multiple market days, so the window covers **more than one
+regime**, not a single one.
+
+**Conclusion: the 7-day evidence STRENGTHENS the loss conclusion but REFINES the path-fact.** The
+negative-PnL signal is far larger and more robust than the 24h read (−141.76 over 104 trades vs −39.29 over
+14, net-negative across every tier×side cell and on 5 of 8 days). **However, the 24h "0/N never reached the
+TP band" claim does NOT hold over 7 days:** catalyst_risk recorded **30 `take_profit` exits (+63.82)** and
+**11/104 trades reached the 1.25% MFE band** (vs 0/14 at 24h). catalyst_risk *can* occasionally run to TP —
+it is a **negative-expectancy follow, not a never-reaches-TP path-fact.** The skip decision stands on
+expectancy (−141.76, 28.8% win rate, the time-stop bucket alone is −134.84), **not** on a 0/N absolute. The
+sign-off language below is updated to reflect this: the structural argument is now expectancy-based, and the
+single-regime/0-N exemption clause is **withdrawn** because (a) the window is no longer single-regime and
+(b) the 0/N absolute is falsified.
+
 ### D1a (SHIPS) — add `catalyst_risk → skip` to v2 directly
 
 Scope a **minimal additive skip** in the active v2 momentum path: when the orchestrator-stamped
@@ -141,24 +174,24 @@ Constraints:
 
 #### The paired-event floor that licenses D1a
 
-D1a is justified by the §4.1② path statistic — **0/14 `catalyst_risk` trades reached the TP band, MAE ≈4×
-MFE** — which is structural and **independent of where SL/TP sit** (lines 258–264), not a fitted PnL edge. The
-shipping condition is therefore a **sample-size sanity floor on the routed bucket itself**, not a v2↔v3
-comparison:
+D1a is justified by the routed bucket's **negative expectancy** over the extended window — **104 closed
+catalyst_risk trades, −141.76 USDT, 28.8% win rate, net-negative on every tier×side cell and on 5 of 8 days**
+(§"7-day catalyst_risk evidence"). This is the sample-size-robust justification: a subtractive route-to-skip
+on a flow class that loses across regimes cannot increase risk. **The earlier 0/14-never-reached-TP path-fact
+is superseded** — the 7-day window shows 30 TP exits / 11-of-104 TP-band reaches, so the route stands on
+expectancy, not on a 0/N absolute. The shipping condition is a floor on the routed bucket itself, not a
+v2↔v3 comparison:
 
-1. The `catalyst_risk` bucket on the soak window (`from` ≥ recorded restart timestamp) holds **≥
-   `MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN` (30)** closed, force-close-excluded events, **or** the operator
-   explicitly signs off in the work-log that the original §4.1② n=14 window remains the decisive evidence and
-   the structural path-statistic (0/14 TP, MAE≈4×MFE) is unchanged in the extended window. **The n=14 sign-off
-   must address regime** (the §"Sample-size discipline" / analysis §4.1④ ≥2-regime rule): the 0/14 evidence is
-   single-regime, so the sign-off either (a) records that no regime transition occurred in the extended window,
-   **or** (b) explicitly accepts single-regime risk on the conservative grounds that **0/N-never-reached-TP is a
-   structural path-fact, not a fitted parameter** — a `catalyst_risk` spike that never continues to the TP band
-   is a mechanism of the flow class, not a regime artefact, so the route-to-skip cannot increase risk in any
-   regime (it is subtractive). State which of (a)/(b) applies so the sign-off is complete.
-2. The bucket's directional signal is **unchanged in sign** in the extended window (still net-negative with no
-   TP reach) — recompute and record. If the extended window contradicts §4.1② (the bucket turns net-positive
-   with TP reaches), **do not ship D1a**; re-investigate.
+1. The `catalyst_risk` bucket on the **7-day soak window** (or any window with `from` ≥ recorded restart
+   timestamp) holds **≥ `MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN` (30)** closed, force-close-excluded events — the
+   extended window already satisfies this at **n=104** (vs the 24h n=14), so the n=14 single-regime sign-off
+   clause is **withdrawn**: the window now spans multiple regimes (the daily-sign breakdown flips across 8
+   days) and no longer needs a single-regime exemption. Record the extended-window count + net PnL in the
+   work-log as the licensing evidence.
+2. The bucket's directional signal is **net-negative** in the extended window — recompute and record (currently
+   −141.76 USDT, 28.8% win rate, time-stop bucket −134.84). **Do not require zero TP reaches** (the 7-day
+   window has 30 TP exits — catalyst_risk *can* run to TP; the case rests on expectancy). If the extended
+   window turns the bucket **net-positive**, **do not ship D1a**; re-investigate.
 
 This floor is **evaluated and recorded in a `compareVersions`-style analysis artefact or a
 documented operator sign-off in the work-log** (per reviewer H1) — there is no harness surface that enforces
@@ -259,8 +292,11 @@ material):**
   > which may differ from the orchestrator stamp, and that is expected.
 - **A2a (paired-event floor recorded):** before D1a ships, the work-log records — via a `compareVersions`-style
   analysis artefact or a documented operator sign-off (per reviewer H1; there is no harness surface) — that the
-  `catalyst_risk` bucket on `from ≥ recorded restart ts` meets the §D1a floor (≥30 force-close-excluded events
-  **or** signed-off n=14 §4.1② decisiveness) **and** the bucket's net-negative / no-TP-reach sign is unchanged.
+  `catalyst_risk` bucket on `from ≥ recorded restart ts` meets the §D1a floor (≥30 force-close-excluded events;
+  satisfied at **n=104** on the 7-day window, §"7-day catalyst_risk evidence") **and** the bucket's
+  **net-negative expectancy** sign is unchanged (−141.76 USDT, 28.8% win rate on the 7-day window). The n=14
+  single-regime sign-off exemption is withdrawn; the no-TP-reach condition is dropped (the 7-day window has 30
+  TP exits — the route stands on expectancy, not a 0/N path-fact).
 - **A3a (determinism + decimal):** the routing decision is pure — no `Date.now()`/`Math.random()`/I/O; depends
   only on the stamped `flow_type` and event fields; reproducible live == backtest.
 
@@ -509,13 +545,15 @@ promotion) is **deferred** — recorded, not built. Keep each wave ≤5 items/fi
    0045 needs a touch (after D2.0); (b) confirm D1a is the shipping path and **record the D1b deferral + its
    ADR prerequisites** (soak-promotion pathway ADR, ADR 0019 amendment, ADR 0003 amendment) in the
    milestone-log queue — **none written in M43**; (c) confirm the D1a paired-event floor decision (≥30
-   force-close-excluded **or** signed-off n=14). Architect on every contract touch.
+   force-close-excluded; met at n=104 on the 7-day window — the n=14 single-regime sign-off clause is
+   withdrawn). Architect on every contract touch.
 2. **Serial (engine, investigation ONLY — no fix code):**
    - **D2.0** — confirm per-tier realized long RR + exact cost floor against the soak DB; reconcile the §4.1③
      1.5× reconstruction vs live 2.0× and recompute the shortfall at 2.0×; recompute the RR floor from the
      post-route win rate; characterize ATR-extreme TP behavior.
    - **D1a floor** — recompute the `catalyst_risk` bucket on `from ≥ recorded restart ts`; record the floor
-     decision + the unchanged net-negative/no-TP-reach sign in the work-log.
+     decision + the unchanged net-negative expectancy sign in the work-log (the 7-day window already gives
+     n=104 / −141.76 USDT; the no-TP-reach condition is dropped per §"7-day catalyst_risk evidence").
    - **D5 measurement** — confirm whether the post-restart `!hasNextBarEntry` rate is still material on
      `shadow_decisions`. Record B5 status. **No v3-specific wiring** — v3 already routes through the shared
      path; the fix (if needed) is the M40 D2 §Fix mechanism (a)/(b) backfill on the shared orchestrator.
