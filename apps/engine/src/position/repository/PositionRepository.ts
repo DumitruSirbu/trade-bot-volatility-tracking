@@ -188,6 +188,38 @@ export class PositionRepository extends BaseRepository<PositionEntity> implement
         }));
     }
 
+    // Wave 2 — per (strategy_version_id, UTC date) daily aggregate over CLOSED positions in
+    // [since, now] for `GET /v1/performance/daily-series`. Sorted by strategyVersionId ASC then
+    // date ASC so the mapper can compute running cumulative PnL in a single forward pass without
+    // re-sorting. The date bucket is computed in UTC (AT TIME ZONE 'UTC') so day boundaries match
+    // the rest of the read API's UTC-midnight windowing rather than the DB session timezone.
+    async aggregateDailyByVersion(
+        since: Date,
+    ): Promise<Array<{ strategyVersionId: number; date: string; trades: number; winCount: number; netPnlUsd: string }>> {
+        const rows = await this.repository
+            .createQueryBuilder('p')
+            .select('p.strategy_version_id', 'strategyVersionId')
+            .addSelect("TO_CHAR(p.closed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')", 'date')
+            .addSelect('COUNT(*)', 'trades')
+            .addSelect('COUNT(*) FILTER (WHERE p.realized_pnl > 0)', 'winCount')
+            .addSelect('COALESCE(SUM(p.realized_pnl), 0)', 'netPnlUsd')
+            .where('p.state = :state', { state: PositionStateEnum.CLOSED })
+            .andWhere('p.closed_at >= :since', { since })
+            .groupBy('p.strategy_version_id')
+            .addGroupBy("TO_CHAR(p.closed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')")
+            .orderBy('p.strategy_version_id', 'ASC')
+            .addOrderBy('date', 'ASC')
+            .getRawMany<{ strategyVersionId: string; date: string; trades: string; winCount: string; netPnlUsd: string }>();
+
+        return rows.map((row) => ({
+            strategyVersionId: Number(row.strategyVersionId),
+            date: row.date,
+            trades: Number(row.trades),
+            winCount: Number(row.winCount),
+            netPnlUsd: String(row.netPnlUsd),
+        }));
+    }
+
     // M5: persist a fresh OPEN position from the entry-fill outcome. Returns the saved row
     // (with assigned id) so the executor can arm SL/TP + protection against the real positionId.
     async createOpen(entityLike: DeepPartial<PositionEntity>): Promise<PositionEntity> {

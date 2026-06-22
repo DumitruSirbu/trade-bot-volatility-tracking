@@ -88,6 +88,32 @@ export class ShadowDecisionRepository extends BaseRepository<ShadowDecisionEntit
             .getMany();
     }
 
+    // Wave 2 — completed shadow trades in [since, now] for `GET /v1/performance/shadow-summary`.
+    // Restricted to `action = 'open'` rows (open decisions carry the entry/exit fill pair) whose
+    // simulated fill exists, has an exitPrice (the trade actually closed, not just entered), and
+    // was not missed. Per-version PnL is computed app-side from these rows — JSONB decimal
+    // arithmetic in SQL is both fragile (text→numeric casts) and float-lossy, so the mapper does
+    // the Money math. Ordered by shadowVersion then createdAt so the mapper groups in a single pass.
+    async findClosedShadowTrades(since: Date): Promise<ShadowDecisionEntity[]> {
+        return (
+            this.repository
+                .createQueryBuilder('sd')
+                .where('sd.action = :action', { action: 'open' })
+                .andWhere('sd.createdAt >= :since', { since })
+                .andWhere('sd.simulated_fill IS NOT NULL')
+                .andWhere("sd.simulated_fill->>'exitPrice' IS NOT NULL")
+                // A missing `missed` key (legacy rows) is treated as a real fill: JSONB `->>` returns
+                // SQL NULL when absent, which `= 'false'` would silently drop. COALESCE keeps them.
+                .andWhere("COALESCE(sd.simulated_fill->>'missed', 'false') = 'false'")
+                // qty IS NOT NULL fences legacy rows that produce phantom zero-PnL completed trades —
+                // they inflate tradeCount and dilute win rate.
+                .andWhere('sd.qty IS NOT NULL')
+                .orderBy('sd.shadowVersion', 'ASC')
+                .addOrderBy('sd.createdAt', 'ASC')
+                .getMany()
+        );
+    }
+
     // Cold-restart ledger rebuild path (ADR 0029 §2.1.2). The virtual ledger
     // is in-memory; on engine restart W2 replays these rows in event_id order
     // (ADR 0029 cursor) so replay is deterministic when two events share a

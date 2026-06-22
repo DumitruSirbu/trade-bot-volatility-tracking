@@ -40,7 +40,7 @@ const invalidateEverything = (queryClient: ReturnType<typeof useQueryClient>): v
     queryClient.invalidateQueries({ queryKey: ['decisions', 'recent'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.accountEquity() });
     queryClient.invalidateQueries({ queryKey: queryKeys.riskState() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.performanceByVersion() });
+    queryClient.invalidateQueries({ queryKey: ['performance', 'by-version'] });
 };
 
 export const LiveWsProvider = ({ children }: { children: React.ReactNode }): React.ReactElement => {
