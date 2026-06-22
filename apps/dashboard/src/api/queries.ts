@@ -3,11 +3,13 @@ import {
     READ_API_PATHS,
     type IAccountEquityView,
     type IClosedPositionView,
+    type IDailyPerformanceRow,
     type IDecisionView,
     type IOpenPositionView,
     type IPaginated,
     type IPerformanceByVersionView,
     type IRiskStateView,
+    type IShadowPerformanceSummary,
 } from '@bot/shared';
 
 import { apiClient } from '@/api/apiClient';
@@ -32,6 +34,7 @@ const STALE_GUTTER_MS = 1_000;
 // every render but still sees server-side merges if they return after a pause.
 const STALE_TIME_CLOSED_MS = 60_000;
 const STALE_TIME_DECISIONS_PAGE_MS = 60_000;
+const STALE_TIME_PERFORMANCE_SERIES_MS = 60_000;
 
 // Server-side page size for cursor-paginated decision reads. The engine
 // defaults to this when `pageSize` is omitted; the dashboard sends it
@@ -54,7 +57,9 @@ export const queryKeys = {
     decisionsRecentPrefix: () => ['decisions', 'recent'] as const,
     accountEquity: () => ['account', 'equity'] as const,
     riskState: () => ['risk', 'state'] as const,
-    performanceByVersion: () => ['performance', 'by-version'] as const,
+    performanceByVersion: (windowDays: number) => ['performance', 'by-version', windowDays] as const,
+    performanceDailySeries: (windowDays: number) => ['performance', 'daily-series', windowDays] as const,
+    shadowPerformanceSummary: (windowDays: number) => ['performance', 'shadow-summary', windowDays] as const,
 } as const;
 
 const withCursor = (path: string, cursor: string | null): string => {
@@ -151,14 +156,36 @@ export const useRiskState = (): UseQueryResult<IRiskStateView> => {
     });
 };
 
-export const usePerformanceByVersion = (): UseQueryResult<IPerformanceByVersionView[]> => {
+export const usePerformanceByVersion = (windowDays: number): UseQueryResult<IPerformanceByVersionView[]> => {
     const { isAuthenticated } = useAuth();
 
     return useQuery({
-        queryKey: queryKeys.performanceByVersion(),
-        queryFn: ({ signal }) => apiClient.get<IPerformanceByVersionView[]>(READ_API_PATHS.performanceByVersion, { signal }),
+        queryKey: queryKeys.performanceByVersion(windowDays),
+        queryFn: ({ signal }) => apiClient.get<IPerformanceByVersionView[]>(`${READ_API_PATHS.performanceByVersion}?windowDays=${windowDays}`, { signal }),
         refetchInterval: POLL_INTERVAL_PERFORMANCE_MS,
         staleTime: POLL_INTERVAL_PERFORMANCE_MS - STALE_GUTTER_MS,
+        enabled: isAuthenticated,
+    });
+};
+
+export const usePerformanceDailySeries = (windowDays: number): UseQueryResult<IDailyPerformanceRow[]> => {
+    const { isAuthenticated } = useAuth();
+
+    return useQuery({
+        queryKey: queryKeys.performanceDailySeries(windowDays),
+        queryFn: ({ signal }) => apiClient.get<IDailyPerformanceRow[]>(`${READ_API_PATHS.performanceDailySeries}?windowDays=${windowDays}`, { signal }),
+        staleTime: STALE_TIME_PERFORMANCE_SERIES_MS,
+        enabled: isAuthenticated,
+    });
+};
+
+export const useShadowPerformanceSummary = (windowDays: number): UseQueryResult<IShadowPerformanceSummary[]> => {
+    const { isAuthenticated } = useAuth();
+
+    return useQuery({
+        queryKey: queryKeys.shadowPerformanceSummary(windowDays),
+        queryFn: ({ signal }) => apiClient.get<IShadowPerformanceSummary[]>(`${READ_API_PATHS.performanceShadowSummary}?windowDays=${windowDays}`, { signal }),
+        staleTime: STALE_TIME_PERFORMANCE_SERIES_MS,
         enabled: isAuthenticated,
     });
 };

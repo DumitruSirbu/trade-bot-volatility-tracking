@@ -7,6 +7,7 @@ import { AccountSnapshotRepository } from '../../src/position/repository/Account
 import { RiskStateRepository } from '../../src/risk/repository/RiskStateRepository';
 import { DecisionRepository } from '../../src/strategy/repository/DecisionRepository';
 import { StrategyVersionRepository } from '../../src/strategy/repository/StrategyVersionRepository';
+import { ShadowDecisionRepository } from '../../src/strategy/repository/ShadowDecisionRepository';
 import { PositionsController } from '../../src/read-api/controllers/PositionsController';
 import { MetricsController } from '../../src/read-api/controllers/MetricsController';
 import { CursorCodec } from '../../src/read-api/pagination/CursorCodec';
@@ -150,6 +151,7 @@ function buildHarness() {
         snapshots as unknown as AccountSnapshotRepository,
         riskStates as unknown as RiskStateRepository,
         versions as unknown as StrategyVersionRepository,
+        null as unknown as ShadowDecisionRepository,
         cursors,
     );
 

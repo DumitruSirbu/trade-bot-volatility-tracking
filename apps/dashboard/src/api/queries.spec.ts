@@ -52,7 +52,7 @@ describe('queryKeys — stable references (referential equivalence)', () => {
             queryKeys.decisionsRecent(null),
             queryKeys.accountEquity(),
             queryKeys.riskState(),
-            queryKeys.performanceByVersion(),
+            queryKeys.performanceByVersion(30),
         ];
 
         // No two keys should be equal.

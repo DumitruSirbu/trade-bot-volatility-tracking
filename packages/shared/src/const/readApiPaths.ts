@@ -17,5 +17,7 @@ export const READ_API_PATHS = {
     decisionsRecent: `${READ_API_BASE}/decisions`,
     accountEquity: `${READ_API_BASE}/account/equity`,
     performanceByVersion: `${READ_API_BASE}/performance/by-version`,
+    performanceDailySeries: `${READ_API_BASE}/performance/daily-series`,
+    performanceShadowSummary: `${READ_API_BASE}/performance/shadow-summary`,
     riskState: `${READ_API_BASE}/risk/state`,
 } as const;

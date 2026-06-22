@@ -2,11 +2,13 @@ import {
     FlowTypeEnum,
     IAccountEquityView,
     IClosedPositionView,
+    IDailyPerformanceRow,
     IDecisionView,
     IOpenPositionView,
     IPerformanceByVersionView,
     IPositionDetailView,
     IRiskStateView,
+    IShadowPerformanceSummary,
     mapDecisionOutcome,
     PositionSideEnum,
     PositionSlotEnum,
@@ -18,7 +20,7 @@ import {
 import { Money, MoneyValue } from '../../common/utils/money';
 import { AccountSnapshotEntity, PositionEntity } from '../../position/entity';
 import { RiskStateEntity } from '../../risk/entity';
-import { DecisionEntity } from '../../strategy/entity';
+import { DecisionEntity, ShadowDecisionEntity } from '../../strategy/entity';
 import { StrategyVersionEntity } from '../../strategy/entity/StrategyVersionEntity';
 
 // M9 W4 (ADR 0022 §2.3-§2.4). Pure functions: entity → least-disclosure DTO.
@@ -271,8 +273,194 @@ export function mapPerformanceByVersion(row: IPerformanceAggregateRow, version: 
 }
 
 // ---------------------------------------------------------------------------
+// Daily performance series
+// ---------------------------------------------------------------------------
+
+interface IDailyPerformanceAggregateRow {
+    readonly strategyVersionId: number;
+    readonly date: string;
+    readonly trades: number;
+    readonly winCount: number;
+    readonly netPnlUsd: string;
+}
+
+// Wave 2 — flatten per-day-per-version aggregates into IDailyPerformanceRow[], stamping a running
+// cumulative PnL per version. The rows arrive already sorted (strategyVersionId ASC, date ASC) from
+// `aggregateDailyByVersion`, so a single forward pass accumulates `cumulativePnlUsd` correctly
+// without re-sorting. A version absent from the map (out-of-band deletion) is skipped — the same
+// silent-skip policy `getPerformanceByVersion` applies.
+export function mapDailyPerformanceRows(
+    rows: ReadonlyArray<IDailyPerformanceAggregateRow>,
+    versions: ReadonlyMap<number, StrategyVersionEntity>,
+): IDailyPerformanceRow[] {
+    const cumulativeByVersion = new Map<number, MoneyValue>();
+    const mapped: IDailyPerformanceRow[] = [];
+
+    for (const row of rows) {
+        const version = versions.get(row.strategyVersionId);
+
+        if (version === undefined) {
+            continue;
+        }
+
+        const dayPnl = new Money(row.netPnlUsd);
+        const runningTotal = (cumulativeByVersion.get(row.strategyVersionId) ?? new Money(0)).plus(dayPnl);
+        cumulativeByVersion.set(row.strategyVersionId, runningTotal);
+
+        mapped.push({
+            strategyVersionId: String(row.strategyVersionId),
+            label: `${version.name}@v${version.version}`,
+            date: row.date,
+            trades: row.trades,
+            winCount: row.winCount,
+            winRate: computeRateString(row.winCount, row.trades),
+            dayPnlUsd: formatMoneyString(dayPnl),
+            cumulativePnlUsd: formatMoneyString(runningTotal),
+        });
+    }
+
+    mapped.sort((left, right) => compareByLabelThenDate(left, right));
+
+    return mapped;
+}
+
+function compareByLabelThenDate(left: IDailyPerformanceRow, right: IDailyPerformanceRow): number {
+    const byLabel = left.label.localeCompare(right.label);
+
+    if (byLabel !== 0) {
+        return byLabel;
+    }
+
+    return left.date.localeCompare(right.date);
+}
+
+// ---------------------------------------------------------------------------
+// Shadow performance summary
+// ---------------------------------------------------------------------------
+
+interface IShadowTradePnl {
+    readonly grossPnl: MoneyValue;
+    readonly netPnl: MoneyValue;
+    readonly forceClose: boolean;
+}
+
+interface IShadowVersionAccumulator {
+    tradeCount: number;
+    winCount: number;
+    forceCloseCount: number;
+    netPnl: MoneyValue;
+    strategyVersionId: number;
+}
+
+// Wave 2 — collapse completed shadow trades into one IShadowPerformanceSummary per shadowVersion.
+// PnL is computed per entity from the simulated-fill JSONB via Money (no float arithmetic). `missRate`
+// is left null: it needs the open-decision denominator from a separate query out of scope for this
+// endpoint. Win is defined on NET PnL > 0 (gross minus both fee legs) so a fee-eroded "winner" does
+// not inflate the win rate.
+export function mapShadowPerformanceSummary(
+    entities: ReadonlyArray<ShadowDecisionEntity>,
+    versions: ReadonlyMap<number, StrategyVersionEntity>,
+    windowDays: number,
+): IShadowPerformanceSummary[] {
+    const accumulatorByVersion = new Map<string, IShadowVersionAccumulator>();
+
+    for (const entity of entities) {
+        const accumulator = accumulatorByVersion.get(entity.shadowVersion) ?? createShadowAccumulator(entity.strategyVersionId);
+        applyShadowTrade(accumulator, computeShadowTradePnl(entity));
+        accumulatorByVersion.set(entity.shadowVersion, accumulator);
+    }
+
+    const summaries: IShadowPerformanceSummary[] = [];
+
+    for (const [shadowVersion, accumulator] of accumulatorByVersion) {
+        summaries.push(toShadowSummary(shadowVersion, accumulator, versions, windowDays));
+    }
+
+    summaries.sort((left, right) => left.shadowVersion.localeCompare(right.shadowVersion));
+
+    return summaries;
+}
+
+function applyShadowTrade(accumulator: IShadowVersionAccumulator, pnl: IShadowTradePnl): void {
+    accumulator.tradeCount += 1;
+    accumulator.netPnl = accumulator.netPnl.plus(pnl.netPnl);
+
+    if (pnl.netPnl.greaterThan(0)) {
+        accumulator.winCount += 1;
+    }
+
+    if (pnl.forceClose) {
+        accumulator.forceCloseCount += 1;
+    }
+}
+
+function createShadowAccumulator(strategyVersionId: number): IShadowVersionAccumulator {
+    return {
+        tradeCount: 0,
+        winCount: 0,
+        forceCloseCount: 0,
+        netPnl: new Money(0),
+        strategyVersionId,
+    };
+}
+
+function computeShadowTradePnl(entity: ShadowDecisionEntity): IShadowTradePnl {
+    const fill = entity.simulatedFill;
+    const entryPrice = new Money(fill?.entryPrice ?? '0');
+    const exitPrice = new Money(fill?.exitPrice ?? '0');
+    const qty = new Money(entity.qty ?? '0');
+    const directionSign = entity.tradeSide === PositionSideEnum.LONG ? 1 : -1;
+
+    const grossPnl = exitPrice.minus(entryPrice).times(qty).times(directionSign);
+    const feeEntry = new Money(fill?.feeUsdtEntry ?? '0');
+    const feeExit = new Money(fill?.feeUsdtExit ?? '0');
+    // `entryPrice` holds the clean reference price (nextBarOpenPrice); entry slippage is carried
+    // separately as a signed pct. Without this the trade reads optimistic by the slippage cost.
+    // Cost = |slippagePct| / 100 × entryNotional (BacktestPnLLedger.addSlippage convention).
+    const slippageCost = new Money(fill?.slippageEntryPct ?? '0').abs().div(100).times(entryPrice).times(qty);
+    const netPnl = grossPnl.minus(feeEntry).minus(feeExit).minus(slippageCost);
+
+    return { grossPnl, netPnl, forceClose: fill?.forceClose === true };
+}
+
+function toShadowSummary(
+    shadowVersion: string,
+    accumulator: IShadowVersionAccumulator,
+    versions: ReadonlyMap<number, StrategyVersionEntity>,
+    windowDays: number,
+): IShadowPerformanceSummary {
+    const version = versions.get(accumulator.strategyVersionId);
+    const strategyVersionId = version === undefined ? '0' : String(accumulator.strategyVersionId);
+    const label = version === undefined ? shadowVersion : `${version.name}@v${version.version}`;
+
+    return {
+        shadowVersion,
+        strategyVersionId,
+        label,
+        windowDays,
+        tradeCount: accumulator.tradeCount,
+        winCount: accumulator.winCount,
+        winRate: computeRateString(accumulator.winCount, accumulator.tradeCount),
+        netPnlUsd: formatMoneyString(accumulator.netPnl),
+        forceCloseFraction: computeRateString(accumulator.forceCloseCount, accumulator.tradeCount),
+        // miss rate needs the open-decision denominator from a separate query — null until wired.
+        missRate: null,
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// Null when the denominator is 0 so consumers distinguish "no sample" from a real 0% rate (the
+// `winRate: string | null` contract from ADR 0022 §2.3.1, reused for force-close fraction).
+function computeRateString(numerator: number, denominator: number): string | null {
+    if (denominator === 0) {
+        return null;
+    }
+
+    return new Money(numerator).div(denominator).toFixed(6);
+}
 
 function formatMoneyString(value: MoneyValue): string {
     return value.toFixed();
@@ -420,6 +608,30 @@ export const PERFORMANCE_BY_VERSION_VIEW_KEYS: ReadonlyArray<keyof IPerformanceB
     'sharpe',
     'sortino',
     'expectancyPerUnitRisk',
+    'forceCloseFraction',
+    'missRate',
+];
+
+export const DAILY_PERFORMANCE_ROW_KEYS: ReadonlyArray<keyof IDailyPerformanceRow> = [
+    'strategyVersionId',
+    'label',
+    'date',
+    'trades',
+    'winCount',
+    'winRate',
+    'dayPnlUsd',
+    'cumulativePnlUsd',
+];
+
+export const SHADOW_PERFORMANCE_SUMMARY_KEYS: ReadonlyArray<keyof IShadowPerformanceSummary> = [
+    'shadowVersion',
+    'strategyVersionId',
+    'label',
+    'windowDays',
+    'tradeCount',
+    'winCount',
+    'winRate',
+    'netPnlUsd',
     'forceCloseFraction',
     'missRate',
 ];

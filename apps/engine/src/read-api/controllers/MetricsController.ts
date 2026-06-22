@@ -1,4 +1,14 @@
-import { AuthScopeEnum, IAccountEquityView, IDecisionView, IPaginated, IPerformanceByVersionView, IRiskStateView, SignalActionEnum } from '@bot/shared';
+import {
+    AuthScopeEnum,
+    IAccountEquityView,
+    IDailyPerformanceRow,
+    IDecisionView,
+    IPaginated,
+    IPerformanceByVersionView,
+    IRiskStateView,
+    IShadowPerformanceSummary,
+    SignalActionEnum,
+} from '@bot/shared';
 import { Controller, Get, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 
 import { AuthGuard, RequiredScopes } from '../../auth/AuthGuard';
@@ -6,11 +16,20 @@ import { MS_PER_DAY } from '../../common/const/timeConsts';
 import { AccountSnapshotRepository } from '../../position/repository/AccountSnapshotRepository';
 import { PositionRepository } from '../../position/repository/PositionRepository';
 import { RiskStateRepository } from '../../risk/repository/RiskStateRepository';
+import { StrategyVersionEntity } from '../../strategy/entity/StrategyVersionEntity';
 import { DecisionRepository } from '../../strategy/repository/DecisionRepository';
+import { ShadowDecisionRepository } from '../../strategy/repository/ShadowDecisionRepository';
 import { StrategyVersionRepository } from '../../strategy/repository/StrategyVersionRepository';
 import { ListDecisionsQueryDto } from '../dto/ListDecisionsQueryDto';
 import { NoStoreCacheInterceptor } from '../interceptor/NoStoreCacheInterceptor';
-import { mapAccountEquity, mapDecision, mapPerformanceByVersion, mapRiskState } from '../mappers/readApiMappers';
+import {
+    mapAccountEquity,
+    mapDailyPerformanceRows,
+    mapDecision,
+    mapPerformanceByVersion,
+    mapRiskState,
+    mapShadowPerformanceSummary,
+} from '../mappers/readApiMappers';
 import { CursorCodec } from '../pagination/CursorCodec';
 
 // M9 W4 (ADR 0022 §2.2). Aggregated read API endpoints — decisions, account
@@ -35,6 +54,7 @@ export class MetricsController {
         private readonly snapshots: AccountSnapshotRepository,
         private readonly riskStates: RiskStateRepository,
         private readonly strategyVersions: StrategyVersionRepository,
+        private readonly shadowDecisions: ShadowDecisionRepository,
         private readonly cursors: CursorCodec,
     ) {}
 
@@ -76,14 +96,7 @@ export class MetricsController {
     @Get('performance/by-version')
     async getPerformanceByVersion(@Query('windowDays') rawWindow?: string): Promise<IPerformanceByVersionView[]> {
         const windowDays = clampWindow(rawWindow);
-        // M9 R2 wave B (Q9): floor `now` to UTC midnight before subtracting the
-        // window so the sample composition is stable across a UTC day rather
-        // than drifting hour-by-hour with wall-clock. Two requests in the same
-        // UTC day return the same `since` boundary, which keeps cached metric
-        // panels and back-to-back operator refreshes coherent.
-        const todayUtcMidnight = new Date(Date.now()); // Date.now() so tests can mock wall-clock
-        todayUtcMidnight.setUTCHours(0, 0, 0, 0);
-        const since = new Date(todayUtcMidnight.getTime() - windowDays * MS_PER_DAY);
+        const since = windowSince(windowDays);
 
         const rows = await this.positions.aggregatePerformanceByVersion(since);
 
@@ -113,6 +126,70 @@ export class MetricsController {
 
         return enriched;
     }
+
+    @Get('performance/daily-series')
+    async getDailyPerformanceSeries(@Query('windowDays') rawWindow?: string): Promise<IDailyPerformanceRow[]> {
+        const windowDays = clampWindow(rawWindow);
+        const since = windowSince(windowDays);
+
+        const rows = await this.positions.aggregateDailyByVersion(since);
+
+        if (rows.length === 0) {
+            return [];
+        }
+
+        const versionIds = rows.map((row) => row.strategyVersionId);
+        const versionMap = await this.hydrateVersions(versionIds);
+
+        return mapDailyPerformanceRows(rows, versionMap);
+    }
+
+    @Get('performance/shadow-summary')
+    async getShadowPerformanceSummary(@Query('windowDays') rawWindow?: string): Promise<IShadowPerformanceSummary[]> {
+        const windowDays = clampWindow(rawWindow);
+        const since = windowSince(windowDays);
+
+        const trades = await this.shadowDecisions.findClosedShadowTrades(since);
+
+        if (trades.length === 0) {
+            return [];
+        }
+
+        const versionIds = trades.map((trade) => trade.strategyVersionId);
+        const versionMap = await this.hydrateVersions(versionIds);
+
+        return mapShadowPerformanceSummary(trades, versionMap, windowDays);
+    }
+
+    // Resolve the distinct strategy-version ids in a result set into entities once per request.
+    // The typical id cardinality is 4 (v0–v3) so a per-id findById after de-duplication is
+    // acceptable; if this grows past ~20 we promote to a `findByIds` on the repository.
+    private async hydrateVersions(strategyVersionIds: ReadonlyArray<number>): Promise<Map<number, StrategyVersionEntity>> {
+        const uniqueIds = [...new Set(strategyVersionIds)];
+        const results = await Promise.all(uniqueIds.map((id) => this.strategyVersions.findById(id)));
+        const versionMap = new Map<number, StrategyVersionEntity>();
+
+        for (let i = 0; i < uniqueIds.length; i++) {
+            const version = results[i];
+
+            if (version !== null) {
+                versionMap.set(uniqueIds[i], version);
+            }
+        }
+
+        return versionMap;
+    }
+}
+
+// M9 R2 wave B (Q9): floor `now` to UTC midnight before subtracting the window so the sample
+// composition is stable across a UTC day rather than drifting hour-by-hour with wall-clock. Two
+// requests in the same UTC day return the same `since` boundary, which keeps cached metric panels
+// and back-to-back operator refreshes coherent. `Date.now()` so tests can mock wall-clock.
+function windowSince(windowDays: number): Date {
+    const todayUtcMidnight = new Date(Date.now());
+    todayUtcMidnight.setUTCHours(0, 0, 0, 0);
+
+    return new Date(todayUtcMidnight.getTime() - windowDays * MS_PER_DAY);
 }
 
 function normalizeFilter(raw: string | undefined): string | undefined {
