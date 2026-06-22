@@ -41,8 +41,30 @@ export const OI_NOT_RISING_THRESHOLD_PCT = 0.0;
 // above idiosyncrasy_min_score AND OI is rising AND volume is elevated, v1 refuses to fade.
 export const OI_RISING_THRESHOLD_PCT = 0.0;
 
-// --- v2 momentum exit (M3 brief: TP = entry ± atr14 × 2.0, wider than reversion) ---
+// --- v2/v3 momentum exit geometry (M3 brief, M43 D2) ---
+// Governs the SHORT side only. The LONG side uses the wider, cost-floor-anchored geometry
+// below (M43 D2) — its VWAP structural stop sits the full session-deviation distance away,
+// so a symmetric 2.0× target left long-side RR at ~0.5 (M43 D2 architect adjudication).
 export const MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER = 2.0;
+
+// --- M43 D2 — long-book reward:risk repair (architect adjudication 2026-06-21) ---
+
+// LONG-side ATR TP multiplier. Distinct from MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER (2.0,
+// shorts): 3.5 scales the long TP distance by 1.75×, lifting median tier1 long RR from
+// ~0.45 toward ~0.78 without driving median trades into the 15-min time-stop tail.
+export const MOMENTUM_LONG_TAKE_PROFIT_ATR_MULTIPLIER = 3.5;
+
+// Cost-floor-leg safety margin (fraction of entry, 0.10%). The long TP is anchored at
+// max(atr×k, costFloor + margin); this margin keeps the floor leg strictly above the
+// risk gate's roundTripCostDistance so a floor-anchored long TP never sits at-or-below cost.
+export const MOMENTUM_LONG_TP_COST_FLOOR_MARGIN_PCT = 0.001;
+
+// Round-trip taker fee rate (0.04%) used by the long-TP cost-floor anchor.
+// Mirrors RISK_TAKER_FEE_RATE in riskConsts — kept here to avoid a strategy→risk import.
+// Held as a decimal-as-string per the money-is-Decimal invariant.
+// Same value as SHADOW_TAKER_FEE_PCT below (the shadow-close PnL fee leg); the two are kept
+// separate because a merge would cascade the rename across 5+ consumer/test files.
+export const MOMENTUM_TAKER_FEE_RATE = '0.0004';
 
 // Machine-readable entry-thesis reason codes stamped on an OPEN signal's reason field
 // (skips use the SkipReasonEnum value instead). Queryable in M8 alongside skip reasons.
@@ -103,8 +125,16 @@ export const SHADOW_FILL_DEFAULT_POLICY = 'marketable_limit_ioc';
 // dimensionally comparable for the ADR 0018 paired bootstrap.
 // Held as a decimal-as-string per the project's money-is-Decimal invariant —
 // callers wrap in `new Decimal(SHADOW_TAKER_FEE_PCT)` for arithmetic.
+// Same value as MOMENTUM_TAKER_FEE_RATE above (the long-TP cost-floor anchor); kept separate
+// because a merge would cascade the rename across 5+ consumer/test files.
 export const SHADOW_TAKER_FEE_PCT = '0.0004';
 
 // Default active-positions count stamped onto the market snapshot before the gate
 // evaluates; the real count is threaded in post-evaluate via stampGateVerdict.
 export const ACTIVE_POSITIONS_COUNT_DEFAULT = 0;
+
+// Virtual positions older than this during cold-restart ledger rebuild are
+// phantom slots — the deferred exit walker never resolved their close. Purged
+// at 'force_close' (exempt from consecutive-loss streak) so the slot is freed.
+// 24 h is a safe floor: the longest configured time-stop is a few hours.
+export const SHADOW_STALE_POSITION_MAX_AGE_MS = 24 * 60 * 60 * 1_000;

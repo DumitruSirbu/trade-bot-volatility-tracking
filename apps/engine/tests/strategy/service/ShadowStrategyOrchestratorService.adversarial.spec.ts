@@ -230,6 +230,17 @@ describe('ShadowStrategyOrchestratorService — same eventId fires twice does no
 // ─── A2: replay-after-restart preserves invariants ────────────────────────────
 
 describe('ShadowStrategyOrchestratorService — replay-after-restart ledger coherence (A2)', () => {
+    // Pin the purge clock inside rebuildLedger to 1h after the fixture's
+    // createdAt so the D5 phantom-purge (24h stale cutoff) does not close the
+    // replayed positions before the assertions run.
+    let dateSpy: jest.SpyInstance;
+    beforeEach(() => {
+        dateSpy = jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-05-30T13:00:00Z').getTime());
+    });
+    afterEach(() => {
+        dateSpy.mockRestore();
+    });
+
     it('rebuildLedger with N persisted OPEN rows results in countOpenPositions() === N', async () => {
         // BUILD: seed two historical open rows for v2.
         const mocks = buildMocks(buildSkipSignal());
@@ -279,6 +290,17 @@ describe('ShadowStrategyOrchestratorService — replay-after-restart ledger cohe
 // drives tryOpen correctly.
 
 describe('ShadowStrategyOrchestratorService — post-persistence crash recovery drives tryOpen on rebuild (A4)', () => {
+    // Pin the purge clock inside rebuildLedger to 1h after the fixture's
+    // createdAt so the D5 phantom-purge (24h stale cutoff) does not close the
+    // replayed position before the assertions run.
+    let dateSpy: jest.SpyInstance;
+    beforeEach(() => {
+        dateSpy = jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-05-30T13:00:00Z').getTime());
+    });
+    afterEach(() => {
+        dateSpy.mockRestore();
+    });
+
     it('a persisted OPEN row with no prior tryOpen is replayed by rebuildLedger and advances the open-position count', async () => {
         // BUILD: simulate restart — the DB has the row but the old ledger is gone.
         const mocks = buildMocks(buildSkipSignal());
@@ -500,5 +522,168 @@ describe('ShadowStrategyOrchestratorService — no order.intent.approved emitted
 
         // CHECK: the fake risk gate was never called.
         expect(riskGateEvaluate).not.toHaveBeenCalled();
+    });
+});
+
+// ─── D5 phantom purge: stale position IS purged; fresh position is NOT ────────
+//
+// rebuildLedger purges any virtual position older than SHADOW_STALE_POSITION_MAX_AGE_MS (24h).
+// The purge clock is Date.now() (injectable via the nowMs default). These tests drive
+// onModuleInit with a controlled Date.now() spy to confirm:
+//   - A position whose open row createdAt = T is purged when nowMs = T + 25h (stale)
+//   - The same position is NOT purged when nowMs = T + 23h (fresh)
+//
+// The row factory's createdAt is '2026-05-30T12:00:00Z' = T.
+// Stale clock: T + 25h = '2026-05-31T13:00:00Z'
+// Fresh clock: T + 23h = '2026-05-31T11:00:00Z'
+
+const FIXTURE_CREATED_AT = new Date('2026-05-30T12:00:00Z');
+const STALE_NOW_MS = FIXTURE_CREATED_AT.getTime() + 25 * 60 * 60 * 1_000; // T + 25h
+const FRESH_NOW_MS = FIXTURE_CREATED_AT.getTime() + 23 * 60 * 60 * 1_000; // T + 23h
+
+function buildStaleOpenRow(eventId: string) {
+    // A resolved-exit row must have exitPrice or closeReason null to remain "open" after replay.
+    // Here the fill has no exit (closedAt=null, closeReason=null, exitPrice=null) so
+    // rebuildLedger.tryOpen() succeeds but the in-pass close block does NOT fire
+    // (fill.exitPrice === null AND fill.closeReason === null — neither branch triggers).
+    return {
+        eventId,
+        symbol: 'BTCUSDT',
+        action: SignalActionEnum.OPEN,
+        gateAllowed: true,
+        tradeSide: 'long',
+        createdAt: FIXTURE_CREATED_AT,
+        qty: '0.01',
+        stopLoss: '29400.00',
+        takeProfit: '31200.00',
+        simulatedFill: {
+            entryPrice: '30000.00',
+            exitPrice: null,
+            slippageEntryPct: '0',
+            slippageExitPct: null,
+            slippageComponents: { tierBase: '0', latency: '0', crossingSpread: '0' },
+            missed: false,
+            forceClose: false,
+            lowFidelity: true,
+            closedAt: null,
+            closeReason: null,
+        },
+    };
+}
+
+describe('ShadowStrategyOrchestratorService — D5 phantom purge: stale position is purged; fresh position is not (D5)', () => {
+    let dateSpy: jest.SpyInstance;
+
+    afterEach(() => {
+        if (dateSpy) {
+            dateSpy.mockRestore();
+        }
+    });
+
+    it('stale position (createdAt=T, nowMs=T+25h): position is purged — countOpenPositions() === 0 after rebuild', async () => {
+        // BUILD: seed one open row and set the clock 25h past createdAt (stale)
+        dateSpy = jest.spyOn(Date, 'now').mockReturnValue(STALE_NOW_MS);
+
+        const mocks = buildMocks(buildSkipSignal());
+        const capturedLedger = new VirtualPositionLedgerService();
+        mocks.moduleRef.resolve.mockResolvedValueOnce(capturedLedger);
+        mocks.shadowDecisions.findRowsForLedgerRebuild.mockResolvedValue([buildStaleOpenRow('BTCUSDT:stale-evt')]);
+
+        const orchestrator = buildOrchestrator(mocks);
+
+        // OPERATE: onModuleInit calls rebuildLedger which replays then purges stale positions
+        await orchestrator.onModuleInit();
+
+        // CHECK: the position was replayed (tryOpen succeeded), then purged because it is
+        // older than SHADOW_STALE_POSITION_MAX_AGE_MS (24h). Slot count must be 0.
+        expect(capturedLedger.countOpenPositions()).toBe(0);
+    });
+
+    it('fresh position (createdAt=T, nowMs=T+23h): position is NOT purged — countOpenPositions() === 1 after rebuild', async () => {
+        // BUILD: same row, but clock is only 23h past createdAt (within the 24h window)
+        dateSpy = jest.spyOn(Date, 'now').mockReturnValue(FRESH_NOW_MS);
+
+        const mocks = buildMocks(buildSkipSignal());
+        const capturedLedger = new VirtualPositionLedgerService();
+        mocks.moduleRef.resolve.mockResolvedValueOnce(capturedLedger);
+        mocks.shadowDecisions.findRowsForLedgerRebuild.mockResolvedValue([buildStaleOpenRow('BTCUSDT:fresh-evt')]);
+
+        const orchestrator = buildOrchestrator(mocks);
+
+        // OPERATE
+        await orchestrator.onModuleInit();
+
+        // CHECK: the position was replayed and NOT purged (23h < 24h stale cutoff).
+        expect(capturedLedger.countOpenPositions()).toBe(1);
+    });
+
+    it('purge boundary: position at exactly T+24h is stale (cutoff is exclusive of the boundary)', async () => {
+        // BUILD: nowMs = T + 24h exactly → openedAtMs (T) < staleCutoff (T+24h−24h = T)
+        // staleCutoff = nowMs − 24h = T + 24h − 24h = T
+        // position.openedAtMs = T → T < T = false → NOT purged (boundary is strictly lt)
+        const exactBoundaryMs = FIXTURE_CREATED_AT.getTime() + 24 * 60 * 60 * 1_000;
+        dateSpy = jest.spyOn(Date, 'now').mockReturnValue(exactBoundaryMs);
+
+        const mocks = buildMocks(buildSkipSignal());
+        const capturedLedger = new VirtualPositionLedgerService();
+        mocks.moduleRef.resolve.mockResolvedValueOnce(capturedLedger);
+        mocks.shadowDecisions.findRowsForLedgerRebuild.mockResolvedValue([buildStaleOpenRow('BTCUSDT:boundary-evt')]);
+
+        const orchestrator = buildOrchestrator(mocks);
+
+        // OPERATE
+        await orchestrator.onModuleInit();
+
+        // CHECK: openedAtMs === staleCutoff → condition is `position.openedAtMs < staleCutoff`
+        // which is false at equality → position survives (NOT purged at the exact boundary).
+        expect(capturedLedger.countOpenPositions()).toBe(1);
+    });
+
+    it('stale purge: two positions where one is stale and one is fresh — only the stale is purged', async () => {
+        // BUILD: clock = STALE_NOW_MS (T+25h for the fixture row). We add a SECOND row
+        // with a createdAt just 1h before nowMs so it is within the 24h window.
+        dateSpy = jest.spyOn(Date, 'now').mockReturnValue(STALE_NOW_MS);
+
+        const freshCreatedAt = new Date(STALE_NOW_MS - 60 * 60 * 1_000); // nowMs − 1h
+
+        const mocks = buildMocks(buildSkipSignal());
+        const capturedLedger = new VirtualPositionLedgerService();
+        mocks.moduleRef.resolve.mockResolvedValueOnce(capturedLedger);
+        mocks.shadowDecisions.findRowsForLedgerRebuild.mockResolvedValue([
+            buildStaleOpenRow('BTCUSDT:stale-position'),
+            // A fresh open row for a DIFFERENT symbol so both can coexist in the ledger
+            {
+                eventId: 'ETHUSDT:fresh-position',
+                symbol: 'ETHUSDT',
+                action: SignalActionEnum.OPEN,
+                gateAllowed: true,
+                tradeSide: 'long',
+                createdAt: freshCreatedAt,
+                qty: '0.05',
+                stopLoss: '2900.00',
+                takeProfit: '3200.00',
+                simulatedFill: {
+                    entryPrice: '3000.00',
+                    exitPrice: null,
+                    slippageEntryPct: '0',
+                    slippageExitPct: null,
+                    slippageComponents: { tierBase: '0', latency: '0', crossingSpread: '0' },
+                    missed: false,
+                    forceClose: false,
+                    lowFidelity: true,
+                    closedAt: null,
+                    closeReason: null,
+                },
+            },
+        ]);
+
+        const orchestrator = buildOrchestrator(mocks);
+
+        // OPERATE
+        await orchestrator.onModuleInit();
+
+        // CHECK: stale BTCUSDT position is purged; fresh ETHUSDT position survives.
+        // Net count = 1 (only the fresh one remains).
+        expect(capturedLedger.countOpenPositions()).toBe(1);
     });
 });

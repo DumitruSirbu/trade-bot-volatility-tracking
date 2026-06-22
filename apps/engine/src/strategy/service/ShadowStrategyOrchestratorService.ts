@@ -1,6 +1,7 @@
 import {
     classifyFlowType,
     computeSignalScore,
+    ExitReasonEnum,
     IMarketSnapshot,
     IStrategyParams,
     IVirtualGateOutcome,
@@ -33,6 +34,7 @@ import {
     SHADOW_GATE_MAX_TRADES_PER_DAY,
     SHADOW_GATE_REQUIRE_EXHAUSTION_CONFIRMATION,
     SHADOW_GATE_SKIP_MARKET_STRESS,
+    SHADOW_STALE_POSITION_MAX_AGE_MS,
     SHADOW_TAKER_FEE_PCT,
     SHADOW_VERSION_DISCRIMINATOR_PREFIX,
 } from '../const';
@@ -844,7 +846,7 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
     // ledger's `processedEventIds` set so a redelivered live event after
     // restart cannot double-open against the same id (ADR 0029 open question
     // (b) "event_id continuity across shadow restarts").
-    private async rebuildLedger(shadow: IResolvedShadow): Promise<void> {
+    private async rebuildLedger(shadow: IResolvedShadow, nowMs: number = Date.now()): Promise<void> {
         const rows = await this.shadowDecisions.findRowsForLedgerRebuild(shadow.discriminator);
         let replayedOpens = 0;
         let skippedLegacyOpens = 0;
@@ -911,12 +913,44 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
             shadow.ledger.seedProcessedEventIds(eventIds);
         }
 
-        if (rows.length > 0) {
+        const purgedPhantoms = this.purgePhantomPositions(shadow, nowMs);
+
+        if (rows.length > 0 || purgedPhantoms > 0) {
             const rebuildSummary =
                 `shadow ${shadow.discriminator} ledger rebuilt from ${rows.length} historical rows` +
-                ` (replayed ${replayedOpens} opens, skipped ${skippedLegacyOpens} legacy)`;
+                ` (replayed ${replayedOpens} opens, skipped ${skippedLegacyOpens} legacy, purged ${purgedPhantoms} phantoms)`;
             this.logger.log(rebuildSummary);
         }
+    }
+
+    // Purge phantom positions: any position still open after row replay and
+    // older than SHADOW_STALE_POSITION_MAX_AGE_MS was never resolved by the
+    // deferred exit walker (closedAt and closeReason remained null so the
+    // in-pass close never fired). Force-close at entry price — zero gross
+    // PnL — with FORCE_CLOSE reason, which is exempt from the consecutive-loss
+    // streak counter. This frees the slot on restart without biasing the soak's
+    // win/loss tally. Returns the count of purged phantoms for the rebuild log.
+    private purgePhantomPositions(shadow: IResolvedShadow, nowMs: number): number {
+        const staleCutoffMs = nowMs - SHADOW_STALE_POSITION_MAX_AGE_MS;
+        const stalePositions = shadow.ledger.snapshotForDecision(nowMs).openPositions.filter((position) => position.openedAtMs < staleCutoffMs);
+        let purgedPhantoms = 0;
+
+        for (const position of stalePositions) {
+            shadow.ledger.closeBySymbol(
+                position.symbol,
+                position.entryPrice,
+                nowMs,
+                ExitReasonEnum.FORCE_CLOSE,
+                `phantom_purge:${position.virtualOrderId}`,
+                this.effectiveConsecutiveLossHaltThreshold,
+            );
+            this.logger.warn(
+                `shadow ledger phantom purge: version=${shadow.discriminator} symbol=${position.symbol} openedAt=${new Date(position.openedAtMs).toISOString()}`,
+            );
+            purgedPhantoms += 1;
+        }
+
+        return purgedPhantoms;
     }
 
     // Test accessor — readonly count surface so the paired W2 unit spec can
