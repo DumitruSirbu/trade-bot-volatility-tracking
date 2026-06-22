@@ -228,6 +228,17 @@ describe('ShadowStrategyOrchestratorService — failure isolation', () => {
 });
 
 describe('ShadowStrategyOrchestratorService — cold-restart rebuild', () => {
+    // Pin the purge clock inside rebuildLedger to 1h after the fixture's
+    // createdAt so the D5 phantom-purge (24h stale cutoff) does not close the
+    // replayed position before the assertions run.
+    let dateSpy: jest.SpyInstance;
+    beforeEach(() => {
+        dateSpy = jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-05-30T13:00:00Z').getTime());
+    });
+    afterEach(() => {
+        dateSpy.mockRestore();
+    });
+
     // Pins replay-on-restart safety: an existing shadow_decisions OPEN row
     // (gate_allowed = true, non-missed simulatedFill) advances the ledger's
     // open count on boot. Fails an implementation that skips the rebuild or

@@ -6,6 +6,7 @@ For the current milestone plan, see [`docs/plans/`](plans/README.md). For deferr
 
 | ID | Outcome |
 |----|---------|
+| M43 | [M43 — Strategy selectivity (`catalyst_risk → skip`) + long-book RR geometry + phantom purge (DONE):](archive/M43.md) |
 | M40 | [M40 — Halt-exempt closes + shadow fill regression + stuck-position sweeper (DONE):](archive/M40.md) |
 | M41 | [M41 — Decisions feed outcome + zero-fill audit cashflow (DONE):](archive/M41.md) |
 | M42 | [M42 — Paper stale-tick REST refresh before fill simulation (DONE):](archive/M42.md) |

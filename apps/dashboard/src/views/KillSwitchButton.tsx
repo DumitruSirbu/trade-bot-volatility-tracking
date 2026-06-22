@@ -1,8 +1,9 @@
 import * as React from 'react';
 
 import { ApiError } from '@/api/apiClient';
-import { useHaltMutation, useResumeMutation } from '@/api/mutations';
+import { useHaltMutation, useHaltStateQuery, useResumeMutation } from '@/api/mutations';
 import { useRiskState } from '@/api/queries';
+import { resolveHalted } from '@/lib/haltUtils';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -45,8 +46,6 @@ const useDialogWithReset = (resetForm: () => void): IDialogWithResetApi => {
     return { open, setOpen, handleOpenChange };
 };
 
-const isHalted = (raw: boolean | undefined): boolean => raw === true;
-
 const errorMessage = (err: unknown): string => {
     if (err instanceof ApiError) {
         if (err.code === 'RATE_LIMITED' && err.retryAfterSec !== undefined) {
@@ -64,8 +63,9 @@ const errorMessage = (err: unknown): string => {
 };
 
 export const KillSwitchControl = (): React.ReactElement => {
+    const { data: state } = useHaltStateQuery();
     const { data: risk } = useRiskState();
-    const halted = isHalted(risk?.isHalted);
+    const halted = resolveHalted(state, risk?.isHalted);
 
     return halted ? <ResumeButton /> : <KillSwitchButton />;
 };

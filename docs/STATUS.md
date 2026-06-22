@@ -5,6 +5,6 @@ Living snapshot (~15 lines). **Single writer = scribe** at milestone close. Do n
 | Field | Value |
 |-------|-------|
 | **ACTIVE** | **M15** — Cloud go-live & scaling (D1 blocker resolved) |
-| **Last DONE** | **M40** — Halt-exempt closes (D1, go-live unblock), shadow fill regression (D2), stuck-position sweeper (D4) (2026-06-19). Followed by M41 + M42 (sequential, both live). |
-| **Deploy** | M40+M41+M42 coded+reviewed. **Engine restart required.** No schema migration. D2 production-verification gate (B5): non-zero `simulated_fill` + non-degenerate `close_reason` distribution over ≥1 soak day, then re-qualify shadow series. D1 blocker resolved: closes exempt under halt. M15 (cloud go-live) unblocked. |
-| **Next queue** | M15 (cloud go-live; **D1 blocker is gone**). |
+| **Last DONE** | **M43** — Strategy selectivity (D1a `catalyst_risk → skip`), long-book RR geometry (D2, 3.5× long multiplier + cost-floor anchor), phantom purge (D5) (2026-06-22). Branch: `feat/m43-strategy-selectivity-rr-geometry`, ready for PR / deploy. |
+| **Deploy** | M43 coded+reviewed. **Engine restart required.** No schema migration. D1a takes effect on restart. D1b deferred (v3 promotion blocked — no soak-data path in engine; queued with prerequisites). D3 investigation pending (post-D1a soak day). B5 status: `!hasNextBarEntry` rate not measured (engine unreachable) — remains open, blocks deferred D1b. |
+| **Next queue** | D3 residual dead-signal investigation (needs post-D1a soak data); D1b v3 promotion prerequisites (soak-promotion pathway ADR, B5 closed, paired-CI + mechanism-attribution + ≥30 floor); M15 (cloud go-live). |

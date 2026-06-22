@@ -18,7 +18,7 @@
 import { CoinTierEnum, DeviationSideEnum, FlowTypeEnum, RegimeLabelEnum, SignalActionEnum, VwapAnchorTypeEnum } from '@bot/shared';
 
 import { Money } from '../../../common/utils/money';
-import { MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER } from '../../const';
+import { MOMENTUM_LONG_TAKE_PROFIT_ATR_MULTIPLIER, MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER } from '../../const';
 import { IStrategyInput } from '../../interface';
 import { evaluateMomentum } from '../momentumCore';
 import { evaluateMeanReversion } from '../meanReversionCore';
@@ -260,7 +260,11 @@ describe('strategyExitFields M38 — SC1: momentumCore OPEN signal has tpRebaseE
 // ─── SC2: momentumCore atrDistance = atr14 * MULTIPLIER (exact value) ─────────
 
 describe('strategyExitFields M38 — SC2: momentumCore atrDistance equals atr14 * MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER exactly', () => {
-    it('LONG momentum: atrDistance = atr14 * MULTIPLIER (exact decimal comparison)', () => {
+    it('LONG momentum: atrDistance = atr14 * LONG MULTIPLIER (exact decimal comparison)', () => {
+        // M43 D2: the LONG side uses MOMENTUM_LONG_TAKE_PROFIT_ATR_MULTIPLIER (3.5). With this
+        // fixture (atr14=100, ref≈50750) the atr×3.5 leg (350) dominates the tier1 cost floor,
+        // so atrDistance is the ATR leg. SHORT-side 2.0× parity is asserted in SC2's SHORT case
+        // below and in momentumCore.d2.spec.ts (B7).
         const atr14 = '100';
         const input = buildMomentumInput(DeviationSideEnum.ABOVE);
         // Ensure the event carries our known ATR
@@ -270,11 +274,22 @@ describe('strategyExitFields M38 — SC2: momentumCore atrDistance equals atr14 
 
         expect(signal.proposedExit).not.toBeNull();
 
-        const expectedDistance = new Money(atr14).times(MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER);
+        const expectedDistance = new Money(atr14).times(MOMENTUM_LONG_TAKE_PROFIT_ATR_MULTIPLIER);
         const actualDistance = signal.proposedExit!.atrDistance;
 
         expect(actualDistance).not.toBeNull();
         expect(actualDistance!.toFixed(18)).toBe(expectedDistance.toFixed(18));
+    });
+
+    it('SHORT momentum: atrDistance = atr14 * MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER (2.0×, unchanged by D2)', () => {
+        const atr14 = '100';
+        const input = buildMomentumInput(DeviationSideEnum.BELOW, -MOMENTUM_DEVIATION_PCT);
+        (input.event as any).atr14 = new Money(atr14).toFixed(18);
+
+        const signal = evaluateMomentum(input);
+        const expectedDistance = new Money(atr14).times(MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER);
+
+        expect(signal.proposedExit!.atrDistance!.toFixed(18)).toBe(expectedDistance.toFixed(18));
     });
 
     it('atrDistance is non-null for momentum open (required for D1 rebase at arm seam)', () => {
@@ -296,8 +311,8 @@ describe('strategyExitFields M38 — SC2: momentumCore atrDistance equals atr14 
 
         // Distance should be much smaller than TP price (TP is near VWAP+ATR, distance is just ATR*multiplier)
         expect(new Money(distance).lessThan(new Money(tp))).toBe(true);
-        // Distance = atr14 * MULTIPLIER = 100 * 2.0 = 200 (not the ~50700 TP price)
-        expect(distance.toFixed(2)).toBe('200.00');
+        // M43 D2 LONG: distance = atr14 * LONG MULTIPLIER = 100 * 3.5 = 350 (not the ~50700 TP price)
+        expect(distance.toFixed(2)).toBe('350.00');
     });
 });
 

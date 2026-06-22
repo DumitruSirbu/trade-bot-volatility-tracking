@@ -1,4 +1,5 @@
-| 2026-06-19 | — | — | — | **M40 (close) — Halt-exempt closes + shadow fill regression + stuck-position sweeper** | (all agents: shared + engine + dashboard + qa + 4 reviewers + architect verdict + scribe) | **DONE.** Fixed three critical defects (D1 go-live blocker, D2 HIGH measurement integrity, D4 MEDIUM lifecycle hygiene). **D1:** Three halt gates (`:163`, `:565`, `:808`) scoped uniformly by `isOpenOrAddIntent` predicate — OPEN/ADD abort, REDUCE/CLOSE/FLATTEN execute end-to-end under halt; #101 INJ 2h12m unprotected window resolved. **D2:** Shadow `simulated_fill` collapsed June 10→M40 (187/187 gate-allowed v1 opens, 0 fills) due to stop-side validation against tick-derived entry instead of strategy's own `reconstructReferencePrice` anchor. Architect verdict: rejects typed-miss approach (censors live-held trades); implements re-anchor + tick-derived fill + intrabar walk (tick entry already past SL → immediate ≈−1R stop-out, not 0-qty miss). **D4:** `StuckPositionSweeper` (boot + periodic @Interval) sweeps orphaned `pending_open` (two-step: pending_open→reconciling→closed) and `RECONCILING`-parked (one-step + close-slot release) — owns D1 non-clean-under-halt residual. **C7:** `getPerformance.trade_count` never-filled exclusion. **Tests:** 61 new (D1:29, D2:15, D4:17). **Review:** 3 waves + architect verdict adjudication. **Blockers caught:** D1 non-clean residual ownership, D2 live parity (architect), D4 close-slot idempotency. **Zero blockers, zero highs at close.** **Post-deploy:** Engine restart required; no schema migration. **D2 re-qualification gate (B5):** non-zero fills + non-degenerate close_reason distribution over ≥1 soak day, then re-qualify STATUS + M37/M39 milestone-log notes. **M15 unblocked (D1 blocker resolved).** |
+| 2026-06-22 | — | — | — | **Dashboard KillSwitch halt-state resolution** | (scribe) | **DONE.** Bug fix: `KillSwitchControl` was reading only `useRiskState().isHalted` (day-scoped, resets UTC midnight) to show "Resume" vs "Halt" button state. On market-stress halts spanning midnight, the next day's `risk_state.isHalted=false` showed red "Halt" button with no resume option (banner correctly showed halt via `useHaltStateQuery`/`HaltFlagService`). Root cause: two halt sources with different scopes (`HaltFlagService` process-lifetime vs `risk_state.isHalted` day-scoped); button consulted only the day-scoped source. **Fix:** New shared helper `resolveHalted(state, riskHalted)` in `haltUtils.ts` (state-authoritative; `HaltFlagService` definitive when resolved, `risk_state.isHalted` fallback during load window). `KillSwitchControl` and `HaltBanner` now both route through `resolveHalted`, ensuring parity. Files: `apps/dashboard/src/lib/haltUtils.ts` (new), `KillSwitchButton.tsx`, `HaltBanner.tsx`. No test regression. |
+| 2026-06-22 | — | — | — | **M43 (close) — Strategy selectivity (`catalyst_risk → skip`) + long-book RR geometry + phantom purge** | (all agents: engine + qa + 4 reviewers + scribe) | **DONE.** Shipped three changes. **D1a (SHIPS):** v2 momentum adds `catalyst_risk → SKIP` branch, reading orchestrator-stamped `flow_type`, emitting `FLOW_ROUTED_SKIP` before signal build. Evidence: 7-day soak (2026-06-14→06-21) 104 closed `catalyst_risk` trades, −141.76 USDT, 28.8% win rate, net-negative every tier×side cell and 5/8 days. `momentumCore.ts` changed. **D1b (DEFERRED):** v3 promotion queued — engine has no soak-data promotion path; requires new ADR + env-var flip mechanism. **D2 (SHIPS):** Tier-aware long-book RR repair. `buildMomentumExit` now delegates to `resolveTakeProfitDistance`; LONG uses `max(atr14 × 3.5, costFloor_tier + margin)`, SHORT unchanged (`atr14 × 2.0`). D2.0 investigation (B0): tier1 cost floor 0.38%, tier2 1.08%; post-route RR floor ≈1.46 (live 2.0× TP realignment); median tier1 long RR ~0.445 lifts to ~0.78 at 3.5×. Architect chose 3.5× (moderate); residual gap explicitly accepted, deferred to D3. Constants: `MOMENTUM_LONG_TAKE_PROFIT_ATR_MULTIPLIER = 3.5`, `MOMENTUM_LONG_TP_COST_FLOOR_MARGIN_PCT = 0.001`, `TAKER_FEE_PCT = '0.0004'` (unified, cross-referenced). `strategyConsts.ts` changed. **D3 (DEFERRED):** Time-stop dead-signal residual investigation — post-D1a soak day needed. **D5 (SHIPS, shared):** Phantom purge in `ShadowStrategyOrchestratorService.rebuildLedger` — calls new `purgePhantomPositions(shadow, nowMs)` after row replay; ages out positions with `openedAtMs < nowMs − 24h`, force-closes at entry price, `ExitReasonEnum.FORCE_CLOSE` (streak-exempt). `rebuildLedger` gained `nowMs` param (test isolation). Const: `SHADOW_STALE_POSITION_MAX_AGE_MS = 24h`. **B5 status:** Engine was unreachable at investigation; `!hasNextBarEntry` rate not measured; B5 remains open (blocks deferred D1b). **Tests:** 3,818 passing. **Review:** 4 review rounds (security/logic/clean-code/quant). R1 findings: 1 MEDIUM fixed (guard ordering), 1 LOW fixed (dead alias), latent closeBySymbol noted (pre-existing). All clean-code 3 MUST-FIX + 3 SHOULD-FIX resolved; 1 LOW via comment; quant 1 LOW fee-duplication via comment. **Zero blockers, zero highs at close.** |
 | 2026-06-19 | — | — | — | **M41 — Decisions outcome column + zero-fill audit cashflow** | orchestrator | **DONE.** Operator report: green OPEN on risk rejects / unfilled approved opens. **D1:** `DecisionOutcomeEnum` + `mapDecisionOutcome()` in shared; `IDecisionView.outcome`; engine `mapDecision`, analysis `getDecisions` (`gate_allowed` in SQL); dashboard Outcome column + filter (Action no longer all-green for OPEN). **D2:** `recordZeroFillAuditRow` sets `cashflow: new Money(0)`. **Tests:** shared mapDecisionOutcome, readApi outcome cases, ExecutionServiceDelta cashflow, DecisionsFeed REJECTED badge, getDecisions outcome. **Docs:** `docs/plans/archive/M41-…`, `docs/milestone-log/archive/M41.md`. M40 scope untouched except D2 one-liner in `ExecutionService`. |
 | 2026-06-19 | — | — | — | **M42 — paper stale-tick REST refresh before fill simulation** | bot-engine-nestjs | **DONE.** Gate-approved OP/UNI opens at 14:05 UTC missed fills because `StreamingFillAdapter` refused WS tick cache age ~26 min. **Fix:** `PaperFillSimulator.ensureFreshTickCache()` emits `PAPER_TICK_REFRESH_REQUEST`; `MarketDataService.onPaperTickRefreshRequest` calls `fetchTickers()` and re-emits `PRICE_UPDATE_EVENT` so `PaperMarkPriceSubscriptionBridge` reseeds the adapter (no `PaperModeModule`→`ExchangeModule` cycle). **Tests:** 14 passing. **Docs:** plan `docs/plans/archive/M42-paper-stale-tick-rest-refresh.md`, outcome `docs/milestone-log/archive/M42.md`, wip `docs/wip/done/2026-06-19-decisions-open-badge-vs-positions-empty.md`. |
 | 2026-06-16 | — | — | — | **M38 — Exit-geometry repair + fill-acceptance guard (D1+D2 deployed; D3 gated) (DONE)** | (bot-engine-nestjs + bot-qa-engineer + 4 reviewers + scribe) | **DONE.** Repaired two high-impact execution defects blocking economic correctness. **D1 — TP rebase (execution layer, momentum-only):** `IProposedExit.tpRebaseEligible: boolean` + `atrDistance: MoneyValue | null` added (engine-local fields). `momentumCore` sets `tpRebaseEligible=true, atrDistance=atrTarget`; `meanReversionCore` sets `tpRebaseEligible=false, atrDistance=null`. New pure helper `rebaseMomentumTakeProfit` in `exitGeometryHelper.ts` computes ATR-based rebase target. `ExecutionService` rebases TP once pre-arm (before any DB write) — all 3 call sites (DB insert, arm, attach) use same rebased value. `BacktestOrchestrator.buildPosition` calls same helper at seam (live/backtest parity, ADR 0015). **D2 — Fill-acceptance guard + unwind (live-only):** New pure helper `evaluateFillDrift` (wrong-side-of-own-SL check + optional magnitude cap; shipped OFF: `MAX_SIGNAL_DRIFT_PCT = undefined`). New `FillAcceptanceUnwindService` emits synthetic FLATTEN close via `buildFlattenIntent → riskGate → ORDER_INTENT_APPROVED_EVENT`; critical security fix: `@OnEvent(ORDER_INTENT_EXPIRED_EVENT)` prevents slot leak on expired FLATTEN. `ExecutionService.rejectAndUnwindIfUnacceptable` evaluates pre-arm; on reject skips arm/attach/transition/POSITION_OPENED_EVENT, emits FLATTEN unwind → one CLOSED FORCE_CLOSE row; decisions row untouched. Registered in `ExecutionModule`. **D3 (V3 promotion):** GATED — requires M37 clean shadow PnL + post-D1/D2 soak window confirmation. **Tests:** 89 new across 5 files; full suite 3,703 passed, zero failures. **Review:** 1 round; security HIGH (slot-leak on FLATTEN expiry) fixed; quant/logic both CLEAN; clean-code 7 MUST-FIX violations (DTO grouping for arg count, blank-line placement, constant placement, function length, class rename) all resolved. **ADR 0045 (new):** `M38-fill-time-tp-rebase-and-fill-acceptance-guard.md` — rationale, D1/D2 design, D3 gate criteria. **Zero blockers, zero highs at close.** |
@@ -368,3 +369,297 @@ tick-derived, no `Date.now()`), with the ADR 0029 note revision routed through t
 | 2026-05-27 | — | — | — | **Doc-only: Renumber M11b → M15 (cloud go-live milestone, local-first sequencing)** | bot-scribe | **DONE.** Cloud go-live milestone renumbered M11b → M15 to reflect new sequencing: M11a soak feeds into local-only M12 (Analysis MCP) / M13 (Agentic loop) / M14 (CI gate), then M15 (cloud go-live) as the final milestone. Rationale: keep all development + research work off paid infrastructure while preserving gate structure. Files modified: (1) created `M15-cloud-go-live.md` (renamed from M11b, updated title + depends-on clause + forward-pointer note), (2) `M11-go-live-hardening.md` (table row M11b→M15 + new path, added explanation paragraph), (3) `M11a-local-soak.md` (forward-pointer note in "Soak exit criteria → M11b" section anchoring historical text), (4) `00-overview.md` (milestone table reordered M12–M15, text path updated), (5) `CLAUDE.md` (Next section updated, Pre-M15 deferred items header + two M11b→M15 bullet updates). Historical references in M11a prose intentionally preserved (no mass-rename; forward-pointer sufficient). No code, no tests, no ADR edits. |
 | 2026-05-27 | — | — | — | **M11a — Milestone close live-smoke fix wave (CRITICAL bugs + amendments)** | bot-engine-nestjs, bot-shared-maintainer, bot-scribe | **DONE.** Four critical bugs caught + fixed during post-R4 live-app smoke (engine PAPER boot against real Binance sub-account): (1) **HMAC chain verification fails every restart** (files: `BootModeHistoryRepository`, `BootModeChainRotationRepository`) — root cause `manager.save()` two-phase INSERT...UPDATE does NOT refresh BIGSERIAL columns from RETURNING, so write-time HMAC computed over `seq: undefined`, read-time over actual `seq: 1`, resulting in different bytes every read. Fix: switched to raw `INSERT...RETURNING` atomic capture (same pattern `PaperStateAuditRepository` already used). Both repositories now capture DB-assigned `seq` + `bootedAt`/`rotatedAt` within a single transaction, HMAC binding happens inside the same statement. (2) **`/sapi/v1/account/apiRestrictions/ipRestriction` endpoint discontinued by Binance 2021-11-17** (file: `CcxtBinanceExchangeClient.fetchKeyPermissions + toKeyPermissionSnapshot`) — root cause engine called both `/sapi/v1/account/apiRestrictions` and the dead `/sapi/v1/account/apiRestrictions/ipRestriction` endpoint; Binance returns `-1102` on every call. Only surviving `/sapi/v1/account/apiRestrictions` endpoint exposes `ipRestrict: boolean` (whitelist set or not), not the actual IP list. Fix: dropped the dead call, `ipRestriction: null` defaults in mapper, `ipAllowList` defaults to `[]`, predicate no longer requires `ipAllowList.length > 0`. Operator validates IP allow-list via Binance UI per runbook (no self-readable endpoint exists). (3) **Sub-account API key shape incompatible with allowlist defaults** (file: `toKeyPermissionSnapshot` defaults, `computeFailingClauses`, `isKeyPermissionSnapshotAcceptable` in shared) — root cause Binance `/sapi/v1/account/apiRestrictions` response OMITS fields not applicable to sub-account keys (`enableSubAccountManagement`, `enableWithdrawals`, `enableInternalTransfer`, `enableMargin`, `enableVanillaOptions`, `permitsUniversalTransfer`, `tradingAuthorityExpirationTime`). Original defensive defaults assumed "missing field = unsafe, fail closed" (designed for master-account shape). For Fallback Profile sub-account key per ADR 0032 §D8 operative spec, predicate could NEVER pass. Fix: changed defaults for sub-account-irrelevant fields from `true` to `false` (Binance structurally prevents sub-accounts from having these permissions). Removed `enableSubAccountManagement` from documented response (never a real `/sapi` field). Made `tradingAuthorityExpirationTime` optional (null accepted). **Trade-off:** lowers safety floor for LIVE if Binance master-account response shape ever changes to omit a previously-present field; documented as Pre-M11b deferred validation (verify LIVE master-account shape before go-live). (4) **Bogus CRITICAL boot alert on every successful boot** (files: `AlertTypeEnum`, `KeyPermissionAssertionService.publishBootAlert`) — root cause published `type: UNHANDLED_EXCEPTION, severity: CRITICAL` on every boot for informational message "Engine boot — exchange environment resolved"; Telegram-wired soaks would page operator on every restart. Fix: added `AlertTypeEnum.BOOT_ENGINE_STARTED`, changed publishBootAlert to use new type + `severity: INFO`. **Bonus — diagnostic stderr.** `KeyPermissionAssertionService` catch block now `process.stderr.write`s underlying ccxt error before `process.exit` (pino is async-buffered, drops diagnostics). **Why R4 reviewers missed each:** (1) & (2) & (3) — every `BootModeChainService.adversarial.spec.ts` test mocked `appendInTransaction`; no integration test exercised production transaction path against real Postgres. R4 security review #2 already flagged "real-Postgres integration test for advisory-lock + single-transaction shape" as deferred. (1) only manifests on restart. (2) & (3) — endpoint was mocked in every test; never validated against live Binance during R4; originally added against stale Binance documentation. (4) — boot-alert payload visible in test fixtures but no test asserted type/severity classification. **Engine now boots cleanly in PAPER mode end-to-end:** key-permission PASSED, boot pipeline 9/9 phases complete, all paper-mode services active, PaperExchangeNullityProbe cycling, zero restarts after fixes landed. **9–10h soak monitor running,** hourly self-checks via ScheduleWakeup, zero unhandled exceptions. Amendments to ADR 0028, ADR 0032, `CLAUDE.md` Status, `M11a-local-soak.md` (operator runbook + Pre-M11b deferred list) documented below. Files touched: 2 + 2 + 1 shared + runbook + status docs. Commit-ready. |
 | 2026-05-26 | — | — | — | **M11a — Milestone close R4.2 (scribe: merge addendum + docs + work-log + CLAUDE.md)** | bot-scribe | **DONE.** Merged M11a-paper-mode-addendum.md content into M11a-local-soak.md as specified in addendum R4.2 spec. New "PAPER-mode architecture (locked decisions D1–D17)" section inserted before wave plan, preserving all anchor IDs (D1 `paper_account_state` dedicated table, D2 `IExecutionClient` order-command-only surface, D3 PaperFillSimulator determinism + idempotency ledger, D4 funding math + sign convention + force-flush, D5 MTM throttle + peak-equity denominator, D6 boot-mode HMAC chain + integrity, D7 transition matrix + append-only typed rows, D8 PAPER allowlist + Fallback Profile, D9 LIVE_GO_AHEAD_TOKEN LIVE-only, D10 closed-trade counting + missed-fill non-slot, D11 $500 starting equity, D12 reconciliation CRITICAL on drift, D13 nullity probe dual-call + capability preflight, D14 `IAccountStateSource` port + exception list, D15 FillSimulatorCore shared + causality test + numerical equivalence, D16 paper-state SoT per datum + atomicity + unrealised-PnL derived, D17 CRN per-soak root + skip-case pairing + inconclusive truth table). W1.1 wording replaced (PAPER design specifics vs DEMO rename). W1.2 updated for mode-aware allowlist (D8 Fallback Profile). W4.4 expanded: calibration day + pre-soak sanity TOST (asymmetric bands [-0.15R, +0.05R] per D10) + sample-size pre-flight (N=1000 paired variance + MDE check). "Minimum trade count" section augmented with D10 closed-trade enumeration + missed-fill non-slot. "Reduced evaluation gate" rewritten: primary criterion is "active version beats shadow v2/v3" on paired CRN CI (D17 two cohorts: trade-vs-trade + full same-event); lowFidelity downgrade (automatic inconclusive if `lowFidelity`-excluded subset empty per D10); M11b gate hardening three-branch rule (depth-aware rerun OR micro-probe OR architect waiver); joint-test acknowledgement. "TESTNET pre-M11b drill" section added (separate required gate: order-lifecycle + reconciliation + rate-limit under burst, complementary to PAPER). Definition of Done updated (PAPER + TESTNET gates, 9-table schema per D16 + D17, two cohorts + two `lowFidelity` rankings per D17, soak outcome bucket explicit). **Addendum file deleted** (unblocked by full content merge). **CLAUDE.md M11a status** rewritten: single comprehensive M11a-DONE line capturing R0–R4 complete cycle, all 9 new tables, D1–D17 locked decisions, 658 adversarial tests, 4 reviewers R4, R4 0 blockers/0 highs at close, addendum merged, D10 pre-soak sanity + TOST calibration + sample-size pre-flight gates integrated, M11b gates codified (PAPER soak + TESTNET drill both required). Pre-M11a deferred items list expanded (11 items, all retaining from prior milestones). Next line updated: M11b gates on (a) PAPER soak exit criteria met AND (b) TESTNET drill green. Files modified: `docs/plans/archive/M11a-local-soak.md` (+748 lines, integrated D1–D17 + W1.1/W1.2/W4.4 integration + pre-soak sanity + TESTNET section), `CLAUDE.md` Status + Next (M11a status comprehensive + deferred list expanded), `docs/work-log.md` (this row). |
+
+---
+
+## D2.0 — Long-book RR geometry investigation
+
+**Date:** 2026-06-21 — M43 D2, B0 acceptance criterion. Read-only investigation; no fix code. All figures
+are derived from the codebase + the M43 spec's already-collected 7-day soak evidence. Source constants:
+`RISK_TAKER_FEE_RATE = 0.0004` (`riskConsts.ts:253`), `slippage_tier1_pct = 0.15`, `slippage_tier2_pct = 0.50`
+(`20260522020000-SeedStrategyVersions.ts:32-33`), `MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER = 2.0`
+(`strategyConsts.ts:45`). Cost-floor formula confirmed at `RiskGateService.isTakeProfitBelowCost` (line 1168):
+`roundTripCostDistance = entryPrice × (RISK_TAKER_FEE_RATE × 2 + slippageFraction × 2)`, where
+`slippageFraction = estimated_slippage_pct / 100`.
+
+> **DB STEPS NOW COMPLETE (2026-06-21, second pass).** The soak DB was initially unreachable (Docker daemon
+> down); after the container came up the Step 3 (realized per-tier RR) and Step 4 (post-route win rate)
+> queries were run read-only against `localhost:5433`. Results are in §3 and §4 below. **No
+> UPDATE/INSERT/DELETE/DROP was issued — all queries are SELECT-only.** Confirmed: v2 (the **active**
+> momentum version) is `strategy_versions.strategy_versions_id = 3` (`version = 2`, `status = 'active'`). The
+> live `strategy_versions` slippage params match the seed migration: `slippage_tier1_pct = 0.15`,
+> `slippage_tier2_pct = 0.50` on all versions — the cost floors in §1 are confirmed against live config.
+> Schema notes: side values are lowercase `long`/`short`; PnL column is `realized_pnl`; win-exit column is
+> `exit_reason = 'take_profit'`; tier column is `coin_tier`; geometry columns are `entry_price`,
+> `take_profit_price`, `stop_loss_price`.
+
+### 1. Cost floor confirmed (exact, per tier)
+
+`cost_floor_pct = 2 × RISK_TAKER_FEE_RATE_PCT + 2 × slippage_tier_pct`, with `RISK_TAKER_FEE_RATE_PCT = 0.04%`:
+
+- **tier1:** `2 × 0.04% + 2 × 0.15% = 0.08% + 0.30% =` **0.38%** of entry (round-trip).
+- **tier2:** `2 × 0.04% + 2 × 0.50% = 0.08% + 1.00% =` **1.08%** of entry (round-trip).
+
+This refines the analysis's ~0.39% (tier1) / ~1.09% (tier2) estimates: tier1 is 0.38%, tier2 is 1.08%. The
+2× tier2 slippage (1.00%) is the dominant term and alone exceeds the entire reconstructed tier2 ATR-TP
+distance — the analysis's root-cause claim holds.
+
+### 2. 1.5× vs 2.0× reconciliation (algebraic)
+
+The analysis reconstructed TP distance as `atr14 × 1.5 / price`. The live multiplier is **2.0×**, so the
+live TP distance is `× 2.0/1.5 =` **× 1.333 (33% larger)** than the analysis showed.
+
+Rescaling the analysis's reconstructed ranges (which were at 1.5×):
+- **tier1 longs:** analysis TP ~0.6–1.2% at 1.5× → **~0.80–1.60% at 2.0×**. Clears the **0.38%** tier1 floor
+  comfortably at every point in the range. tier1 was never the gate problem.
+- **tier2 longs:** analysis reconstructed TP ~0.46–0.78% at 1.5× → **~0.61–1.04% at 2.0%**. The tier2 floor
+  is **1.08%**. So at 2.0× the typical tier2 long TP (≈0.61–1.04%) is **still below the 1.08% tier2 floor**
+  across essentially the whole range — the top of the range (1.04%) just grazes it.
+
+**Conclusion — the tier2 gap survives at the live 2.0× multiplier.** The 33% uplift narrows the shortfall
+(the reconstructed shortfall at 1.5× was larger) but does **not** close it: at 2.0× the tier2 long TP is
+≈0.61–1.04% vs a 1.08% floor, so the `tp_below_cost` gate continues to (correctly) reject tier2 longs on
+typical-ATR days. tier1 clears the floor at 2.0× with margin to spare. This is exactly the tier-aware
+disease the fix must address **without** re-enabling tier2 (D4 / locked tier-1-only live start).
+
+### 3. Per-tier realized long RR (from soak DB)
+
+Closed v2 positions (`strategy_version_id = 3`), last 30 days, both prices present. `avg_rr` is the
+mean of per-trade `|TP−entry| / |SL−entry|`. Distances are % of entry.
+
+| coin_tier | side | n | avg_tp_dist_pct | avg_sl_dist_pct | avg_rr (mean) |
+|---|---|---|---|---|---|
+| tier1 | long  | 68 | 1.159 | 2.541 | 1.262 |
+| tier1 | short | 46 | 1.427 | 2.467 | 1.013 |
+| tier2 | long  | 37 | 1.594 | 3.559 | 0.790 |
+| tier2 | short | 16 | 1.781 | 4.494 | 0.542 |
+
+**The mean RR is misleading — use the median.** The mean is inflated by a long right tail of high-ATR TPs
+(`max_tp` reaches 4.5%). The long-only distribution gives the honest central tendency:
+
+| coin_tier | n | min_tp | p25_tp | median_tp | p75_tp | max_tp | median_sl | **median_rr** |
+|---|---|---|---|---|---|---|---|---|
+| tier1 | 68 | 0.011 | 0.612 | 0.891 | 1.378 | 4.531 | 1.999 | **0.445** |
+| tier2 | 37 | 0.011 | 1.141 | 1.540 | 2.003 | 4.262 | 2.817 | **0.491** |
+
+**This confirms the spec's RR ≈ 0.5–0.6 long claim on the median**: the typical (median) tier1 long carries a
+0.891% TP against a 1.999% SL → median RR ≈ **0.445**; tier2 long median RR ≈ **0.491**. The few high-ATR
+fills lift the *mean* RR above 1.0 (tier1 long mean 1.262) but the median trade is firmly sub-1R. Shorts:
+tier1 short mean RR 1.013 (median geometry near 1.0) — confirms shorts are already ≈1.0 and need no fix.
+tier2 short is also sub-1 (0.542) but tier2 is excluded from live by the locked tier-1-only start, so the
+long-side fix targets tier1 longs primarily.
+
+**Empirical cost-floor breaches (direct gate evidence).** Of the 68 closed tier1 longs, **7 had a realized
+TP distance below the 0.38% tier1 cost floor**; of 37 tier2 longs, **8 had a TP below the 1.08% tier2 floor**
+(and 43 of 68 tier1 longs sit below the *tier2* floor, consistent with §2). These are exactly the fills the
+floor-anchor leg `max(atr×k, floor+margin)` is designed to lift — real, not reconstructed.
+
+### 4. Post-route RR floor (breakeven from post-D1a win rate)
+
+Breakeven RR floor `= (1 − win_rate) / win_rate`. The "~1.4" placeholder in the spec was derived from the
+**full-book 42.3% win rate** (`(1 − 0.423)/0.423 ≈ 1.36`). The D2.0 spec assumed routing `catalyst_risk` out
+would **raise** the surviving win rate (it cited a ~50% trend_initiation figure) and thereby **lower** the
+floor toward ≈1.0. **The live 30-day data falsifies that assumption: the post-route win rate is LOWER than
+the full book, not higher, so the floor is HIGHER, not lower.**
+
+**Live post-route win rate (v2, closed, last 30d, `flow_type_at_entry != 'catalyst_risk'`):**
+
+| flow_type | n | TP-exit wins | TP-win % | positive-PnL % | net PnL | avg_win | avg_loss |
+|---|---|---|---|---|---|---|---|
+| trend_initiation  | 32 | 11 | 34.4% | 40.6% | −9.03  | 4.810 | −3.767 |
+| forced_exhaustion | 16 | 2  | 12.5% | 25.0% | −8.29  | 4.547 | −2.206 |
+| market_beta       | 3  | 2  | 66.7% | 0.0%  | −5.71  | —     | −1.904 |
+| **aggregate**     | **51** | **15** | **29.4%** | **33.3%** | **−23.03** | — | — |
+
+Long-only post-route cohort (the cells the fix targets): n=26, TP-win 38.5% (10/26), positive-PnL 26.9%,
+net −21.36 USDT.
+
+**Recomputed post-route breakeven RR floor.** Using the symmetric `(1 − w)/w` with `trend_initiation` (the
+surviving dominant flow, the cleanest momentum cohort):
+- TP-exit win definition (34.4%): `(1 − 0.344)/0.344 ≈` **1.91**.
+- positive-PnL win definition (40.6%): `(1 − 0.406)/0.406 ≈` **1.46**.
+- aggregate post-route, positive-PnL (33.3%): `(1 − 0.333)/0.333 ≈` **2.00**.
+
+A more faithful breakeven uses the **realized payoff ratio** (avg_win / avg_loss = 4.810/3.767 = 1.277 for
+trend_initiation): breakeven win rate = `1/(1+1.277) ≈ 43.9%`. Actual positive-PnL win is 40.6%, i.e.
+**just below breakeven** — which is exactly why the post-route book is still slightly net-negative (−9.03 on
+trend_initiation). To reach the realized-payoff breakeven at the observed 40.6% win rate, the required
+RR is `(1 − 0.406)/0.406 ≈` **1.46**.
+
+**Recommended post-route RR floor: ≈ 1.4–1.5** — the spec's original ~1.4 anchor turns out to be the right
+order of magnitude after all, NOT the ≈1.0 the algebraic-only step suggested. The ≈1.0 figure assumed a 50%
+win rate that the live data does not support (post-route win is 34.4% TP / 40.6% positive-PnL, not 50%).
+**Bind the long-side fix to RR ≥ ~1.4** measured TP-distance vs SL-distance, with ~1.46 (the trend_initiation
+positive-PnL breakeven) as the precise target. Note the median realized tier1 long RR today is **0.445**
+(§3) — the geometry gap to a 1.4 floor is large (TP must roughly triple relative to the current 0.891%
+median TP against the 1.999% median SL), so the floor-anchor `max(atr×k, …)` alone will not reach 1.4 on
+median-ATR days; the high-ATR leg or a higher long multiplier is required to move the median. **This is the
+single most important update from the live data and the architect must weigh it when picking the lever
+(see §6).**
+
+### 5. ATR-extreme characterization of the proposed anchor
+
+Proposed long-only anchor: `TP = entry + max(atr14 × MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER, cost_floor_tier + margin)`.
+
+- **High-ATR case** — the `atr14 × 2.0` leg dominates. At ATR = 5% of price, TP = entry + 10%. This is a
+  distant TP that may be unreachable within the 15-min time-stop, pushing the position to a time-stop exit.
+  Per the D2 spec (§D2.0 (d), lines 377–382) this is **accepted as designed** ("accept the high-ATR
+  time-stop as designed") — the high-ATR leg is the genuine momentum-runs-further intent and the time-stop
+  is the correct backstop. No bound needed beyond the inherent `max(a,b)`.
+- **Low-ATR case** — the `cost_floor + margin` leg dominates. At ATR = 0.1% of price, `atr×2.0 = 0.2%`, which
+  is below both floors, so the floor leg sets the TP. For tier1: TP = entry + (0.38% + margin) ≈ **0.48%**
+  above entry at a 0.10% margin — clears the 0.38% tier1 gate by design. For tier2: TP = entry + (1.08% +
+  margin) ≈ **1.18%** above entry — clears the 1.08% tier2 floor. Note: when ATR is genuinely tiny, the
+  `atr×2.0` leg alone (≈0.2%) would still be below the tier2 floor, so for tier2 the floor leg is what lets a
+  TP exist at all; if the operator keeps tier2 excluded (locked tier-1-only live), this only affects shadow
+  /backtest geometry. The floor leg is a near-constant TP decoupled from price action on dead-ATR days, but
+  it is cost-aware (never sub-cost) and bounded above by the floor itself — **not pathological**.
+
+**At neither extreme does the `max(atr×k, floor+margin)` structure produce a pathological outcome** that
+would require an additional cap: high-ATR resolves via the designed time-stop, low-ATR resolves via the
+cost-aware floor. No extra bounding beyond the `max(a,b)` is recommended.
+
+### 6. Lever recommendation
+
+**Revised after live data (the cost-floor anchor alone is insufficient to reach the ~1.4 floor).** The live
+§4 result raised the post-route RR floor to **≈1.4–1.5** (not the ≈1.0 the algebraic step assumed), and §3
+shows the median tier1 long RR today is **0.445** (median TP 0.891% vs median SL 1.999%). To reach RR ≥ 1.4
+against the ~2.0% median structural SL, the long TP must sit at ~2.8% — far above both the cost floor
+(0.38%) and the current 2.0×-ATR median TP (0.891%). **Therefore the cost-floor-anchor (preference (i))
+clears the gate but does NOT by itself reach the RR floor; it must be combined with a higher long-side ATR
+multiplier (preference (ii)).** The architect must adjudicate the combination.
+
+1. **Recommended lever — long-side-conditional anchor with a RAISED long multiplier, floored by cost:**
+   `TP = entry + max(atr14 × MOMENTUM_LONG_TAKE_PROFIT_ATR_MULTIPLIER, cost_floor_tier + margin)` **for LONG
+   only**, where the new long multiplier is **larger than the current 2.0×** (preference (ii) layered on (i)).
+   `momentumCore.ts:46-47` computes one `atrTarget` *before* the `tradeSide` branch; the fix must branch on
+   `tradeSide === LONG` and apply the raised long multiplier + cost floor to the long leg only. **Shorts are
+   byte-for-byte unchanged** (tier1 short mean RR 1.013 — already ≈1.0) — the short `atrTarget`/`atrDistance`
+   path must not move. Lever (iii) tighten-SL stays disfavored (touches the structural stop — ADR 0045 §D1).
+   - **Sizing the long multiplier:** to lift the median tier1 long RR from 0.445 to ~1.4, the long TP distance
+     must scale by ~1.4/0.445 ≈ 3.1×, i.e. a long multiplier of ~2.0 × 3.1 ≈ **6.3×** would hit 1.4 *on the
+     median* — but that pushes the high-ATR tail to very distant, time-stop-bound TPs (the §5 high-ATR caveat
+     becomes the dominant regime). **This is a genuine tension the architect must resolve:** a multiplier high
+     enough to median-clear 1.4 RR likely converts many trades to time-stop exits, which D3 already flags as
+     the dead-signal problem. The realistic recommendation is a **moderate** long multiplier bump (e.g. ~3.0–
+     4.0×) that lifts median RR toward ~0.7–0.9 and pairs with D3 selectivity (fewer, higher-conviction
+     entries) rather than chasing 1.4 on geometry alone. **Do not hard-code a multiplier here — this is the
+     architect's call given the time-stop trade-off; B0's job is to surface the trade-off, which it now does.**
+
+2. **Proposed margin constant** — name `MOMENTUM_LONG_TP_COST_FLOOR_MARGIN_PCT`, value **0.10%** (`0.001` as
+   a fraction). Rationale: the margin guarantees the cost-floor leg sits *strictly above* the `tp_below_cost`
+   gate's `roundTripCostDistance` so the anchor never emits a TP the gate would reject on a rounding boundary.
+   0.10% is the smallest value that reliably clears the tier1 floor (0.38% + 0.10% = 0.48%) with headroom
+   against slippage jitter. The live data validates the *need* for this leg directly: **7 of 68 realized
+   tier1 longs already had a TP below the 0.38% floor** (§3) — the margin+floor leg lifts exactly those. The
+   margin is a cost-safety guard, **not** the RR lever (the multiplier is the RR lever per item 1); it only
+   ensures no sub-cost long TP is emitted. **0.10% stays the recommendation** — the realized data does not
+   justify a larger margin (a larger margin would not help reach the 1.4 RR floor; only the multiplier does).
+
+3. **ADR 0045 flag — no amendment needed (architect to confirm).** The composite `max(atr×k, floor+margin)`
+   must flow through `atrDistance` **verbatim**, exactly as the raw `atrTarget` does today: computed once in
+   `buildMomentumExit`, threaded through `atrDistance` (`momentumCore.ts:60`), consumed verbatim at both the
+   live arm seam and `BacktestOrchestrator.buildPosition` (ADR 0045 §D1.2). The TP stays
+   `tpRebaseEligible: true`; the execution layer re-anchors the composite distance from the fill price. Since
+   the rebase contract treats `atrDistance` as an opaque distance and never re-derives it, a composite value
+   is safe and requires **no ADR 0045 text change** — but the architect must confirm the composite is
+   threaded identically (no re-derivation at either seam) before the fix lands. The `tp_below_cost` gate is
+   **not weakened**; it remains the backstop and a correctly-anchored long TP simply stops producing sub-cost
+   tier2 TPs.
+
+## D2 Architect Adjudication
+
+**Date:** 2026-06-21 — M43 D2 lever adjudication. Doc-only decision record; no application code. Inputs:
+D2.0 findings (§D2.0 §1–6 above), M43 spec §D2 (the ADR 0045 §D1 hard invariant, the lever preference order,
+and the non-goal "do not tune ATR/sigma/time-stop on n=27"), and the milestone-governing sample-size
+discipline rule. The implementer reads this section before writing any D2 fix code.
+
+### Decision A — Long-side ATR multiplier: **MOMENTUM_LONG_TAKE_PROFIT_ATR_MULTIPLIER = 3.5** (moderate bump)
+
+**Verdict: moderate bump, value 3.5×.** Rejected the higher-bump option (5.0–6.3×). Rationale:
+
+- **The sample-size discipline rule is dispositive.** M43 ships only changes justified by **breakeven algebra,
+  not fitted parameters**. The ~6.3× figure in D2.0 §6 is reverse-engineered to median-clear the 1.4 floor on
+  n=68 — that is a *fitted target*, exactly what the milestone non-goal "do not tune ATR on n=27" forbids. A
+  multiplier chosen to hit a fitted RR number on a small window is the disease the discipline rule exists to
+  prevent. A moderate move toward breakeven, with a stated residual, is the honest decision.
+- **6.3× actively worsens D3.** D2.0 §5 / §6 show a high multiplier pushes the median-ATR trade into a distant
+  TP that exits on the 15-min time-stop — the precise dead-signal pathology D3 is investigating. D1a already
+  removes the dominant source (11/17 time-stops are `catalyst_risk`); deliberately converting median trades to
+  time-stops via geometry would re-inflate the bucket D1a just drained. Geometry must not fight D3.
+- **3.5× is the chosen value** (midpoint of the D2.0-recommended 3.0–4.0× band). It scales the long TP distance
+  by 3.5/2.0 = 1.75×, lifting the median tier1 long RR from **0.445 to ≈0.78** (0.445 × 1.75) — median TP moves
+  from ~0.891% to ~1.56% against the ~2.0% median structural SL. This materially closes the RR gap and lifts
+  every realized tier1 long TP well clear of the 0.38% cost floor, without driving median trades into the
+  time-stop tail.
+- **The residual RR gap is explicitly accepted.** Post-fix median tier1 long RR ≈0.78 remains **below** the
+  recomputed ≈1.4–1.5 post-route breakeven floor (D2.0 §4). This shortfall is **accepted as designed**: the
+  remaining lift must come from **D3 entry selectivity** (fewer, higher-conviction entries raise the win rate,
+  which lowers the required RR), **not** from pushing geometry to a fitted multiplier on n=68. The gap is
+  revisited after D3 selectivity lands in a future milestone. M43 does not chase 1.4 on geometry alone.
+
+**Constants the fix introduces (LONG side only):**
+- `MOMENTUM_LONG_TAKE_PROFIT_ATR_MULTIPLIER = 3.5` — long-side ATR TP multiplier. **Distinct from** the
+  existing `MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER = 2.0` (`strategyConsts.ts:45`), which is **unchanged** and
+  continues to govern the short side byte-for-byte.
+- `MOMENTUM_LONG_TP_COST_FLOOR_MARGIN_PCT = 0.001` (0.10%) — cost-floor-leg safety margin (D2.0 §6 item 2),
+  guaranteeing the floor leg sits strictly above the `tp_below_cost` gate's `roundTripCostDistance`.
+
+Composite long TP: `TP = entry + max(atr14 × MOMENTUM_LONG_TAKE_PROFIT_ATR_MULTIPLIER, cost_floor_tier +
+MOMENTUM_LONG_TP_COST_FLOOR_MARGIN_PCT × entry)`, applied **only** under `tradeSide === LONG`. The short leg's
+`atrTarget`/`atrDistance` path must not move (B7).
+
+### Decision B — ADR 0045: **no amendment needed (confirmed)**
+
+The composite `max(atr14 × 3.5, cost_floor + margin)` is an **opaque distance** as far as the M38 rebase
+contract is concerned. It must be computed **once** in `buildMomentumExit` and threaded through `atrDistance`
+(`momentumCore.ts:60`) **verbatim** — exactly as the raw `atrTarget` is today — then consumed without
+re-derivation at both the live arm seam and `BacktestOrchestrator.buildPosition` (ADR 0045 §D1.2). The TP
+stays `tpRebaseEligible: true`. Because the rebase contract never inspects or re-derives the distance, a
+composite value is byte-compatible with the existing contract and **requires no ADR 0045 text change.**
+Implementer obligation: the composite must be the *single* value placed on `atrDistance` (no second
+computation at either seam) — the B4 parity test asserts live-rebased TP == backtest-rebased TP for the same
+fill. If the implementer finds any seam re-deriving the distance, halt and escalate to the architect before
+landing.
+
+### Decision C — Scope: **tier1 long only (confirmed); tier2 not touched**
+
+The D2 fix targets **tier1 long RR only.** Confirmed out of scope and **not** to be altered:
+- **tier2 (both sides)** — excluded from live by the locked tier-1-only start. D2.0 §3 shows tier2 short mean
+  RR 0.542 and tier2 long median RR 0.491; neither is a D2 target. No change re-enables tier2 TPs.
+- **The `tp_below_cost` gate** stays the backstop, logic unchanged (B5g). A correctly-anchored long TP simply
+  stops *producing* sub-cost tier2 TPs; the gate still rejects any that slip through. No attempt to re-admit a
+  geometrically-impossible tier2 TP (D2.0 §2: the tier2 gap correctly survives at the live multiplier).
+- **Shorts (tier1 and tier2)** — byte-for-byte unchanged (tier1 short mean RR 1.013, already ≈1.0).
+
+The "forced_exhaustion" / tier2-short sub-1 RR anomaly (D2.0 §3) is **noted, not fixed** — it lives behind the
+tier exclusion and is not a geometry problem M43 addresses.
+
+### GREEN LIGHT — D2 fix wave may proceed
+
+The engine implementer must define, in `apps/engine/src/strategy/const/strategyConsts.ts` (UPPER_SNAKE_CASE,
+highest level, no magic numbers in `buildMomentumExit`):
+
+1. `MOMENTUM_LONG_TAKE_PROFIT_ATR_MULTIPLIER = 3.5`
+2. `MOMENTUM_LONG_TP_COST_FLOOR_MARGIN_PCT = 0.001`
+
+Apply the composite `max(atr14 × MOMENTUM_LONG_TAKE_PROFIT_ATR_MULTIPLIER, cost_floor_tier +
+MOMENTUM_LONG_TP_COST_FLOOR_MARGIN_PCT × entry)` to the **LONG leg only** (`tradeSide === LONG`); leave the
+short leg and `MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER = 2.0` untouched; thread the composite verbatim through
+`atrDistance`; do not weaken the `tp_below_cost` gate. Honor B1–B8. **Residual median long RR ≈0.78 (below the
+≈1.4 floor) is accepted by design; the remainder defers to post-D3 selectivity.**
+
+---
+
+**B0 status: COMPLETE.** All six steps done — cost floor confirmed against live config (§1), 1.5×↔2.0×
+reconciled with the tier2 gap confirmed to survive (§2), realized per-tier RR queried from the live soak DB
+(§3), post-route win rate queried and the RR floor recomputed to **≈1.4–1.5** (§4 — note this REVISES the
+algebraic-step ≈1.0 upward; the live post-route win rate is 34.4% TP / 40.6% positive-PnL, not the assumed
+50%), ATR extremes characterized (§5), lever recommendation revised (§6 — cost-floor anchor alone is
+insufficient; it must pair with a raised long multiplier, and the multiplier sizing is a genuine
+RR-vs-time-stop trade-off for the architect). **Key correction from the live data: the post-route RR floor
+is HIGHER, not lower, than the full-book ~1.4 — do not relax the long-side TP target to ≈1.0.** Open
+architect decisions for the D2 fix wave: (a) the exact long ATR multiplier given the high-multiplier →
+time-stop trade-off; (b) whether to lean on D3 selectivity rather than push geometry to a full 1.4 median;
+(c) confirm the composite `atrDistance` threads identically at both rebase seams (no ADR 0045 text change
+expected). D2 fix code may proceed once the architect picks the multiplier.
