@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { HaltSourceEnum, HaltStateEnum, type IKillSwitchState, type IRiskStateView } from '@bot/shared';
+import { HaltSourceEnum, type IKillSwitchState, type IRiskStateView } from '@bot/shared';
 
 import { useHaltStateQuery } from '@/api/mutations';
 import { useRiskState } from '@/api/queries';
+import { resolveHalted } from '@/lib/haltUtils';
 
 // M10 W4 (ADR 0021 §2.6). Sticky banner shown when the engine reports
 // haltState === 'halted'. Pinned across all routes via Shell mount. Hidden
@@ -29,14 +30,6 @@ const formatTimestamp = (iso: string | null): string => {
     return Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 19) : iso;
 };
 
-const isHalted = (state: IKillSwitchState | undefined, riskHalted: boolean | undefined): boolean => {
-    if (state !== undefined) {
-        return state.haltState === HaltStateEnum.HALTED;
-    }
-
-    return riskHalted === true;
-};
-
 // Round-1 logic fix: chain state → risk → static fallback. Pulled out as a
 // named helper so the null-coalescing fallthrough cannot be silently dropped
 // by a refactor (e.g. a stray `?? ''` that swallows the second step).
@@ -51,7 +44,7 @@ export const HaltBanner = (): React.ReactElement | null => {
     const { data: state } = useHaltStateQuery();
     const { data: risk } = useRiskState();
 
-    if (!isHalted(state, risk?.isHalted)) {
+    if (!resolveHalted(state, risk?.isHalted)) {
         return null;
     }
 
