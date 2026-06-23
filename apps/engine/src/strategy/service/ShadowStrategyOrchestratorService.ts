@@ -26,6 +26,8 @@ import { CANDLE_5M_INTERVAL_MS } from '../../market-data/const';
 import { TickAggregateEntity } from '../../market-data/entity';
 import { TickAggregateRepository } from '../../market-data/repository/TickAggregateRepository';
 import {
+    SHADOW_CONSERVATIVE_MISS_REASON_EVIDENCE_NULL,
+    SHADOW_CONSERVATIVE_MISS_REASON_TICKS_ABSENT,
     SHADOW_FILL_LATENCY_MS,
     SHADOW_GATE_CONSECUTIVE_LOSS_RELAX_SENTINEL,
     SHADOW_GATE_HALT_AFTER_CONSECUTIVE_LOSSES,
@@ -171,6 +173,8 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
 
     private readonly shadows: IResolvedShadow[] = [];
 
+    private gateAllowedConservativeMissCount: number = 0;
+
     constructor(
         private readonly config: AppConfigService,
         private readonly registry: StrategyRegistry,
@@ -266,9 +270,9 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
         const ticks = await this.tickAggregates.loadTicksForBar(event.symbol, event.entryCandleOpenTime);
 
         if (ticks.length === 0) {
-            this.logger.debug(
+            this.logger.warn(
                 { eventId: event.eventId, symbol: event.symbol, barOpenMs: event.entryCandleOpenTime },
-                'Shadow: no tick_aggregates for signal bar — conservative missing-data miss',
+                'Shadow: no tick_aggregates for signal bar',
             );
 
             return { ticks, nextBarOpenPrice: null };
@@ -369,9 +373,17 @@ export class ShadowStrategyOrchestratorService implements OnModuleInit {
         const hasNextBarEntry = evidence.nextBarOpenPrice !== null;
 
         if (shouldSimulateFill && !hasNextBarEntry) {
-            this.logger.debug(
-                { eventId: event.eventId, symbol: event.symbol, shadowVersion: shadow.discriminator },
-                'Shadow: no next-bar open (no signal-bar ticks) — declining open as conservative miss',
+            const reason = evidence.ticks.length === 0 ? SHADOW_CONSERVATIVE_MISS_REASON_TICKS_ABSENT : SHADOW_CONSERVATIVE_MISS_REASON_EVIDENCE_NULL;
+            this.gateAllowedConservativeMissCount += 1;
+            this.logger.warn(
+                {
+                    eventId: event.eventId,
+                    symbol: event.symbol,
+                    shadowVersion: shadow.discriminator,
+                    reason,
+                    missCount: this.gateAllowedConservativeMissCount,
+                },
+                'Shadow: conservative miss on gate-allowed open',
             );
         }
 

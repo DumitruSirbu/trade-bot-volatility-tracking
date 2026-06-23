@@ -90,6 +90,14 @@ export interface IOrchestratorResult {
     readonly filled: boolean;
 }
 
+// The output of the target-rr override seam: the (possibly) re-stopped signal plus the ATR
+// stop multiplier the sizer must use so its risk distance matches the (possibly) new stop. On
+// the default path these are the original signal and params.atr_stop_multiplier verbatim.
+interface ITunedSignal {
+    readonly signal: ISignal;
+    readonly atrStopMultiplier: number;
+}
+
 const SKIPPED: IOrchestratorResult = Object.freeze({ skipped: true, rejectedByGate: false, missedFill: false, filled: false });
 const REJECTED: IOrchestratorResult = Object.freeze({ skipped: false, rejectedByGate: true, missedFill: false, filled: false });
 const MISSED: IOrchestratorResult = Object.freeze({ skipped: false, rejectedByGate: false, missedFill: true, filled: false });
@@ -132,7 +140,9 @@ export class BacktestOrchestrator {
             return SKIPPED;
         }
 
-        const intent = await this.buildOrderIntent(stampedEvent, signal, ctx);
+        const tuned = this.applyTargetTpSlRatioOverride(signal, stampedEvent, ctx);
+
+        const intent = await this.buildOrderIntent(stampedEvent, tuned.signal, tuned.atrStopMultiplier, ctx);
 
         if (intent === null) {
             return SKIPPED;
@@ -147,11 +157,66 @@ export class BacktestOrchestrator {
             return REJECTED;
         }
 
-        return this.simulateAndRecord(stampedEvent, signal, decision, intent, ctx);
+        return this.simulateAndRecord(stampedEvent, tuned.signal, decision, intent, ctx);
     }
 
     private isOpenSignal(signal: ISignal): boolean {
         return signal.action === SignalActionEnum.OPEN;
+    }
+
+    // Backtest-only knob (IBacktestConfig.targetTpSlRatioOverride): re-derive the stop so the
+    // TP:SL distance ratio equals the requested value AND re-size off that same new stop so the
+    // sweep reflects risk-based sizing (a tighter stop → larger position). Strictly a replay
+    // sweep tool — no live path reaches here. When the override is unset the original signal and
+    // the params ATR multiplier are returned untouched (byte-identical default path).
+    private applyTargetTpSlRatioOverride(signal: ISignal, event: IVolatilityDetectedEvent, ctx: IBacktestOrchestratorContext): ITunedSignal {
+        const ratio = ctx.config.targetTpSlRatioOverride;
+        const defaultMultiplier = ctx.params.atr_stop_multiplier;
+
+        if (ratio === undefined) {
+            return { signal, atrStopMultiplier: defaultMultiplier };
+        }
+
+        const proposedExit = signal.proposedExit;
+        const side = signal.tradeSide;
+
+        if (proposedExit === null || side === null) {
+            return { signal, atrStopMultiplier: defaultMultiplier };
+        }
+
+        const tpDistance = proposedExit.atrDistance;
+
+        // Guard divide-by-zero / missing distance: leave the signal unchanged when the composite
+        // TP distance is absent or non-positive (e.g. the mean-reversion path carries null).
+        if (tpDistance === null || !tpDistance.isFinite() || tpDistance.lte(0)) {
+            return { signal, atrStopMultiplier: defaultMultiplier };
+        }
+
+        // Computed ONCE — reused for both the stop level and the sizer's adjusted multiplier.
+        const newStopDistance = tpDistance.div(new Money(ratio));
+
+        const isLong = side === PositionSideEnum.LONG;
+        const takeProfitPrice = proposedExit.takeProfitPrice;
+        const reference = isLong ? takeProfitPrice.minus(tpDistance) : takeProfitPrice.plus(tpDistance);
+        const newStopLossPrice = isLong ? reference.minus(newStopDistance) : reference.plus(newStopDistance);
+
+        // Make the sizer's risk distance (atr14 × multiplier) equal the new stop distance so
+        // effectiveRiskUsdt tracks riskPerTradeUsdt as the stop tightens/loosens. Money math
+        // throughout; the scalar is surfaced as a number only at the sizer boundary (its arg type).
+        const atrStopMultiplier = newStopDistance.div(new Money(event.atr14)).toNumber();
+
+        this.logger.debug(`target-rr override active (ratio=${ratio}) — re-derived stop + sizing for ${signal.flowType}`);
+
+        return {
+            signal: {
+                ...signal,
+                proposedExit: {
+                    ...proposedExit,
+                    stopLossPrice: newStopLossPrice,
+                },
+            },
+            atrStopMultiplier,
+        };
     }
 
     // Locate the (at most one) open position for this symbol in the in-memory book and
@@ -182,7 +247,12 @@ export class BacktestOrchestrator {
         });
     }
 
-    private async buildOrderIntent(event: IVolatilityDetectedEvent, signal: ISignal, ctx: IBacktestOrchestratorContext): Promise<IOrderIntent | null> {
+    private async buildOrderIntent(
+        event: IVolatilityDetectedEvent,
+        signal: ISignal,
+        atrStopMultiplier: number,
+        ctx: IBacktestOrchestratorContext,
+    ): Promise<IOrderIntent | null> {
         const instrument = await ctx.instrumentAdapter.findConstraints(event.symbol);
 
         if (instrument === null) {
@@ -206,7 +276,7 @@ export class BacktestOrchestrator {
         const sizingResult = this.sizer.size({
             allocatedCapital: new Money(ctx.allocatedCapitalUsdt),
             atr14: new Money(event.atr14),
-            atrStopMultiplier: ctx.params.atr_stop_multiplier,
+            atrStopMultiplier,
             entryPrice,
             tradeSide: signal.tradeSide,
             fundingRate: event.fundingRate,

@@ -138,3 +138,6 @@ export const ACTIVE_POSITIONS_COUNT_DEFAULT = 0;
 // at 'force_close' (exempt from consecutive-loss streak) so the slot is freed.
 // 24 h is a safe floor: the longest configured time-stop is a few hours.
 export const SHADOW_STALE_POSITION_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+
+export const SHADOW_CONSERVATIVE_MISS_REASON_TICKS_ABSENT = 'ticks_absent';
+export const SHADOW_CONSERVATIVE_MISS_REASON_EVIDENCE_NULL = 'evidence_null_despite_ticks';

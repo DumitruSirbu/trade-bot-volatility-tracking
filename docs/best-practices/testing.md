@@ -80,3 +80,49 @@ A misconfigured DSN aborts the run before a single `DELETE` or migration execute
 ### Static tripwire
 
 `tests/ci/noSoakDbLiteral.spec.ts` fails if any `:5433` URL literal or `DB_PORT=5433` instruction reappears in test files (with an allowlist for `validateEnv.spec.ts`, `assertTestDb.spec.ts`, and itself).
+
+## Backtest sweep analysis harnesses
+
+### Time-stop horizon sweep
+
+Reusable harness for parameter-sensitivity analysis. Runs the backtest once per parameter horizon over the same soak window and strategy version, then aggregates results into a timestamped markdown comparison.
+
+**One-liner:**
+
+```sh
+scripts/analysis/timestop-sweep.sh [FROM_UTC] [TO_UTC] [VERSION_ID] [HORIZONS_CSV]
+```
+
+**Defaults:** FROM=2026-06-09 TO=2026-06-24 VERSION=3 HORIZONS=15,30,45,60
+
+**Output:**
+- Markdown summary: `docs/analysis/timestop-sweep-<YYYYMMDD-HHMM>.md` (headline metrics, exit-mix table, funnel, caveats, analyst findings)
+- Raw JSON reports: `docs/analysis/.runs/<YYYYMMDD-HHMM>/` (gitignored; retained for reproducibility)
+
+**Safety:** The backtest CLI is spawned with a minimal env allowlist (PATH, HOME, NODE_ENV, DATABASE_URL only — no exchange keys). It reads the soak Postgres read-only and writes nothing to the database. Same contract as the MCP `run_backtest` tool.
+
+**Example:** `docs/analysis/timestop-sweep-20260623-1158.md` shows that widening the live 15-min time stop to 30+ minutes degrades expectancy; the apparent gain at 45/60 min is a slot-occupancy artifact from a changing trade population, not a real exit improvement.
+
+Use for: hypothesis-generation on parameter tuning (decision-grade analysis requires ≥30–50 closed trades per scenario and stability across 2–3 disjoint windows).
+
+### Reward:risk ratio sweep
+
+Analyzes sensitivity of backtest expectancy and win rate to take-profit:stop-loss distance ratio by re-deriving the stop loss and re-sizing the position off the new stop (realistic risk-based sizing). Driven by backtest-only `--target-rr` CLI override (analysis-only, opt-in; live trade path untouched; reads soak DB read-only; writes nothing to the database).
+
+**One-liner:**
+
+```sh
+scripts/analysis/rr-sweep.sh [FROM_UTC] [TO_UTC] [VERSION_ID] [RATIOS_CSV]
+```
+
+**Defaults:** FROM=2026-06-09 TO=2026-06-24 VERSION=3 RATIOS=0.5,1.0,1.5,2.0
+
+**Output:**
+- Markdown summary: `docs/analysis/rr-sweep-<YYYYMMDD-HHMM>.md` (headline metrics, RR distribution, expectancy and win-rate movement across ratios, caveats, analyst findings)
+- Raw JSON reports: `docs/analysis/.runs/rr-<runId>/` (gitignored; retained for reproducibility)
+
+**Safety:** The backtest CLI is spawned with a minimal env allowlist (PATH, HOME, NODE_ENV, DATABASE_URL only — no exchange keys). It reads the soak Postgres read-only and writes nothing to the database. Same contract as the MCP `run_backtest` tool.
+
+**Example:** `docs/analysis/rr-sweep-20260623-1611.md` shows that RR ratio is not the leverage moving expectancy; the strategy remains net-negative at every ratio (0.5, 1.0, 1.5, 2.0). Win rate is the binding constraint — a 43% win rate cannot generate positive expectancy regardless of RR multiple. Increasing the ratio worsens the realized RR distribution without improving wins.
+
+Use for: validating whether RR restructuring is a worthwhile tuning lever for a given strategy version (isolate RR sensitivity from win-rate dependent expectancy).

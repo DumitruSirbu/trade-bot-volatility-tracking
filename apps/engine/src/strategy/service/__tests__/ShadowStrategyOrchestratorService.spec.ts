@@ -262,6 +262,7 @@ interface IServiceContext {
     shadowDecisionsMock: jest.MockedObject<ShadowDecisionRepository>;
     ledger: VirtualPositionLedgerService;
     loggerDebugSpy: jest.SpyInstance;
+    loggerWarnSpy: jest.SpyInstance;
 }
 
 /**
@@ -326,7 +327,7 @@ function buildService(
     // Suppress Logger output in unit tests.
     const loggerDebugSpy = jest.spyOn((service as any).logger, 'debug').mockImplementation(() => undefined);
     jest.spyOn((service as any).logger, 'log').mockImplementation(() => undefined);
-    jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+    const loggerWarnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
     jest.spyOn((service as any).logger, 'error').mockImplementation(() => undefined);
 
     // Build one ledger per requested shadow version, seeded into the private array.
@@ -347,7 +348,7 @@ function buildService(
 
     (service as any).shadows = resolvedShadows;
 
-    return { service, tickAggregatesMock, shadowDecisionsMock, ledger, loggerDebugSpy };
+    return { service, tickAggregatesMock, shadowDecisionsMock, ledger, loggerDebugSpy, loggerWarnSpy };
 }
 
 // ─── B6 — Happy path: non-empty ticks → fill not missed, tryOpen called ────────
@@ -399,7 +400,7 @@ describe('ShadowStrategyOrchestratorService — C7: loadTicksForBar called exact
     });
 });
 
-// ─── D8 — Empty ticks → open declined, tryOpen NOT called, debug log emitted ───
+// ─── D8 — Empty ticks → open declined, tryOpen NOT called, warn log emitted ───
 
 describe('ShadowStrategyOrchestratorService — D8: empty ticks → conservative miss, tryOpen skipped', () => {
     it('when loadTicksForBar returns [], tryOpen is not called', async () => {
@@ -411,16 +412,16 @@ describe('ShadowStrategyOrchestratorService — D8: empty ticks → conservative
         expect(ledger.tryOpen as jest.Mock).not.toHaveBeenCalled();
     });
 
-    it('when loadTicksForBar returns [], debug logger is called with eventId, symbol, and barOpenMs fields', async () => {
-        const { service, loggerDebugSpy } = buildService([], buildOpenSignal());
+    it('when loadTicksForBar returns [], warn logger is called with eventId, symbol, and barOpenMs fields', async () => {
+        const { service, loggerWarnSpy } = buildService([], buildOpenSignal());
         const event = buildVolatilityEvent();
 
         await service.runShadows(event, NOW_MS);
 
-        // The debug log in loadSignalBarEvidence must capture the three diagnostic fields
-        // so the missing-data case is join/log-detectable (M27 durable missedReason deferred).
-        const debugCallArgs = loggerDebugSpy.mock.calls;
-        const missingDataCall = debugCallArgs.find((args: unknown[]) => {
+        // The warn log in loadSignalBarEvidence (D1.3) captures the three diagnostic fields
+        // so missing-data misses are join/log-detectable and surface in monitoring.
+        const warnCallArgs = loggerWarnSpy.mock.calls;
+        const missingDataCall = warnCallArgs.find((args: unknown[]) => {
             const meta = args[0];
             return typeof meta === 'object' && meta !== null && 'eventId' in meta && 'symbol' in meta && 'barOpenMs' in meta;
         });

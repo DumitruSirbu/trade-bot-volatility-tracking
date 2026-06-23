@@ -60,6 +60,8 @@ interface IRunArgs {
     readonly fromUtcDate: string;
     readonly toUtcDate: string;
     readonly outputPath: string;
+    readonly timeStopMinutesOverride?: number;
+    readonly targetTpSlRatioOverride?: number;
 }
 
 export function parseRunArgs(argv: readonly string[]): IRunArgs {
@@ -89,7 +91,35 @@ export function parseRunArgs(argv: readonly string[]): IRunArgs {
         throw new BacktestCliArgError("missing required flag '--output <path>'");
     }
 
-    return { versionId, fromUtcDate, toUtcDate, outputPath: resolvePath(outputPath) };
+    const timeStopMinutesOverride = parseTimeStopMinutesOverride(flags.get('time-stop-minutes'));
+    const targetTpSlRatioOverride = parseTargetTpSlRatioOverride(flags.get('target-rr'));
+
+    return { versionId, fromUtcDate, toUtcDate, outputPath: resolvePath(outputPath), timeStopMinutesOverride, targetTpSlRatioOverride };
+}
+
+function parseTimeStopMinutesOverride(raw: string | undefined): number | undefined {
+    if (raw === undefined) {
+        return undefined;
+    }
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value <= 0) {
+        throw new BacktestCliArgError(`--time-stop-minutes must be a positive integer, got '${raw}'`);
+    }
+    return value;
+}
+
+// Like the time-stop helper but permits non-integers: the TP:SL ratio is a
+// real-valued knob (e.g. 0.5, 1.5, 2). Only requires a finite, strictly
+// positive number so a zero/negative ratio can never reach the divide.
+function parseTargetTpSlRatioOverride(raw: string | undefined): number | undefined {
+    if (raw === undefined) {
+        return undefined;
+    }
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value <= 0) {
+        throw new BacktestCliArgError(`--target-rr must be a positive number, got '${raw}'`);
+    }
+    return value;
 }
 
 function readFlags(argv: readonly string[]): Map<string, string> {
@@ -115,6 +145,9 @@ function isIsoDate(value: string): boolean {
 }
 
 function buildConfig(args: IRunArgs): IBacktestConfig {
+    const baseRunLabel = `mcp-${args.versionId}-${args.fromUtcDate}-${args.toUtcDate}`;
+    const runLabel = appendRunLabelSuffixes(baseRunLabel, args);
+
     return {
         strategyVersionId: args.versionId,
         fromUtcDate: args.fromUtcDate,
@@ -123,8 +156,26 @@ function buildConfig(args: IRunArgs): IBacktestConfig {
         latencyMs: DEFAULT_LATENCY_MS,
         enableDepthAwareSlippage: true,
         enableIntrabarStopSimulation: true,
-        runLabel: `mcp-${args.versionId}-${args.fromUtcDate}-${args.toUtcDate}`,
+        runLabel,
+        timeStopMinutesOverride: args.timeStopMinutesOverride,
+        targetTpSlRatioOverride: args.targetTpSlRatioOverride,
     };
+}
+
+// Stable suffix order: `-ts<n>` first (if present), then `-rr<value>`. With
+// neither override set the label is byte-identical to the historic base label.
+function appendRunLabelSuffixes(baseRunLabel: string, args: IRunArgs): string {
+    let label = baseRunLabel;
+
+    if (args.timeStopMinutesOverride !== undefined) {
+        label = `${label}-ts${args.timeStopMinutesOverride}`;
+    }
+
+    if (args.targetTpSlRatioOverride !== undefined) {
+        label = `${label}-rr${args.targetTpSlRatioOverride}`;
+    }
+
+    return label;
 }
 
 async function executeRun(args: IRunArgs): Promise<number> {
