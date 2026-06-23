@@ -64,9 +64,7 @@ function summarize(report) {
     };
 }
 
-const runs = reportPaths
-    .map(loadReport)
-    .sort((a, b) => a.ratio - b.ratio);
+const runs = reportPaths.map(loadReport).sort((a, b) => a.ratio - b.ratio);
 
 const lines = [];
 lines.push(`# Reward:risk (TP:SL) geometry sweep — ${runId}`);
@@ -131,7 +129,7 @@ lines.push('- **Sizing amplification is the dominant effect.** Net PnL / drawdow
 lines.push('  BOTH the geometry change and the larger positions a tighter stop produces. Read `realized RR`');
 lines.push('  and `win%` for the geometry signal; read `avg notional` / `max DD%` for the risk a tighter');
 lines.push('  stop deploys. A "better" net PnL that comes purely from bigger bets is not free edge.');
-lines.push('- **This replaces the strategy\'s VWAP structural stop with an RR-anchored stop** — it is a');
+lines.push("- **This replaces the strategy's VWAP structural stop with an RR-anchored stop** — it is a");
 lines.push('  counterfactual on stop *philosophy*, not a parameter tweak, and deliberately breaks');
 lines.push('  live↔backtest parity for the swept runs.');
 lines.push('- **Not strictly ceteris-paribus on entries:** the 1-position slot cap means a different stop');

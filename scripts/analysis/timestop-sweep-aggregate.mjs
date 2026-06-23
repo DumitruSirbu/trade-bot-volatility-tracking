@@ -45,9 +45,7 @@ function minutes(ms) {
     return (ms / 60000).toFixed(1);
 }
 
-const runs = reportPaths
-    .map(loadReport)
-    .sort((a, b) => (a.horizonMinutes ?? 0) - (b.horizonMinutes ?? 0));
+const runs = reportPaths.map(loadReport).sort((a, b) => (a.horizonMinutes ?? 0) - (b.horizonMinutes ?? 0));
 
 const lines = [];
 lines.push(`# Time-stop horizon sweep — ${runId}`);
@@ -67,7 +65,9 @@ lines.push('');
 
 lines.push('## Headline metrics');
 lines.push('');
-lines.push('| time_stop (min) | trades | win% | net PnL | expectancy/trade | return% | profit factor | avg hold (min) | max DD% | Sharpe | Sortino | fees | funding |');
+lines.push(
+    '| time_stop (min) | trades | win% | net PnL | expectancy/trade | return% | profit factor | avg hold (min) | max DD% | Sharpe | Sortino | fees | funding |',
+);
 lines.push('|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|');
 for (const { horizonMinutes, report: r } of runs) {
     lines.push(
@@ -106,10 +106,7 @@ lines.push('');
 lines.push('| time_stop (min) | skipped triggers | rejected by gate | missed limit fill | low-fidelity trades |');
 lines.push('|---:|---:|---:|---:|---:|');
 for (const { horizonMinutes, report: r } of runs) {
-    lines.push(
-        `| ${horizonMinutes} | ${r.skippedTriggerCount} | ${r.rejectedByGateCount} | ` +
-            `${r.missedLimitFillCount} | ${r.lowFidelityTradeCount} |`,
-    );
+    lines.push(`| ${horizonMinutes} | ${r.skippedTriggerCount} | ${r.rejectedByGateCount} | ` + `${r.missedLimitFillCount} | ${r.lowFidelityTradeCount} |`);
 }
 lines.push('');
 
