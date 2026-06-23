@@ -173,6 +173,15 @@ export class BacktestRunnerService {
 
         const { strategy, params } = this.strategyRegistry.resolve(strategyVersion.name, strategyVersion.version, strategyVersion.params);
 
+        // why: the CLI/MCP `--time-stop-minutes` override re-tunes the time-based exit
+        // without editing strategy_versions.params. Strategies read `params.time_stop_minutes`,
+        // so rebinding once here (before buildRunState and ctx.params) covers every strategy.
+        let effectiveParams = params;
+        if (config.timeStopMinutesOverride !== undefined) {
+            effectiveParams = { ...params, time_stop_minutes: config.timeStopMinutesOverride };
+            this.logger.log(`backtest run=${config.runLabel} time_stop_minutes override active=${config.timeStopMinutesOverride}`);
+        }
+
         const fromMs = utcDateToMs(config.fromUtcDate);
         const toMs = utcDateToMs(config.toUtcDate);
 
@@ -180,7 +189,7 @@ export class BacktestRunnerService {
             throw new Error(`config.toUtcDate must be after fromUtcDate (${config.fromUtcDate} → ${config.toUtcDate})`);
         }
 
-        const runState = this.buildRunState(params);
+        const runState = this.buildRunState(effectiveParams);
         await this.seedInstruments(runState.book);
 
         const symbols = await this.pointInTimeUniverse.resolveForWindow(config.fromUtcDate, config.toUtcDate);
@@ -201,7 +210,7 @@ export class BacktestRunnerService {
                 toMs,
                 config,
                 strategy,
-                params,
+                params: effectiveParams,
                 strategyVersion: { name: strategyVersion.name, version: strategyVersion.version },
                 btcReferenceBars,
                 runState,

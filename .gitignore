@@ -74,3 +74,6 @@ backups/
 
 # Manual rule-9 pg_dump backups (root). Never commit — soak calibration data.
 backup_*.sql.gz
+
+# backtest sweep raw JSON reports (markdown summaries are committed)
+docs/analysis/.runs/

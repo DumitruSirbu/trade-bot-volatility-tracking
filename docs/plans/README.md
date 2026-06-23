@@ -6,8 +6,9 @@ Exactly **one** row may be `ACTIVE`. Status lives here only — not in plan fron
 
 | ID | Status | Summary (1 line) | ADRs | Modules |
 |----|--------|------------------|------|---------|
+| M44 | ACTIVE | Verify shadow-fill fidelity & close the B5 gap — **soak verification gate, no fix required** (degeneracy was a pre-fix artifact, already resolved; B5 closes by ≥30-fill soak accumulation + re-measurement on pinned `from ≥ 2026-06-21` window). Optional non-blocking hardening (D1.1 schema invariant, D1.3 miss observability); contingency-only fix if degeneracy recurs at n≥30. Unblocks D1b v3-promotion *evaluation* + trustworthy `compareVersions` | 0029 | shadow, analysis |
 | M43 | DONE | Strategy selectivity (D1a `catalyst_risk → skip` in v2, D2 3.5× long TP + cost-floor anchor, D5 phantom purge; D1b/D3 deferred) | 0003, 0045 | strategy, backtest, analysis |
-| M15 | ACTIVE | Cloud go-live & scaling (D1 blocker resolved; next go-live milestone) | — | go-live |
+| M15 | DEFERRED | Cloud go-live & scaling (D1 blocker resolved; gated behind shadow-fidelity B5 closure + v3-edge evaluation) | — | go-live |
 | M40 | DONE | Halt exempt closes + shadow fill regression + stuck-position sweeper (D1 go-live unblock, D2 stop-side re-anchor, D4 orphaned-row sweep) | 0046, 0004, 0021, 0029 | execution, strategy, position |
 | M41 | DONE | Decisions feed outcome clarity (D1) + zero-fill audit `cashflow` fix (D2) | 0022, 0006 | dashboard, shared, execution, analysis |
 | M42 | DONE | Paper stale-tick REST refresh before fill simulation (on-demand `fetchTickers` at fill time) | 0032 | paper-mode, market-data |
