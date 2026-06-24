@@ -7,7 +7,7 @@ Deferred items. **HIGH** = go-live blocker or live risk. **MEDIUM** = feature/co
 | # | Item | Location | Origin |
 |---|------|----------|--------|
 | H3 | LIVE `/sapi/v1/account/apiRestrictions` master-account shape verification — sub/master shapes diverge; predicate could silently pass unsafe key | `KeyPermissionAssertionService` | M11a |
-| H4 | Rate-limit drift `header-used ≈ 1` anomaly — public endpoint on different IP-weight ledger? See `docs/plans/archive/M18-rate-limit-drift-directional-alert.md` | `apps/engine/src/exchange/` | M17 |
+| ~~H4~~ | ~~Rate-limit drift `header-used ≈ 1` anomaly~~ **RESOLVED (M46)** — separate-ledger confirmed (host boundary: `/fapi` vs `/sapi`). New `SAPI_REQUEST_WEIGHT_1M` bucket (local-only) isolates `/sapi` boot calls. ADR 0030 §2.7 amended. | `apps/engine/src/exchange/` | M46 |
 | H6 | Engine auth CLI token TTL 900s — weekly agent runs need automated minting or long-lived issuance | `apps/agent/` | M13 |
 | H7 | Branch protection payload NOT YET APPLIED — apply via `docs/runbooks/ci-gates.md` before any live merge | GitHub settings | M14 |
 

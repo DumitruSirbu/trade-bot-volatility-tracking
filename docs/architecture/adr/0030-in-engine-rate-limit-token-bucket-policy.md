@@ -1,6 +1,6 @@
 # ADR 0030 — In-engine rate-limit token-bucket policy (M11a W1.4)
 
-**Status:** Accepted (M11a W1 design wave)
+**Status:** Accepted (M11a W1 design wave); amended M46 (2026-06-24, §2.7 — dual-host ledger split)
 **Date:** 2026-05-25
 **Milestone:** M11a — Local soak hardening
 **Depends on:** ADR 0001 (Exchange & market data), ADR 0010 (Reconciliation & drift policy), ADR 0012 (Funding & PnL), ADR 0024 (Telegram alerts), ADR 0028 (Key-permission assertion port).
@@ -61,10 +61,11 @@ short bursts the local accounting did not yet observe.
 
 | Class | Scope | Window | Binance published limit (verify at impl) | Effective bucket capacity (80%) | Counts |
 |---|---|---|---|---|---|
-| `REQUEST_WEIGHT_1M` | per IP | 1 minute rolling | 2400 weight-units | 1920 | Every REST call, weighted per endpoint |
+| `REQUEST_WEIGHT_1M` | per IP, **`/fapi` host** | 1 minute rolling | 2400 weight-units | 1920 | Every `/fapi` REST call, weighted per endpoint. Reconciled from the `/fapi` `X-MBX-USED-WEIGHT-1M` header only (M46 amendment §2.7). |
 | `ORDERS_10S` | per UID | 10 seconds rolling | 300 orders | 240 | `createOrder`, `cancelOrder`, `cancelAllOrders` |
 | `ORDERS_1M` | per UID | 1 minute rolling | 1200 orders | 960 | same as `ORDERS_10S` |
-| `RAW_REQUESTS_5M` | per IP | 5 minutes rolling | 61000 requests | 48800 | Every HTTP request, weight ignored |
+| `RAW_REQUESTS_5M` | per IP | 5 minutes rolling | 61000 requests | 48800 | Every HTTP request, weight ignored. **Local-only — no readable header.** |
+| `SAPI_REQUEST_WEIGHT_1M` (M46) | per IP, **`/sapi` host** | 1 minute rolling | 2400 weight-units | 1920 | Every `/sapi` REST call (boot-time `sapiGetAccountApiRestrictions*`). **Local-only — the `/sapi` host exposes an `X-MBX-USED-WEIGHT-1M` header, but it is a *different* per-IP ledger on a different host that the engine cannot reliably distinguish from the `/fapi` header; treat as un-reconcilable like `RAW_REQUESTS_5M`** (M46 amendment §2.7). |
 
 Per-symbol bursts are handled as a defensive sub-bucket (§2.4), not as a
 distinct Binance class.
@@ -124,6 +125,16 @@ be called through the client without an entry — the type system enforces
 that the call-site supplies `IRateLimitedCall`, and the helper that builds
 it throws on an unknown operation. Adding a new ccxt method is a two-file
 edit (interface + weight table) reviewed in one diff.
+
+**Bucket targeting (M46 amendment).** Each operation in the weight table is
+explicitly assigned to the bucket(s) it counts against — the target bucket is
+declared in the table, never inferred at the call site (same rule as the
+weight value). The `sapiGetAccountApiRestrictions*` operations target
+`SAPI_REQUEST_WEIGHT_1M` (the `/sapi` host ledger) instead of
+`REQUEST_WEIGHT_1M`; every other weighted operation targets the `/fapi`
+`REQUEST_WEIGHT_1M`. All weighted operations continue to count against
+`RAW_REQUESTS_5M`. See §2.7 for why the split is host-aligned, not
+endpoint-type-aligned.
 
 The implementation is colocated with the exchange module
 (`apps/engine/src/exchange/service/`). The buckets are **in-process**;
@@ -231,11 +242,97 @@ The implementation:
    occurrence per boot). M11b will use this signal to validate any
    shared-state limiter design.
 
+### 2.7 Dual-host ledger separation (M46 amendment)
+
+> Section number kept after §2.6 for traceability of the M46 amendment;
+> it extends §2.2 (bucket targeting) and §2.5 (header reconciliation).
+
+**Date:** 2026-06-24 · **Milestone:** M46 — Rate-limit ledger audit ·
+**Trigger:** M46 Wave 1 investigation, Verdict A (separate-ledger confirmed).
+
+**Finding.** Binance Futures REST traffic crosses **two distinct host
+processes**, each maintaining its **own independent per-IP
+`REQUEST_WEIGHT` ledger**:
+
+- **`/fapi/*`** (USDT-M Futures host). Public market-data endpoints
+  (`fetchOpenInterest`, `fetchFundingRate`, `fetchTickers`, `loadMarkets`)
+  and authenticated account endpoints (`fetchPositions`, `fetchBalance`,
+  `fetchOpenOrders`, order ops) **share one ledger** on this host and
+  expose **one** `X-MBX-USED-WEIGHT-1M` header. There is no second
+  readable header for a market-data sub-ledger on `/fapi`.
+- **`/sapi/*`** (spot host, used only by boot-time
+  `sapiGetAccountApiRestrictions*` per ADR 0028). Runs its **own separate
+  per-IP `REQUEST_WEIGHT` ledger** with its own `X-MBX-USED-WEIGHT-1M`
+  header instance. The two headers **share a name** but report **different
+  ledgers on different hosts** — they are not interchangeable.
+
+**Defect this corrects.** Pre-M46, `CcxtBinanceExchangeClient` held a single
+per-client `last_response_headers` slot. Only the most recent response —
+from whatever host was last called — lands there. After a `/sapi` boot call,
+`reconcileFromHeaders()` wrote the `/sapi` header's value into the `/fapi`
+`REQUEST_WEIGHT_1M` bucket, conflating two unrelated ledgers. The
+observed symptom was a persistently near-zero (`≈1–6`) `/fapi`
+`X-MBX-USED-WEIGHT-1M` header even during a ~240-weight market-data burst:
+the slot was carrying the idle `/sapi` ledger's count, not the `/fapi` one.
+
+**Why not a stale weight table (Scenario C).** The local `localUsed ≈ 240–280`
+is arithmetically correct (100 OI × 1 + 100 funding × 1 + 1 ticker × 40 = 240
+gross, minus continuous-refill drain); every `/fapi` weight-table entry
+matches its Binance-documented per-call weight. C requires the header to climb
+meaningfully during a burst; a near-zero **persistent** header is structural
+(wrong host's ledger), not a stale weight.
+
+**Decision — Option A1 (split `/sapi` to its own bucket).** Add a distinct
+local-only `SAPI_REQUEST_WEIGHT_1M` bucket and route
+`sapiGetAccountApiRestrictions*` to it (§2.2 targeting). The existing
+`REQUEST_WEIGHT_1M` bucket then carries **only** `/fapi` weight, so its
+`reconcileFromHeaders()` is now fed **only** from `/fapi` responses and is
+correct. Because the `/sapi` ledger's header cannot be reliably distinguished
+from the `/fapi` one (same header name, different host, single shared
+`last_response_headers` slot), `SAPI_REQUEST_WEIGHT_1M` is **local-only** —
+it is never reconciled from a header, exactly like `RAW_REQUESTS_5M`. This is
+acceptable: `sapi*` is a low-volume boot-only path (a handful of weight-1
+calls), so running it purely on conservative local accounting carries no
+realistic ban risk.
+
+**`allBuckets` membership (hard constraint).** `SAPI_REQUEST_WEIGHT_1M` MUST
+be a member of the `allBuckets` getter. `engageFreeze()` (§2.6) zeroes every
+bucket in `allBuckets` and suspends its refill for the backoff window. A 418
+IP ban applies to the **IP**, which covers both the `/fapi` and `/sapi`
+hosts; a `sapi` key-permission check firing at boot during an active ban
+would hit the same banned IP. A bucket left outside `allBuckets` would keep
+refilling through the freeze and could issue a call into a 418 ban — the
+exact retry-storm escalation §2.6 exists to prevent.
+
+**Why not Option A2 (split `/fapi` market-data vs account).** Rejected as
+incorrect by construction. The `/fapi` `X-MBX-USED-WEIGHT-1M` header reports
+the **combined** market-data + account weight for the single `/fapi`
+ledger — there is no per-type header. If `REQUEST_WEIGHT_1M` were narrowed to
+account-only weight (market-data moved to a separate `MARKET_DATA_WEIGHT_1M`
+bucket), the account bucket's `reconcileFromHeaders()` would receive a header
+value inflated by market-data weight it no longer tracks. Per §2.5's
+authoritative-override rule, `headerUsed > localUsed` would then read as
+genuine server-side over-count: the account bucket would be reconciled too
+conservatively and the §2.5 `RATE_LIMIT_DRIFT` canary would fire spuriously
+every time a market-data poll runs. A2 trades one real bug (host conflation)
+for a worse one (a header that structurally over-reports what its bucket
+tracks). The split must follow the **host/ledger boundary** (A1), not the
+endpoint-type boundary (A2), because the host boundary is the line Binance
+actually draws between ledgers.
+
+**Safe-direction note.** On `/fapi` alone the pre-existing failure mode was
+already safe: the engine over-counts locally and throttles itself early
+versus the real ledger (no silent under-count). The genuine correctness gap
+A1 closes is the `/sapi`→`/fapi` conflation; A1 removes the cross-host write
+without touching the safe `/fapi` over-count behaviour.
+
 ### 2.6 Failure mode — 429 and 418
 
 When Binance returns 429 (rate exceeded) or 418 (IP banned):
 
-1. **All four buckets are immediately drained to zero.** Header parsing
+1. **Every bucket in `allBuckets` is immediately drained to zero** (the four
+   M11a buckets plus the M46 `SAPI_REQUEST_WEIGHT_1M` — see §2.7 for why the
+   `/sapi` bucket MUST be a member). Header parsing
    extracts `Retry-After`; the buckets are then frozen (refill suspended)
    for `Retry-After` seconds. If `Retry-After` is missing (rare), the
    default freeze is 60 s for 429 and 120 s for 418 — both intentionally
@@ -258,7 +355,7 @@ When Binance returns 429 (rate exceeded) or 418 (IP banned):
    ```
    BINANCE RATE LIMIT TRIGGERED — new orders halted for <N> seconds.
    Code: 429|418
-   Failing class: REQUEST_WEIGHT_1M|ORDERS_10S|ORDERS_1M|RAW_REQUESTS_5M
+   Failing class: REQUEST_WEIGHT_1M|ORDERS_10S|ORDERS_1M|RAW_REQUESTS_5M|SAPI_REQUEST_WEIGHT_1M
    Local-used at trip: <N>/<capacity>
    Header-used at trip: <N>/<capacity>
    Drift: <signed pct>
@@ -350,6 +447,21 @@ behaviour, not the soak-management policy.
   failed fast is a poll that did not happen, and reconciliation drives
   M6 state-machine correctness. `await` capped at one poll interval is
   the right trade.
+- **(M46) Split `/fapi` market-data off into its own bucket (Option A2).**
+  Rejected as incorrect by construction — the single `/fapi`
+  `X-MBX-USED-WEIGHT-1M` header reports combined market-data + account
+  weight, so an account-only bucket would be reconciled from a header that
+  over-reports what it tracks and fire spurious `RATE_LIMIT_DRIFT`. The
+  ledger boundary Binance enforces is the **host** (`/fapi` vs `/sapi`), so
+  the split follows the host boundary (Option A1, §2.7), not endpoint type.
+- **(M46) Reconcile `SAPI_REQUEST_WEIGHT_1M` from the `/sapi`
+  `X-MBX-USED-WEIGHT-1M` header.** Rejected — the `/fapi` and `/sapi`
+  headers share a name but report different per-IP ledgers, and only the
+  last-called host's response lands in the single `last_response_headers`
+  slot, so the engine cannot reliably attribute a header to the `/sapi`
+  ledger. The `/sapi` bucket is local-only like `RAW_REQUESTS_5M`; its
+  boot-only, weight-1 traffic carries no realistic ban risk under pure
+  conservative local accounting (§2.7).
 - **Inline the limiter inside `CcxtBinanceExchangeClient`.** Rejected: a
   separate `IRateLimitPolicy` is testable in isolation (deterministic
   clock injection), makes the M11b swap one-file, and matches the
