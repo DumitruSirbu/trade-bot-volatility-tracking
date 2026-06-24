@@ -124,11 +124,11 @@ describe('HttpTransport bearer auth', () => {
         expect(res.body.error?.data?.reason).toBe(AuthFailureReasonEnum.EXPIRED);
     });
 
-    it('rejects tokens with wrong audience (-32000 BAD_SCOPE — pending shared BAD_AUDIENCE)', async () => {
+    it('rejects tokens with wrong audience (-32000 BAD_AUDIENCE — M45 D5)', async () => {
         const tok = mintToken({ sub: 'op', jti: 'jti-3', aud: 'engine', exp: FUTURE_EXP });
         const res = await postJsonRpc(handle.port, { jsonrpc: '2.0', id: 4, method: 'tools/list' }, tok);
         expect(res.status).toBe(401);
-        expect(res.body.error?.data?.reason).toBe(AuthFailureReasonEnum.BAD_SCOPE);
+        expect(res.body.error?.data?.reason).toBe(AuthFailureReasonEnum.BAD_AUDIENCE);
     });
 
     it('rejects revoked jti (-32000 REVOKED)', async () => {

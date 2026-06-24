@@ -13,6 +13,7 @@ export interface ISizingInput {
     readonly atr14: MoneyValue;
     readonly atrStopMultiplier: number;
     readonly entryPrice: MoneyValue;
+    readonly stopLossPrice: MoneyValue;
     readonly tradeSide: PositionSideEnum;
     readonly fundingRate: number; // periodic rate (ratio)
     readonly fundingRateAnnualized: number; // pct
@@ -48,7 +49,7 @@ export class PositionSizer {
         }
 
         const riskPerTradeUsdt = input.allocatedCapital.times(RISK_PER_TRADE_PCT);
-        const stopDistance = input.atr14.times(input.atrStopMultiplier);
+        const stopDistance = input.entryPrice.minus(input.stopLossPrice).abs();
 
         const baseNotional = riskPerTradeUsdt.dividedBy(stopDistance).times(input.entryPrice);
         const fundedNotional = this.applyFundingCut(baseNotional, input);
@@ -87,7 +88,25 @@ export class PositionSizer {
         const positiveDecimals = input.entryPrice.isFinite() && input.entryPrice.isPositive() && input.atr14.isFinite() && input.atr14.isPositive();
         const validCapital = input.allocatedCapital.isFinite() && input.allocatedCapital.isPositive();
 
-        return finiteScalars && positiveDecimals && validCapital && input.atrStopMultiplier > 0;
+        return finiteScalars && positiveDecimals && validCapital && input.atrStopMultiplier > 0 && this.isStopDistanceValid(input);
+    }
+
+    // Zero-denominator guard for the stop-distance divisor (M45 D1). The stop distance is
+    // |entryPrice - stopLossPrice|; sizing divides riskPerTradeUsdt by it. decimal.js does NOT
+    // throw on division by zero — x/0 yields Infinity and 0/0 yields NaN, both of which would
+    // slip past the downstream min-notional comparison. So the guard MUST be an explicit
+    // pre-division check: reject a non-finite stopLossPrice, and reject a stop distance that is
+    // non-finite or smaller than one tick (the degenerate stop≈entry case). The minimum observed
+    // live stop distance is ~8.6 bps of entry — orders of magnitude above one tick — so a tick
+    // floor rejects only genuinely degenerate inputs, never a legitimate trade.
+    private isStopDistanceValid(input: ISizingInput): boolean {
+        if (!input.stopLossPrice.isFinite()) {
+            return false;
+        }
+
+        const stopDistance = input.entryPrice.minus(input.stopLossPrice).abs();
+
+        return stopDistance.isFinite() && stopDistance.greaterThanOrEqualTo(input.instrument.tickSize);
     }
 
     private isFundingSuppressed(fundingRateAnnualized: number): boolean {

@@ -113,6 +113,7 @@ class FakeRiskStateRepository {
             tradesCount: 0,
             isHalted,
             haltReason,
+            updatedAt: new Date(0),
         };
     }
 

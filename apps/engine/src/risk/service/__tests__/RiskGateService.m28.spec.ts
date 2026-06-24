@@ -210,6 +210,7 @@ function buildContext(
         riskStateOverrides?: {
             getDay?: jest.Mock;
             upsertDay?: jest.Mock;
+            upsertHaltForDay?: jest.Mock;
             clearHaltForDate?: jest.Mock;
             sumRealizedPnlBetween?: jest.Mock;
         };
@@ -243,6 +244,7 @@ function buildContext(
             getDay: jest.fn().mockResolvedValue(dayRow),
             sumRealizedPnlBetween: jest.fn().mockResolvedValue(new Money(0)),
             upsertDay: jest.fn().mockResolvedValue(undefined),
+            upsertHaltForDay: jest.fn().mockResolvedValue(undefined),
             clearHaltForDate: jest.fn().mockResolvedValue(undefined),
             ...overrides.riskStateOverrides,
         },

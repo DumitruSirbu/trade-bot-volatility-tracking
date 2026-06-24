@@ -265,6 +265,7 @@ function makeExecutionService(
         { emitSyntheticClose: jest.fn() } as any,
         exchangeClient,
         events,
+        { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
     );
 
     return { service, localProtectiveMonitor, protectiveAttacher, positions };

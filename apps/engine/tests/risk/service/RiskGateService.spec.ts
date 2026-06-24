@@ -233,10 +233,9 @@ describe('RiskGateService', () => {
             await gate.evaluate(buildPassingIntent(), context);
 
             // M23 (ADR 0004 §6d): the persisted halt_reason carries the engaged-leg suffix.
-            // A sole BTC-shock engage persists `market_stress:btc_shock`.
-            expect(riskState.upsertDay).toHaveBeenCalledWith(
-                expect.objectContaining({ isHalted: true, haltReason: `${RejectReasonEnum.MARKET_STRESS}:${HALT_LEG_BTC_SHOCK}` }),
-            );
+            // A sole BTC-shock engage persists `market_stress:btc_shock`. M45 D3a: the halt now
+            // routes through the column-scoped upsertHaltForDay(date, isHalted, haltReason).
+            expect(riskState.upsertHaltForDay).toHaveBeenCalledWith(expect.any(String), true, `${RejectReasonEnum.MARKET_STRESS}:${HALT_LEG_BTC_SHOCK}`);
         });
 
         it('does NOT re-upsert halt when risk_state is already halted (idempotent)', async () => {
@@ -246,7 +245,8 @@ describe('RiskGateService', () => {
 
             await gate.evaluate(buildPassingIntent(), context);
 
-            // Already halted → GLOBAL_HALT fires before stress → upsertDay not called
+            // Already halted → GLOBAL_HALT fires before stress → no halt write (M45 D3a path)
+            expect(riskState.upsertHaltForDay).not.toHaveBeenCalled();
             expect(riskState.upsertDay).not.toHaveBeenCalled();
         });
     });
@@ -632,7 +632,8 @@ describe('RiskGateService', () => {
 
             await gate.evaluate(buildPassingIntent(), context);
 
-            expect(riskState.upsertDay).toHaveBeenCalledWith(expect.objectContaining({ isHalted: true, haltReason: RejectReasonEnum.CONSECUTIVE_LOSS_HALT }));
+            // M45 D3a: the consecutive-loss halt routes through the column-scoped writer.
+            expect(riskState.upsertHaltForDay).toHaveBeenCalledWith(expect.any(String), true, RejectReasonEnum.CONSECUTIVE_LOSS_HALT);
         });
     });
 

@@ -26,6 +26,9 @@ const ALLOCATED_CAPITAL = '1500'; // $1,500 → 1% = $15 risk target
 const ATR_14 = '100'; // $100 ATR
 const ATR_STOP_MULTIPLIER = 1.5; // stopDistance = 100 × 1.5 = $150
 const ENTRY_PRICE = '50000'; // BTC-like price
+// M45 D1: stop distance now derives from |entry - stopLossPrice|. Pick a stop 150 below
+// entry so stopDistance stays $150 and all pre-existing notional/risk assertions hold.
+const STOP_LOSS_PRICE = '49850'; // 50000 - 150 → stopDistance = $150
 // riskTargeted = 1500 × 0.01 = $15
 // baseNotional = (15 / 150) × 50000 = $5,000
 
@@ -46,6 +49,7 @@ function buildInput(overrides: Partial<ISizingInput> = {}): ISizingInput {
         atr14: new Money(ATR_14),
         atrStopMultiplier: ATR_STOP_MULTIPLIER,
         entryPrice: new Money(ENTRY_PRICE),
+        stopLossPrice: new Money(STOP_LOSS_PRICE),
         tradeSide: PositionSideEnum.LONG,
         fundingRate: 0.0001, // small, favour long → no cut
         fundingRateAnnualized: 0.1, // well below suppress threshold

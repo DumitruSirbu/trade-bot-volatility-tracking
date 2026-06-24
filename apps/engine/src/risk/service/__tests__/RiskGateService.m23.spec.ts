@@ -213,6 +213,7 @@ function buildContext(
         riskStateOverrides?: {
             getDay?: jest.Mock;
             upsertDay?: jest.Mock;
+            upsertHaltForDay?: jest.Mock;
             clearHaltForDate?: jest.Mock;
             sumRealizedPnlBetween?: jest.Mock;
         };
@@ -246,6 +247,7 @@ function buildContext(
             getDay: jest.fn().mockResolvedValue(dayRow),
             sumRealizedPnlBetween: jest.fn().mockResolvedValue(new Money(0)),
             upsertDay: jest.fn().mockResolvedValue(undefined),
+            upsertHaltForDay: jest.fn().mockResolvedValue(undefined),
             clearHaltForDate: jest.fn().mockResolvedValue(undefined),
             ...overrides.riskStateOverrides,
         },
@@ -1091,52 +1093,52 @@ describe('RiskGateService M23 auto-resume — AR17: MARKET_STRESS_AUTO_RESUME_EN
 // ─── AR18: persistHalt writes correct halt_reason suffix ─────────────────────
 
 describe('RiskGateService M23 auto-resume — AR18: persistHalt writes market_stress:<leg> suffix', () => {
-    it('breadth-only stressed snapshot → upsertDay called with haltReason="market_stress:breadth"', async () => {
+    it('breadth-only stressed snapshot → upsertHaltForDay called with haltReason="market_stress:breadth"', async () => {
         const { gate } = buildGate();
         const intent = buildIntent();
-        const upsertDayMock = jest.fn().mockResolvedValue(undefined);
+        const upsertHaltMock = jest.fn().mockResolvedValue(undefined);
 
         const ctx = buildContext({
             snapshot: buildCalmSnapshot({ market_breadth_5m_up_pct: BREADTH_COLLAPSE }),
             isHalted: false,
             haltReason: null,
-            riskStateOverrides: { upsertDay: upsertDayMock },
+            riskStateOverrides: { upsertHaltForDay: upsertHaltMock },
         });
 
         await gate.evaluate(intent, ctx);
 
-        // Find the upsertDay call that writes the halt
-        const haltCalls = upsertDayMock.mock.calls.filter(([day]: [IRiskStateDay]) => day.isHalted === true);
+        // M45 D3a: persistHalt routes through the column-scoped upsertHaltForDay(date, isHalted, haltReason).
+        const haltCalls = upsertHaltMock.mock.calls.filter(([, isHalted]: [string, boolean]) => isHalted === true);
 
         expect(haltCalls).toHaveLength(1);
-        expect(haltCalls[0][0].haltReason).toBe('market_stress:breadth');
+        expect(haltCalls[0][2]).toBe('market_stress:breadth');
     });
 
-    it('BTC shock sole-engage → upsertDay called with haltReason="market_stress:btc_shock"', async () => {
+    it('BTC shock sole-engage → upsertHaltForDay called with haltReason="market_stress:btc_shock"', async () => {
         const { gate } = buildGate();
         const intent = buildIntent();
-        const upsertDayMock = jest.fn().mockResolvedValue(undefined);
+        const upsertHaltMock = jest.fn().mockResolvedValue(undefined);
 
         // BTC shock only (breadth is neutral, no other legs)
         const ctx = buildContext({
             snapshot: buildCalmSnapshot({ btc_5m_move_pct: BTC_SHOCK }),
             isHalted: false,
             haltReason: null,
-            riskStateOverrides: { upsertDay: upsertDayMock },
+            riskStateOverrides: { upsertHaltForDay: upsertHaltMock },
         });
 
         await gate.evaluate(intent, ctx);
 
-        const haltCalls = upsertDayMock.mock.calls.filter(([day]: [IRiskStateDay]) => day.isHalted === true);
+        const haltCalls = upsertHaltMock.mock.calls.filter(([, isHalted]: [string, boolean]) => isHalted === true);
 
         expect(haltCalls).toHaveLength(1);
-        expect(haltCalls[0][0].haltReason).toBe('market_stress:btc_shock');
+        expect(haltCalls[0][2]).toBe('market_stress:btc_shock');
     });
 
-    it('breadth + BTC shock both engage → upsertDay called with haltReason="market_stress:multi"', async () => {
+    it('breadth + BTC shock both engage → upsertHaltForDay called with haltReason="market_stress:multi"', async () => {
         const { gate } = buildGate();
         const intent = buildIntent();
-        const upsertDayMock = jest.fn().mockResolvedValue(undefined);
+        const upsertHaltMock = jest.fn().mockResolvedValue(undefined);
 
         const ctx = buildContext({
             snapshot: buildCalmSnapshot({
@@ -1145,15 +1147,15 @@ describe('RiskGateService M23 auto-resume — AR18: persistHalt writes market_st
             }),
             isHalted: false,
             haltReason: null,
-            riskStateOverrides: { upsertDay: upsertDayMock },
+            riskStateOverrides: { upsertHaltForDay: upsertHaltMock },
         });
 
         await gate.evaluate(intent, ctx);
 
-        const haltCalls = upsertDayMock.mock.calls.filter(([day]: [IRiskStateDay]) => day.isHalted === true);
+        const haltCalls = upsertHaltMock.mock.calls.filter(([, isHalted]: [string, boolean]) => isHalted === true);
 
         expect(haltCalls).toHaveLength(1);
-        expect(haltCalls[0][0].haltReason).toBe('market_stress:multi');
+        expect(haltCalls[0][2]).toBe('market_stress:multi');
     });
 });
 

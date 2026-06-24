@@ -187,6 +187,7 @@ function buildBundle(
         { emitSyntheticClose: jest.fn() } as never,
         exchangeClient,
         events,
+        { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as never,
     );
 
     return { service, submitter, positions, positionService, transactions, riskGate, emitSpy, haltFlag, fillAccumulator, events };

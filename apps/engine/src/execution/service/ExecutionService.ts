@@ -40,6 +40,7 @@ import { TransactionRepository } from '../../position/repository/TransactionRepo
 import { PositionService } from '../../position/service';
 import { computeFillCashflow } from '../../position/util/pnlMath';
 import { IOrderIntent, IOrderIntentApprovedEvent } from '../../risk/interface';
+import { RiskStateRepository } from '../../risk/repository/RiskStateRepository';
 import { RiskGateService } from '../../risk/service';
 import { StrategyVersionRepository } from '../../strategy/repository/StrategyVersionRepository';
 import {
@@ -105,6 +106,15 @@ export class ExecutionService {
     // versionId; the direction is a stable field on the StrategyVersionEntity row.
     private readonly strategyDirectionCache = new Map<number, StrategyDirectionEnum>();
 
+    // M45 D4. Per-positionId reentrancy guard on the close-fill application path, mirroring the
+    // LocalProtectiveMonitor breach-in-flight contract (add on entry, delete in finally). Two
+    // reduce fills resolving a close on the SAME position concurrently would each run the
+    // promote → CLOSING → finalize → POSITION_CLOSED sequence, double-finalizing the row. The
+    // SharedCloseCoordinator dedups close-intent EMISSION across producers; this guards the
+    // executor's APPLICATION of those fills. A loser returns early WITHOUT releasing slot or
+    // reservation — the winning caller owns the close lifecycle and its release.
+    private readonly closingInFlight = new Set<number>();
+
     constructor(
         private readonly appConfig: AppConfigService,
         private readonly policyRouter: OrderPolicyRouter,
@@ -122,6 +132,7 @@ export class ExecutionService {
         private readonly fillAcceptanceUnwind: FillAcceptanceUnwindService,
         @Inject(EXCHANGE_CLIENT) private readonly exchangeClient: IExchangeClient,
         private readonly events: EventEmitter2,
+        private readonly riskState: RiskStateRepository,
     ) {}
 
     @OnEvent(ORDER_INTENT_APPROVED_EVENT)
@@ -384,6 +395,46 @@ export class ExecutionService {
         const isClosingFill = position.qty.lessThanOrEqualTo(fillSummary.filledQty);
         const clampedQty = isClosingFill ? new Money(0) : newQty;
 
+        // M45 D4. Closing-fill reentrancy guard. A second reduce fill resolving a close on the
+        // SAME position before the first finalizes would re-run promote → CLOSING → finalize →
+        // POSITION_CLOSED, double-finalizing the row. The loser returns early WITHOUT releasing
+        // the reservation — the winning caller owns the close lifecycle and its release. Mirrors
+        // LocalProtectiveMonitor's breach-in-flight contract (add on entry, delete in finally).
+        // Partial reduces are intentionally unguarded: they are legitimate sequential decrements,
+        // not a double-finalize hazard.
+        if (isClosingFill) {
+            if (this.closingInFlight.has(position.id)) {
+                this.logger.warn(`closing fill for positionId=${position.id} ${event.intent.symbol} already in flight — skipping reentrant finalize`);
+
+                return;
+            }
+
+            this.closingInFlight.add(position.id);
+
+            try {
+                await this.applyClosingFill(event, submitResult, fillSummary, position, clampedQty, filledQtyForPnl);
+            } finally {
+                this.closingInFlight.delete(position.id);
+            }
+
+            return;
+        }
+
+        await this.applyPartialReduceFill(event, submitResult, fillSummary, position, clampedQty, filledQtyForPnl);
+    }
+
+    // Closing-fill application (ADR 0012 §5 + ADR 0009 §6.1). Promotes a PENDING_OPEN row before
+    // any irreversible write, stamps qty=0 + disarms the monitor, records the close transaction,
+    // then atomically finalizes CLOSING → CLOSED and emits POSITION_CLOSED. Runs under the
+    // closingInFlight guard — see applyReduceFillToPosition.
+    private async applyClosingFill(
+        event: IOrderIntentApprovedEvent,
+        submitResult: ILiveSubmitResult,
+        fillSummary: IFillSummary,
+        position: PositionEntity,
+        clampedQty: MoneyValue,
+        filledQtyForPnl: MoneyValue,
+    ): Promise<void> {
         // M31 Defect 1 (ADR 0009 §6.3 — two-step promote through `open`). A monitor-breach or
         // kill-switch close can land on a row still in PENDING_OPEN (the protective monitor is
         // armed during PENDING_OPEN per ADR 0008 §2). The state graph deliberately forbids
@@ -392,7 +443,7 @@ export class ExecutionService {
         // closing-fill block: if the promote throws, NOTHING is committed (no qty=0, no disarm,
         // no close tx) — a clean abort that escalates to M6 rather than leaving a flat,
         // close-tx'd, non-terminal zombie row.
-        if (isClosingFill && position.state === PositionStateEnum.PENDING_OPEN) {
+        if (position.state === PositionStateEnum.PENDING_OPEN) {
             try {
                 await this.promotePendingOpenBeforeClose(event, submitResult, position);
             } catch {
@@ -400,32 +451,23 @@ export class ExecutionService {
             }
         }
 
-        // M6 W4b (ADR 0009 §6.1b). The qty mutation routes through PositionService.adjustQty
-        // on the non-closing partial-reduce path so the qty axis has a single writer and
-        // emits position.qty.adjusted for observability. The CLOSING-fill path keeps the
-        // inline qty=0 save because the subsequent finalize bundles close-side fields
-        // (closedAt / exitPrice / exitReason / realizedPnl) into the SAME UPDATE as the
-        // CLOSED state transition (ADR 0012 §5 + ADR 0009 §6.1 dual-write atomicity).
-        if (isClosingFill) {
-            position.qty = clampedQty;
+        position.qty = clampedQty;
 
-            // Round-5 #2 (ADR 0008 §2, symmetric disarm). disarm is an in-memory map write
-            // that cannot fail — fire it immediately after the in-memory qty=0 stamp and
-            // BEFORE any awaited I/O (save / recordTerminal / finalize). Closes the window
-            // where the monitor could observe a stale OPEN snapshot and fire a breach on a
-            // position that is logically already closed.
-            this.localProtectiveMonitor.disarm(position.id);
+        // Round-5 #2 (ADR 0008 §2, symmetric disarm). disarm is an in-memory map write
+        // that cannot fail — fire it immediately after the in-memory qty=0 stamp and
+        // BEFORE any awaited I/O (save / recordTerminal / finalize). Closes the window
+        // where the monitor could observe a stale OPEN snapshot and fire a breach on a
+        // position that is logically already closed.
+        this.localProtectiveMonitor.disarm(position.id);
 
-            await this.positions.save(position);
-        } else {
-            // Partial-reduce qty mutation: single-axis update routed through PositionService.
-            await this.positionService.adjustQty(position.id, clampedQty, QtyAdjustmentReasonEnum.LATE_FILL_RESOLVED, { nowMs: Date.now() });
-        }
+        // The CLOSING-fill path keeps the inline qty=0 save because the subsequent finalize
+        // bundles close-side fields (closedAt / exitPrice / exitReason / realizedPnl) into the
+        // SAME UPDATE as the CLOSED state transition (ADR 0012 §5 + ADR 0009 §6.1 dual-write
+        // atomicity).
+        await this.positions.save(position);
 
-        // Write the reduce/close transaction row FIRST so finalizeRealizedPnl can
-        // aggregate the per-fill cashflow into realizedPnl (ADR 0012 §5). On non-closing
-        // partial reduces the row's cashflow is recorded too — M8 reads SUM(cashflow)
-        // across the position's lifetime, partial reduces included.
+        // Write the close transaction row FIRST so finalizeRealizedPnl can aggregate the
+        // per-fill cashflow into realizedPnl (ADR 0012 §5).
         const txType = this.intentActionToTransactionType(event.intent.intentAction);
         const cashflow = this.isReduceOrCloseType(txType)
             ? computeFillCashflow(position.side, position.entryPrice, fillSummary.avgFillPrice, filledQtyForPnl)
@@ -447,57 +489,92 @@ export class ExecutionService {
             exchangeOrderId: submitResult.exchangeOrderId,
         });
 
-        if (isClosingFill) {
-            const nowMs = Date.now();
-            const exitReason = this.exitReasonForIntent(event.intent.intentAction, event.intent.exitReason);
+        const nowMs = Date.now();
+        const exitReason = this.exitReasonForIntent(event.intent.intentAction, event.intent.exitReason);
 
-            await this.positionService.transition(position.id, PositionStateEnum.CLOSING, {
-                nowMs,
-                eventClass: 'execution.reduce.fill.terminal',
-            });
+        await this.positionService.transition(position.id, PositionStateEnum.CLOSING, {
+            nowMs,
+            eventClass: 'execution.reduce.fill.terminal',
+        });
 
-            // finalize does CLOSING -> CLOSED with realizedPnl + exitPrice + closedAt
-            // bundled into a single atomic UPDATE per ADR 0012 §5. realizedPnl is the
-            // aggregate of (SUM cashflow over reduce/close) - (SUM fee over non-funding)
-            // + (SUM cashflow over funding) — fee-net AND funding-net by construction.
-            const finalized = await this.positionService.finalizeRealizedPnl(position.id, exitReason, {
-                nowMs,
-                eventClass: 'execution.reduce.fill.terminal',
-            });
+        // finalize does CLOSING -> CLOSED with realizedPnl + exitPrice + closedAt
+        // bundled into a single atomic UPDATE per ADR 0012 §5. realizedPnl is the
+        // aggregate of (SUM cashflow over reduce/close) - (SUM fee over non-funding)
+        // + (SUM cashflow over funding) — fee-net AND funding-net by construction.
+        const finalized = await this.positionService.finalizeRealizedPnl(position.id, exitReason, {
+            nowMs,
+            eventClass: 'execution.reduce.fill.terminal',
+        });
 
-            const closedEvent: IPositionClosedEvent = {
-                positionId: finalized.id,
-                symbol: finalized.symbol,
-                side: finalized.side,
-                exitReason: finalized.exitReason,
-                realizedPnl: finalized.realizedPnl ?? null,
-                closedAt: finalized.closedAt ?? new Date(nowMs),
-                entryPrice: finalized.entryPrice,
-                exitPrice: finalized.exitPrice ?? null,
-                leverage: finalized.leverage,
-                strategyVersionId: finalized.strategyVersionId,
-                openedAt: finalized.openedAt,
-                // M34 (ADR 0004 §3) — carry the slot so the SlotReleaseListener can free the
-                // (symbol, slot) reservation. Read from the pre-finalize `position` row (the
-                // slot is immutable across the close finalize, and reading the in-scope row
-                // avoids depending on whether finalize re-projects the column).
-                positionSlot: position.positionSlot ?? null,
-            };
-            this.events.emit(POSITION_CLOSED_EVENT, closedEvent);
+        const closedEvent: IPositionClosedEvent = {
+            positionId: finalized.id,
+            symbol: finalized.symbol,
+            side: finalized.side,
+            exitReason: finalized.exitReason,
+            realizedPnl: finalized.realizedPnl ?? null,
+            closedAt: finalized.closedAt ?? new Date(nowMs),
+            entryPrice: finalized.entryPrice,
+            exitPrice: finalized.exitPrice ?? null,
+            leverage: finalized.leverage,
+            strategyVersionId: finalized.strategyVersionId,
+            openedAt: finalized.openedAt,
+            // M34 (ADR 0004 §3) — carry the slot so the SlotReleaseListener can free the
+            // (symbol, slot) reservation. Read from the pre-finalize `position` row (the
+            // slot is immutable across the close finalize, and reading the in-scope row
+            // avoids depending on whether finalize re-projects the column).
+            positionSlot: position.positionSlot ?? null,
+        };
+        this.events.emit(POSITION_CLOSED_EVENT, closedEvent);
 
-            this.logger.log(
-                `position ${position.id} ${position.symbol} CLOSED exitReason=${finalized.exitReason ?? 'n/a'} ` +
-                    `realizedPnl=${finalized.realizedPnl === null || finalized.realizedPnl === undefined ? 'n/a' : formatMoney(finalized.realizedPnl)} ` +
-                    `exit=${formatMoney(fillSummary.avgFillPrice)}`,
-            );
+        this.logger.log(
+            `position ${position.id} ${position.symbol} CLOSED exitReason=${finalized.exitReason ?? 'n/a'} ` +
+                `realizedPnl=${finalized.realizedPnl === null || finalized.realizedPnl === undefined ? 'n/a' : formatMoney(finalized.realizedPnl)} ` +
+                `exit=${formatMoney(fillSummary.avgFillPrice)}`,
+        );
+    }
 
-            return;
-        }
+    // Partial-reduce application (ADR 0009 §6.1b). Decrements qty through PositionService.adjustQty
+    // (single qty-axis writer, emits position.qty.adjusted), records the REDUCE transaction with
+    // its cashflow, then persists the lowered residual notional onto risk_state (M45 D3b — no
+    // lifecycle event fires on a partial reduce, so the accounting listener never recomputes).
+    private async applyPartialReduceFill(
+        event: IOrderIntentApprovedEvent,
+        submitResult: ILiveSubmitResult,
+        fillSummary: IFillSummary,
+        position: PositionEntity,
+        clampedQty: MoneyValue,
+        filledQtyForPnl: MoneyValue,
+    ): Promise<void> {
+        await this.positionService.adjustQty(position.id, clampedQty, QtyAdjustmentReasonEnum.LATE_FILL_RESOLVED, { nowMs: Date.now() });
+
+        // On non-closing partial reduces the row's cashflow is recorded too — M8 reads
+        // SUM(cashflow) across the position's lifetime, partial reduces included (ADR 0012 §5).
+        const txType = this.intentActionToTransactionType(event.intent.intentAction);
+        const cashflow = this.isReduceOrCloseType(txType)
+            ? computeFillCashflow(position.side, position.entryPrice, fillSummary.avgFillPrice, filledQtyForPnl)
+            : new Money(0);
+
+        await this.transactions.recordTerminal({
+            positionId: position.id,
+            type: txType,
+            side: event.intent.tradeSide,
+            price: fillSummary.avgFillPrice,
+            qty: filledQtyForPnl,
+            fee: fillSummary.feeTotal,
+            cashflow,
+            clientOrderId: submitResult.clientOrderId,
+            exchangeOrderId: submitResult.exchangeOrderId,
+        });
 
         this.logger.log(
             `reduce applied positionId=${position.id} ${event.intent.symbol} -${formatMoney(fillSummary.filledQty)} ` +
-                `@ ${formatMoney(fillSummary.avgFillPrice)} (qty now ${formatMoney(position.qty)})`,
+                `@ ${formatMoney(fillSummary.avgFillPrice)} (qty now ${formatMoney(clampedQty)})`,
         );
+
+        // M45 D3b: a partial reduce lowers residual notional but does not emit POSITION_CLOSED
+        // (only the closing-fill path does), so the accounting listener never recomputes —
+        // persist open_exposure here so risk_state does not lag until the next open/close.
+        await this.recomputeRiskStateAccountingForToday('partial_reduce');
     }
 
     // M31 Defect 1 (ADR 0009 §6.3). Promote a PENDING_OPEN row to OPEN before a closing fill
@@ -562,6 +639,42 @@ export class ExecutionService {
         }
 
         return ExitReasonEnum.SIGNAL;
+    }
+
+    // M45 D3b. ADD and partial-reduce change a position's residual notional but emit NEITHER
+    // POSITION_OPENED_EVENT nor POSITION_CLOSED_EVENT, so RiskStateLifecycleListener never
+    // recomputes and `risk_state.open_exposure` goes stale until the next open/close. This
+    // mirrors that listener's Option-R recompute (ADR 0014 §4a): re-derive the full UTC-day
+    // rollup from the authoritative position rows and upsert via the column-scoped writer (halt
+    // columns untouched). Idempotent by construction — a duplicate call re-derives the same
+    // totals, so it cannot double-book. Fire-and-forget semantics match the listener: a failure
+    // is logged at error level and never rethrown, so it cannot abort the fill-application path.
+    private async recomputeRiskStateAccountingForToday(trigger: 'add' | 'partial_reduce'): Promise<void> {
+        const utcDayStart = this.currentUtcDayStart();
+        const utcDateString = utcDayStart.toISOString().slice(0, 10);
+
+        try {
+            const { openExposure } = await this.positions.findLiveRiskAggregates();
+            const { realizedPnlDay, tradesCount } = await this.positions.findClosedTodayAggregates(utcDayStart);
+
+            await this.riskState.upsertAccountingForDay(utcDateString, { openExposure, realizedPnlDay, tradesCount });
+
+            this.logger.log(
+                `risk_state recompute (${trigger}): date=${utcDateString} open_exposure=${openExposure.toFixed()} ` +
+                    `realized_pnl_day=${realizedPnlDay.toFixed()} trades_count=${tradesCount}`,
+            );
+        } catch (cause) {
+            this.logger.error(`risk_state recompute failed (${trigger}): date=${utcDateString} cause=${this.describe(cause)}`);
+        }
+    }
+
+    // Midnight of the current UTC day. Explicit UTC arithmetic — never CURRENT_DATE
+    // (session-timezone dependent near midnight) or Date#toDateString (local-zone). Mirrors
+    // RiskStateLifecycleListener#currentUtcDayStart.
+    private currentUtcDayStart(): Date {
+        const now = new Date();
+
+        return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     }
 
     // Submit + recover + cancel-on-timeout loop. attemptN advances ONLY on RETRIABLE-class
@@ -981,6 +1094,11 @@ export class ExecutionService {
             this.logger.log(
                 `position ${positionRow.id} ${positionRow.symbol} ADDed +${formatMoney(fillSummary.filledQty)} @ ${formatMoney(fillSummary.avgFillPrice)}`,
             );
+
+            // M45 D3b: an ADD increases residual notional but emits no lifecycle event, so the
+            // accounting listener never recomputes — persist open_exposure here so risk_state
+            // does not lag the position until the next open/close.
+            await this.recomputeRiskStateAccountingForToday('add');
 
             return;
         }

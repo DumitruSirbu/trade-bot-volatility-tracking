@@ -159,6 +159,7 @@ export function buildRiskStatePort(
         getDay: jest.fn().mockResolvedValue(day),
         sumRealizedPnlBetween: jest.fn().mockResolvedValue(weeklyPnl),
         upsertDay: jest.fn().mockResolvedValue(undefined),
+        upsertHaltForDay: jest.fn().mockResolvedValue(undefined),
         clearHaltForDate: jest.fn().mockResolvedValue(undefined),
     };
 }

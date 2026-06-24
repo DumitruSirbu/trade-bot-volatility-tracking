@@ -18,6 +18,9 @@ function buildInput(overrides: Partial<ISizingInput> = {}): ISizingInput {
         atr14: new Money('100'),
         atrStopMultiplier: 1.5,
         entryPrice: new Money('10000'),
+        // M45 D1: stop distance derives from |entry - stopLossPrice|. 10000 - 9850 = 150,
+        // matching the prior atr14(100) × multiplier(1.5) distance so existing assertions hold.
+        stopLossPrice: new Money('9850'),
         tradeSide: PositionSideEnum.SHORT,
         fundingRate: 0,
         fundingRateAnnualized: 0,
@@ -89,6 +92,7 @@ describe('PositionSizer', () => {
                     atr14: new Money('0.1'),
                     atrStopMultiplier: 1,
                     entryPrice: new Money('7'),
+                    stopLossPrice: new Money('6.9'), // M45 D1: distance 0.1, matching prior atr14×multiplier
                     instrument: buildInstrument({ stepSize: new Money('0.1'), minNotional: new Money('5') }),
                 }),
             );
@@ -157,6 +161,9 @@ describe('PositionSizer', () => {
                     atr14: new Money('0.01'),
                     atrStopMultiplier: 1.0,
                     entryPrice: new Money('100'),
+                    // M45 D1: a tiny stop distance still drives a huge notional that exceeds the 3×
+                    // leverage cap. The distance must stay >= tickSize (0.1) to clear the zero-guard.
+                    stopLossPrice: new Money('99.9'),
                     instrument: buildInstrument({ stepSize: new Money('0.001'), minNotional: new Money('5') }),
                 }),
             );
@@ -425,6 +432,7 @@ describe('PositionSizer', () => {
                 buildInput({
                     atr14: new Money('333.333333'),
                     entryPrice: new Money('33333.33'),
+                    stopLossPrice: new Money('32833.33'), // M45 D1: distance 500, matching prior atr14×1.5
                     instrument: buildInstrument({ stepSize: new Money('0.001'), minNotional: new Money('1') }),
                 }),
             );
