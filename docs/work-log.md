@@ -1,5 +1,7 @@
 | Milestone / Task | Date | Agents | Outcome |
 |---|---|---|---|
+| **M45 — Position-risk sizing + risk-accounting hardening (DONE)** | 2026-06-24 | (all agents + scribe) | **DONE.** Delivered all 5 code deliverables + pending 1 ops. **D1 (H1):** `PositionSizer` now sizes off `riskedUsdt / |entryPrice - stopLossPrice|` (actual VWAP stop, not 1.5×ATR approximation). `ISizingInput.stopLossPrice: MoneyValue` added; `isStopDistanceValid` guard added (tick-size floor). Both `StrategyService` (live) and `BacktestOrchestrator` (backtest) wired. **D2 (H2):** Migration `20260624172000-AddUpdatedAtToRiskState` adds `updated_at TIMESTAMPTZ`. `upsertDay` and `upsertAccountingForDay` now use newer-wins guard `WHERE risk_state.updated_at <= EXCLUDED.updated_at`. **D3a (M4):** `upsertHaltForDay(date, isHalted, haltReason)` in `RiskStateRepository` — halt-only column write. `persistHalt` now calls `upsertHaltForDay` (no accounting clobber). Both adapters updated. **D3b (M5):** ADD and partial-reduce branches in `ExecutionService` fire `recomputeRiskStateAccountingForToday()` (fire-and-forget, error-logged). **D4 (M3):** `closingInFlight: Set<number>` in `ExecutionService`; close path early-exits if positionId in set. **D5 (H5):** `AuthFailureReasonEnum.BAD_AUDIENCE = 'bad_audience'` added to `packages/shared`. `bearerVerifier.ts` emits `BAD_AUDIENCE` on audience mismatch. **D6 (H7 — pending ops):** Branch-protection rules NOT YET APPLIED (operator task, pending D6 confirmation per runbook). **Tests:** 3,904 engine + 137 MCP, all passing. **Review:** 1 wave (quant + logic + security + clean-code) — 0 blockers, 0 highs, 1 pre-existing MEDIUM. **Migration applied on soak DB.** Engine restart required (D1 stop sizing takes effect, D4 in-flight guard). **Tech-debt surfaced:** ISizingInput location, module-level consts, raw Error throw, MCP tsconfig/max-lifetime issues added to tech-debt LOW. |
+|---|---|---|---|
 | **M44 D1.1 + D1.3 optional hardening** | 2026-06-23 | (bot-engine-nestjs + bot-qa-engineer + scribe) | **DONE.** Shipped two optional data-quality gates. **D1.1 — Zod schema invariant (simulatedFillSchema):** `superRefine` validates `missed=true → missedReason != null`, `missed=false → closeReason != null`, `missed=false → exitPrice != null`. Catches degenerate fills at write-time; hardens historical-data audit. **D1.3 — Miss-event warn escalation:** Promoted two `debug` logs in `ShadowStrategyOrchestratorService` to `warn` with structured payload (`reason: ticks_absent | evidence_null_despite_ticks`, running `missCount`). Extracted reason strings to named constants in `strategyConsts.ts`. **Tests:** 23 unit tests (12 for schema invariant, 11 for miss-warn discriminator). **Status:** M44 remains ACTIVE; B5/D2 (soak gate ≥30 clean v3 fills from ≥2026-06-21) not closed — currently ≈10 fills, need ≈9–10 more soak days. |
 | **M43 RR-geometry sweep analysis harness** | 2026-06-23 | bot-engine-nestjs | **DONE.** Backtest CLI `--target-rr` override added to `BacktestCli.ts` and `BacktestOrchestrator.ts`; re-derives stop-loss to `TP_distance / ratio` and re-sizes position off the new stop (risk-based sizing, realistic). Shared config interface `IBacktestConfig.targetTpSlRatioOverride` (backtest-only, no live-path change). Analysis harness: `scripts/analysis/rr-sweep.sh [FROM_UTC] [TO_UTC] [VERSION_ID] [RATIOS_CSV]` (defaults: 2026-06-09 2026-06-24 3 0.5,1.0,1.5,2.0) + aggregator. Spawns backtest with minimal env allowlist (PATH, HOME, NODE_ENV, DATABASE_URL only); reads soak DB read-only; writes nothing. Output: timestamped markdown summary `docs/analysis/rr-sweep-<YYYYMMDD-HHMM>.md` (headline metrics, RR distribution, expectancy/win-rate movement, findings) + raw JSON in gitignored `docs/analysis/.runs/rr-<runId>/`. First artifact: `rr-sweep-20260623-1611.md` — verdict: RR ratio is not the lever; the v3 strategy remains net-negative at every ratio (0.5→2.0); 43% win rate is binding, preventing positive expectancy regardless of RR multiple. Documented in `docs/best-practices/testing.md` § Reward:risk ratio sweep. Analysis-only; no live-path impact; strategies remain pure and deterministic. |
 | **Backtest time-stop parameter sweep tool** | 2026-06-23 | (bot-engine-nestjs + scribe) | **DONE.** Added optional backtest CLI flag `--time-stop-minutes <n>` + `IBacktestConfig.timeStopMinutesOverride` (engine `BacktestCli.ts` + `BacktestRunnerService.ts`) to override `params.time_stop_minutes` per run WITHOUT mutating the DB row. Reusable analysis harness: `scripts/analysis/timestop-sweep.sh [FROM_UTC] [TO_UTC] [VERSION_ID] [HORIZONS_CSV]` (defaults: 2026-06-09 2026-06-24 3 15,30,45,60) + aggregator `scripts/analysis/timestop-sweep-aggregate.mjs`. Spawns backtest with minimal env allowlist (PATH, HOME, NODE_ENV, DATABASE_URL only — no exchange keys); reads soak DB read-only; writes nothing. Output: timestamped markdown summary `docs/analysis/timestop-sweep-<YYYYMMDD-HHMM>.md` (headline metrics, exit-mix, funnel, caveats, findings) + raw JSON reports in gitignored `docs/analysis/.runs/<runId>/`. First artifact: `timestop-sweep-20260623-1158.md` — verdict: do NOT widen the live 15-min time stop; 15-vs-30 clean comparison shows widening degrades expectancy (−324.74 → −341.80 net PnL, −1.394 → −1.467 expectancy/trade); apparent 45/60 gain is trade-population artifact (1-position slot cap changes which triggers get fills), not exit improvement. Documented in `docs/best-practices/testing.md` § Backtest sweep analysis harnesses. Analysis-only; no live-path impact; strategies remain pure and deterministic. |
@@ -47,3 +49,120 @@
 | **M11a milestone close R4.2** | 2026-05-26 | (bot-review-clean-code, bot-review-logic, orchestrator) | **DONE.** Review round 4.2 (late findings from R4.1): 3 clean-code must-fixes (indent, comment format, constant naming), 2 logic pedantic (edge-case notes), all resolved. Zero blockers, zero highs. Code + docs ready for close-out. |
 | **M43 D2.0 — Long-book RR geometry investigation** | 2026-06-21 | bot-architect | **DONE.** Live soak DB query confirmed: median tier1 long RR 0.445 (TP 0.891% vs SL 1.999%); post-route RR floor revised to ≈1.4–1.5 (live win rate 34.4%, not assumed 50%). Cost-floor anchor alone insufficient; requires raised long multiplier. → [details](wip/done/2026-06-21-m43-d20-longbook-rr-geometry.md) |
 | **M43 D2 — Architect adjudication: ATR multiplier 3.5×** | 2026-06-21 | bot-architect | **DONE.** Chose `MOMENTUM_LONG_TAKE_PROFIT_ATR_MULTIPLIER = 3.5` (moderate; lifts median tier1 long RR 0.445→≈0.78). Rejected 6.3× (fitted parameter, worsens D3 time-stop). Residual gap to ≈1.4 floor accepted; remainder defers to D3 selectivity. → [details](wip/done/2026-06-21-m43-d2-architect-adjudication.md) |
+
+---
+
+## M45 Wave 0 — Investigation findings
+
+**Date:** 2026-06-24 · **Agent:** bot-engine-nestjs · **Scope:** read-only investigation (no code changes). Gates Wave 2 implementation.
+
+### D1.0 — PositionSizer investigation
+
+**Q1 — `ISizingInput` interface (engine-local, NOT in `packages/shared/`).** Defined at `apps/engine/src/risk/service/PositionSizer.ts:11-22`. Fields:
+- `allocatedCapital: MoneyValue`
+- `atr14: MoneyValue`
+- `atrStopMultiplier: number`
+- `entryPrice: MoneyValue`
+- `tradeSide: PositionSideEnum`
+- `fundingRate: number` (periodic rate, ratio)
+- `fundingRateAnnualized: number` (pct)
+- `fundingRateSuppressThreshold: number`
+- `maxExposurePerCoinUsdt: MoneyValue`
+- `instrument: IInstrumentConstraints`
+
+Confirms open question 1: engine-local. **No `packages/shared/` touch needed for D1.** `MoneyValue` is the project decimal type (`../../common/utils/money`).
+
+**Q2 — stop-distance formula today.** `PositionSizer.ts:51`: `const stopDistance = input.atr14.times(input.atrStopMultiplier);` — i.e. `atr14 × atrStopMultiplier`. The configured `atr_stop_multiplier` default is **1.5** (`apps/engine/src/database/migrations/20260522020000-SeedStrategyVersions.ts:18`). Used at `:53` (`baseNotional = riskPerTradeUsdt / stopDistance × entryPrice`) and `:66` (`effectiveRiskUsdt`).
+
+**Q3 — does `ISizingInput` carry `stopLossPrice`?** No. Minimal engine-local change: add `readonly stopLossPrice: MoneyValue;` to the interface (`PositionSizer.ts:11-22`), then derive `stopDistance = entryPrice.minus(stopLossPrice).abs()` and remove the `atr14 × atrStopMultiplier` term from the sizing formula. The stop value itself is unchanged — it is simply passed in instead of approximated.
+
+**Q4 — `areInputsValid` guard (`PositionSizer.ts:83-91`).** Today it guards: finite scalars (`atrStopMultiplier`, `fundingRate`, `fundingRateAnnualized`, `fundingRateSuppressThreshold` all `Number.isFinite`), `entryPrice` finite+positive, `atr14` finite+positive, `allocatedCapital` finite+positive, and `atrStopMultiplier > 0`. **It does NOT guard stop distance** — there is no `stopLossPrice` field today, so no zero-denominator guard exists. The current denominator (`atr14 × atrStopMultiplier`) is protected only indirectly via the `atr14 > 0` and `atrStopMultiplier > 0` checks.
+
+**Q5 — `momentumCore.ts` stopLossPrice.** `apps/engine/src/strategy/strategies/momentumCore.ts:66`: `stopLossPrice: new Money(event.vwapSession)` (`StopTypeEnum.STRUCTURAL`, `:67`). Type is `Money` (decimal). The value is the session VWAP — a structural price level, NOT an ATR-distance stop. It flows into `IProposedExit.stopLossPrice: MoneyValue` (`apps/engine/src/strategy/interface/IProposedExit.ts:10`), carried on `ISignal.proposedExit` (`ISignal.ts:17`).
+
+**Q6 — call sites that pass `ISizingInput`.** Two:
+1. **Live:** `apps/engine/src/strategy/service/StrategyService.ts:216` (`buildOrderIntent`). The method already has `signal: IOpenSignal` in scope, whose `signal.proposedExit.stopLossPrice` is the VWAP stop. **Wiring change:** add `stopLossPrice: signal.proposedExit.stopLossPrice` to the `sizer.size({...})` call. No new plumbing — the value is already in scope.
+2. **Backtest:** `apps/engine/src/backtest/service/BacktestOrchestrator.ts:276`. Has `signal` in scope as well; needs the same `stopLossPrice: signal.proposedExit.stopLossPrice` addition to keep parity. (Both call sites must be updated together or backtest sizing diverges from live.)
+
+**DB validation (soak DB, closed positions, `opened_at >= NOW() - 30 days`).** Note: the plan's example queries used column names that do not exist (`close_reason`→`exit_reason`, `atr_14`→`atr_at_entry`, `coin_tier='tier_1'`→`'tier1'`, and **no `risked_usdt` column exists** on `positions`). Intended per-trade risk was therefore derived analytically: the sizer sizes for a `1.5×ATR` stop, so realized-risk ÷ intended-risk = (realized stop distance in ATR) ÷ 1.5.
+
+Aggregate (all tiers, n=184 closed momentum/structural trades):
+- avg stop distance = **2.913%** of entry; min = 0.0859%; max = 11.92%
+- avg ATR = 0.697% of entry
+- **avg realized stop = 4.23 × ATR** → **risk-budget multiple = 4.23 / 1.5 = 2.82×** the intended per-trade budget.
+
+Per tier:
+| tier | avg stop (×ATR) | risk multiple vs 1.5× sizer | avg stop %entry | min stop %entry | n |
+|---|---|---|---|---|---|
+| tier1 | 4.33 | **2.89×** | 2.56% | 0.086% | 124 |
+| tier2 | 4.02 | **2.68×** | 3.65% | 0.151% | 60 |
+
+This **confirms the ~4×ATR / ~2.7× (live 2.82–2.89×) claim** in the M45 brief. A full stop-out delivers ~2.8× the intended 1% risk budget per trade.
+
+**Min stop-distance floor for the zero-denominator guard.**
+- **decimal.js 10.6.0 behaviour (verified empirically):** `new Decimal(1).dividedBy(new Decimal(0))` returns **`Infinity`** (no throw); `new Decimal(0).dividedBy(new Decimal(0))` returns **`NaN`** (no throw). So a zero/near-zero stop distance does NOT throw — it produces `Infinity`/`NaN` notional that would silently slip past comparison checks (`> minNotional` is `false` for `NaN`, `true` for `Infinity`). The guard MUST be an explicit pre-division check, not a try/catch.
+- **Recommended floor:** reject when `entryPrice.minus(stopLossPrice).abs()` is `< instrument.tickSize` (`IInstrumentConstraints.tickSize` already exists, `apps/engine/src/risk/interface/IInstrumentPort.ts:10`). A one-tick floor is safe: the minimum observed live stop distance is **0.086% of entry** (≈8.6 bps), orders of magnitude above one tick for any realistic instrument, so a tick floor rejects only the genuinely degenerate `stop≈entry` case without rejecting legitimate trades. The guard should also reject non-finite distances (`!isFinite()`), covering the `NaN`/`Infinity` inputs from A5. Return `{ kind: 'invalid_inputs' }`.
+
+**D1.0 conclusion:** Fix is **engine-local only** (no shared-package touch). Add `stopLossPrice: MoneyValue` to `ISizingInput`; derive `stopDistance = |entryPrice − stopLossPrice|`; add a `< tickSize` + non-finite guard returning `invalid_inputs`; wire `stopLossPrice` through BOTH `StrategyService.ts:216` and `BacktestOrchestrator.ts:276` (value already in scope at both). The ~2.7× over-risk claim is confirmed live (2.82× aggregate, 2.89×/2.68× per tier).
+
+### D2.0 — RiskStateRepository investigation
+
+**Q1 — `RiskStateEntity` columns** (`apps/engine/src/risk/entity/RiskStateEntity.ts:10-31`): `id` (PK `risk_state_id`), `date` (`date`), `realizedPnlDay` (`numeric 38,8`), `openExposure` (`numeric 38,8`), `tradesCount` (`integer`), `isHalted` (`boolean`), `haltReason` (`varchar`, nullable). **There is NO `updated_at` column** (and no `created_at`). Confirmed against live DB schema too.
+
+**Q2 — unique constraint.** `@Unique('uq_risk_state_date', ['date'])` (`RiskStateEntity.ts:9`) — conflict key is **`['date']` only**, NOT `(date, strategy_version_id)`. Any `ON CONFLICT` must target `['date']`.
+
+**Q3 — methods in `RiskStateRepository`** (`apps/engine/src/risk/repository/RiskStateRepository.ts`):
+- `findByDate(date)` (`:17`) — read only.
+- `sumRealizedPnlBetween(from,to)` (`:24`) — read only.
+- `clearHaltForDate(date)` (`:35`) — narrow `UPDATE` of `is_halted=false, halt_reason=null` only (already column-scoped, no full-row write).
+- `upsertAccountingForDay(date, {openExposure, realizedPnlDay, tradesCount})` (`:55-71`) — **column-scoped** `ON CONFLICT ... DO UPDATE` on `['open_exposure','realized_pnl_day','trades_count']` keyed on `['date']`; deliberately omits halt columns. **Does NOT call the full-row upsert.**
+- `upsertDay({date, realizedPnlDay, openExposure, tradesCount, isHalted, haltReason})` (`:75-87`) — **the full-row upsert** (`repository.upsert(..., {conflictPaths:['date'], skipUpdateIfNoValuesChanged:true})`). Writes ALL six columns including both accounting AND halt columns.
+
+**Q4 — does `upsertAccountingForDay` exist?** Yes (`:55-71`). Writes only `open_exposure`, `realized_pnl_day`, `trades_count` on conflict; first-touch INSERT seeds `is_halted=false`/`halt_reason=null`. It already closes the accounting-vs-halt race for the lifecycle-listener path.
+
+**Q5 — remaining full-row `upsertDay` call sites** (grep across `apps/engine/src`, excluding backtest adapter which is an in-memory test double):
+1. `RiskGateService.setOpenExposureFromBoot` (`RiskGateService.ts:193`) — writes all 6 columns (preserves loaded halt/pnl, rebuilds exposure).
+2. `RiskGateService.adjustOpenExposure` (`RiskGateService.ts:418`) — writes all 6 columns (read-modify-write of `open_exposure`, copies the other 5 from the loaded row).
+3. `RiskGateService.persistHalt` (`RiskGateService.ts:965`) — `upsertDay({...base, isHalted:true, haltReason})` — writes all 6 (this is the D3a gap).
+4. `RiskStatePortAdapter.upsertDay` (`RiskGateService.ts` sibling, `RiskStatePortAdapter.ts:34-35`) — port pass-through.
+
+(Out of scope: `BacktestRiskStateAdapter.upsertDay`, `BacktestRunnerService:827`, `IRiskStatePort:23` — backtest in-memory book, no concurrency, no DB row race.)
+
+**Q6 — newer-wins guard: migration or not?** The entity has **no monotonic field** (no `updated_at`, no version/sequence column besides the surrogate PK `id` which is not updated on upsert). A timestamp-based newer-wins `ON CONFLICT ... WHERE risk_state.updated_at <= EXCLUDED.updated_at` therefore **requires a schema migration** to add `updated_at timestamptz`. There is no existing field to express monotonicity against.
+
+**D2.0 conclusion: MIGRATION NEEDED — but the original accounting-vs-accounting race is already effectively closed.** `upsertAccountingForDay` already column-scopes the listener's writes and the full-row `upsertDay` no longer touches accounting from the listener path. The remaining real-world race is **halt-write-clobbers-fresh-accounting** (the D3a gap: `persistHalt` does a full-row write copying a possibly-stale accounting snapshot) and the symmetric `adjustOpenExposure`/`setOpenExposureFromBoot` full-row writes copying possibly-stale halt state. To apply a true newer-wins guard across all upsert paths, **D2 must add an `updated_at` column to `RiskStateEntity` + migration** (`YYYYMMDDHHMMSS`-named, reversible, `each`-transaction mode, NEVER `synchronize:true`), then add the newer-wins predicate to `upsertDay`, `upsertAccountingForDay`, and the new `upsertHaltForDay` (D3a). D2 + D3a share this `updated_at` guard field — implement and test together in Wave 2 Batch A, exactly as the brief sequences. **Per CLAUDE.md hard rules 8/9: this migration requires a `pg_dump` + explicit user confirmation before it is run against the soak DB.**
+
+### D3.0 — persistHalt + ADD/REDUCE investigation
+
+#### D3a — `persistHalt`
+
+**Q1 — columns `persistHalt` writes today.** `RiskGateService.ts:957-966`. The call at `:965` is `await context.riskState.upsertDay({ ...base, isHalted: true, haltReason })` where `base = state.today ?? this.emptyDay(...)` (`:962`). So it writes **all six columns** — `date`, `realizedPnlDay`, `openExposure`, `tradesCount` (copied from the loaded `base` snapshot) plus `isHalted:true`, `haltReason`. The accounting side of `base` can be stale by the time the await resolves, clobbering a fresher `upsertAccountingForDay` write from the lifecycle listener. (Idempotent early-return at `:958-960` if already halted today.)
+
+**Q2 — actual halt column names on `RiskStateEntity`.** `is_halted` (TS `isHalted`, `RiskStateEntity.ts:26-27`) and `halt_reason` (TS `haltReason`, nullable, `:29-30`). Confirms the brief: it is **`is_halted`/`halt_reason`**, NOT `halted`/`halt_source`. No `halt_source` column exists.
+
+**Q3 — halt-column-only upsert primitive exists?** **No.** There is no `upsertHaltForDay`. The mirror primitive must be added (symmetric to `upsertAccountingForDay`): an `ON CONFLICT ['date'] DO UPDATE` writing only `is_halted`, `halt_reason` (plus the D2 `updated_at` guard field), with a first-touch INSERT seeding accounting columns to zero. It must NEVER write `realized_pnl_day`, `open_exposure`, or `trades_count`.
+
+**D3a conclusion: GAP CONFIRMED, NO HALT-ONLY PRIMITIVE EXISTS.** Add `upsertHaltForDay({date, isHalted, haltReason})` to `RiskStateRepository` (column-scoped, halt-only); rewire `persistHalt` (`:965`) and `clearHaltForDate` already being narrow is fine. `persistHalt`'s early-return guard stays. Shares the D2 `updated_at` field.
+
+#### D3b — ADD / partial-reduce exposure recompute
+
+**Q1 — does ADD route through `adjustOpenExposure`?** **No.** ADD fills land in `ExecutionService.applyAddToExistingPosition` (`apps/engine/src/execution/service/ExecutionService.ts:1087`), called from `openOrAddPositionAndAttachProtection` (`:918`). The ADD branch (`:976-986`) explicitly does NOT emit `POSITION_OPENED_EVENT` ("POSITION_OPENED_EVENT is not re-emitted for adds", `:978-979`) and does NOT call `adjustOpenExposure`. So an ADD increments `position.qty`/`entry_notional` but leaves `risk_state.open_exposure` untouched until the next open/close lifecycle event triggers a full recompute.
+
+**Q2 — does partial-reduce route through `adjustOpenExposure`?** **No.** The non-closing partial-reduce path (`applyReduceFillToPosition`, `:420-423`) routes the qty mutation through `positionService.adjustQty(...)` and records a transaction row, but **emits no event** and does **not** call `adjustOpenExposure`. Only the **closing**-fill branch (`:450-486`) emits `POSITION_CLOSED_EVENT` (→ lifecycle listener recompute). Separately, `reconcileClose` (`:310`) and `recordExposureDrift` (`:342`) DO call `adjustOpenExposure`, but those are M6 reconciliation paths, not the normal ADD/partial-reduce trade paths.
+
+**Q3 — `RiskStateLifecycleListener` subscriptions** (`apps/engine/src/risk/listener/RiskStateLifecycleListener.ts`):
+- `@OnEvent(POSITION_OPENED_EVENT)` → `onPositionOpened` (`:42-45`) → `recomputeForToday('open')`.
+- `@OnEvent(POSITION_CLOSED_EVENT)` → `onPositionClosed` (`:47-50`) → `recomputeForToday('close')`.
+- `recomputeForToday` (`:52-72`) does a full SELECT-then-`upsertAccountingForDay` (Option R recompute): `open_exposure = SUM(qty×entry_price)` over live rows, `realized_pnl_day`/`trades_count` over closed-today rows. Fire-and-forget; catches + logs at error, never rethrows. **It only fires on OPEN and CLOSE — never on ADD or partial-reduce.**
+
+**Q4 — is the gap "updated but not persisted" or "no recompute at all"?** **Neither half-truth — it is "no recompute at all on ADD/partial-reduce."** ADD/partial-reduce do NOT call `adjustOpenExposure` (so accounting is not even updated in-memory), AND they emit no lifecycle event (so the listener never recomputes). Therefore `risk_state.open_exposure` goes stale after an ADD or partial-reduce until the next OPEN or CLOSE anywhere in the book triggers a full recompute. **There is no double-counting risk** from adding a recompute trigger, because the delta path (`adjustOpenExposure`) is NOT active on these paths — the brief's double-count concern (D3.0(b)) does not materialise.
+
+**D3b conclusion: GAP CONFIRMED — recompute trigger needed; NO double-count risk.** Preferred fix per brief open-question 3: fire a scoped recompute at the end of the ADD branch (`:980-985`) and the non-closing partial-reduce branch (`:497-500`). The cleanest no-new-event option is to call the same `upsertAccountingForDay`-backed recompute the listener uses (either emit a lightweight internal recompute trigger, or have these branches emit an existing/observable event the listener already handles). Since the listener recomputes from authoritative position rows (idempotent), firing it on ADD/partial-reduce cannot double-book. Implementation choice (direct repository recompute vs. new internal event) is bot-engine-nestjs's call in Wave 2 Batch B; a direct recompute call avoids event indirection per brief open-question 3.
+
+### Surprises that change the Wave 2 plan
+
+1. **The plan's D1.0 example DB queries use non-existent column names.** `positions` has `exit_reason` (not `close_reason`), `atr_at_entry` (not `atr_14`), `coin_tier='tier1'` (not `'tier_1'`), and **no `risked_usdt` column at all**. The risk-budget multiple had to be derived analytically (realized-ATR-multiple ÷ 1.5). Wave 3 QA tests that assert the sizing invariant should reference `entry_notional`/computed risk, not a non-existent `risked_usdt` column. The ~2.7× claim still holds (2.82× live).
+2. **decimal.js 10.6.0 does NOT throw on division by zero** — it returns `Infinity` (x/0) or `NaN` (0/0). The D1 zero-denominator guard must be an explicit pre-division `< tickSize` + `isFinite()` check; a try/catch would never fire. (A5 adversarial tests should assert this directly.)
+3. **D2 confirmed to require a schema migration** (`updated_at` on `RiskStateEntity`) — there is no existing monotonic field. This adds a migration to Wave 2 Batch A and triggers the CLAUDE.md pg_dump + user-confirmation gate before the migration runs against the soak DB. The scribe should add a migration note to the dispatch sequence.
+4. **D3b gap is broader than "stale until next event"** — ADD/partial-reduce neither update exposure in-memory nor emit any lifecycle event, so exposure is fully un-recomputed until an unrelated OPEN/CLOSE fires. No double-count risk (delta path inactive), so a recompute trigger is safe to add.
+5. **D1 wiring is genuinely one line per call site** — `signal.proposedExit.stopLossPrice` is already in scope at both `StrategyService.ts:216` and `BacktestOrchestrator.ts:276`; both must be updated together to preserve live/backtest parity (A2/A3).

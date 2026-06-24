@@ -162,6 +162,7 @@ function buildContext(overrides: { snapshot?: Record<string, unknown> } = {}): I
             getDay: jest.fn().mockResolvedValue(dayRow),
             sumRealizedPnlBetween: jest.fn().mockResolvedValue(new Money(0)),
             upsertDay: jest.fn().mockResolvedValue(undefined),
+            upsertHaltForDay: jest.fn().mockResolvedValue(undefined),
             clearHaltForDate: jest.fn().mockResolvedValue(undefined),
         },
         openPositions: {

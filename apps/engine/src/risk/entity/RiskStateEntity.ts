@@ -28,4 +28,7 @@ export class RiskStateEntity {
 
     @Column({ name: 'halt_reason', type: 'varchar', nullable: true })
     haltReason?: string | null;
+
+    @Column({ name: 'updated_at', type: 'timestamptz', default: () => 'now()' })
+    updatedAt!: Date;
 }

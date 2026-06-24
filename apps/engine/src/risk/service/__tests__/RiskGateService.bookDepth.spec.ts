@@ -208,6 +208,7 @@ function buildContext(bookDepth: string, nowMs = 1_700_000_000_000): IRiskGateCo
             getDay: jest.fn().mockResolvedValue(safeRiskStateDay),
             sumRealizedPnlBetween: jest.fn().mockResolvedValue(new Money(0)),
             upsertDay: jest.fn().mockResolvedValue(undefined),
+            upsertHaltForDay: jest.fn().mockResolvedValue(undefined),
             clearHaltForDate: jest.fn().mockResolvedValue(undefined),
         },
         openPositions: {

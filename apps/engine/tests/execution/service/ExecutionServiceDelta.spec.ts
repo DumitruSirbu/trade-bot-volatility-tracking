@@ -170,6 +170,7 @@ function makeService(
         { emitSyntheticClose: jest.fn() } as any,
         exchangeClient,
         events,
+        { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
     );
 
     return {
@@ -498,6 +499,7 @@ describe('ExecutionService — POST_ONLY_MAKER awaitPolicyTimeout: cancel + clas
             { emitSyntheticClose: jest.fn() } as any,
             exchangeClient,
             events,
+            { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
         );
 
         const event = buildApprovedEvent({ intent: buildOrderIntent({ tradeSide: PositionSideEnum.SHORT }) });
@@ -589,6 +591,7 @@ describe('ExecutionService — POST_ONLY_MAKER would-cross → CANCELLED, no res
             { emitSyntheticClose: jest.fn() } as any,
             exchangeClient,
             events,
+            { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
         );
 
         // LONG intent: tradeSide = LONG, limitPrice (30000) >= bestAsk (29999) → would cross
@@ -707,6 +710,7 @@ describe('ExecutionService — ADD path with weighted-average entry', () => {
             { emitSyntheticClose: jest.fn() } as any,
             exchangeClient,
             events,
+            { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
         );
 
         const addIntent = buildOrderIntent({
@@ -836,6 +840,7 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
             { emitSyntheticClose: jest.fn() } as any,
             exchangeClient,
             events,
+            { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
         );
 
         const reduceIntent = buildOrderIntent({
@@ -948,6 +953,7 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
             { emitSyntheticClose: jest.fn() } as any,
             exchangeClient,
             events,
+            { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
         );
 
         const intent = buildOrderIntent({

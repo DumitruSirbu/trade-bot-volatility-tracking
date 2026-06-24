@@ -278,6 +278,7 @@ export class BacktestOrchestrator {
             atr14: new Money(event.atr14),
             atrStopMultiplier,
             entryPrice,
+            stopLossPrice: signal.proposedExit.stopLossPrice,
             tradeSide: signal.tradeSide,
             fundingRate: event.fundingRate,
             fundingRateAnnualized: event.fundingRateAnnualized,

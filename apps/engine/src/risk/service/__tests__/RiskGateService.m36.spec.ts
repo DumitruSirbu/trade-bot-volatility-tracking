@@ -170,6 +170,7 @@ function buildContext(overrides: IContextOverrides = {}): IRiskGateContext {
             getDay: jest.fn().mockResolvedValue(dayRow),
             sumRealizedPnlBetween: jest.fn().mockResolvedValue(weeklyPnl),
             upsertDay: upsertDayMock,
+            upsertHaltForDay: jest.fn().mockResolvedValue(undefined),
             clearHaltForDate: jest.fn().mockResolvedValue(undefined),
         },
         openPositions: {

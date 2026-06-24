@@ -948,21 +948,22 @@ export class RiskGateService {
         return null;
     }
 
-    // Durable, idempotent halt write (ADR 0004 §6). Upserts today's risk_state row with
-    // is_halted=true + the halt reason, preserving the existing PnL/exposure/trade counters.
-    // Idempotent on the UTC-day key so a replay or a re-trigger never double-applies. For a
-    // market_stress halt the written reason carries the `market_stress:<leg>` suffix (M23, ADR
-    // 0004 §6d); loss-based reasons are written unchanged. Pure command: the per-day breadth
-    // re-halt counters are advanced by the market_stress call site, not here (CQS).
+    // Durable, idempotent halt write (ADR 0004 §6). Persists is_halted=true + the halt reason on
+    // today's risk_state row via the column-scoped upsertHaltForDay — it touches ONLY the halt
+    // columns, so a concurrent accounting write cannot be clobbered (M45 D3a closes the
+    // read-then-write race the old full-row upsertDay carried). Idempotent on the UTC-day key so a
+    // replay or re-trigger never double-applies. For a market_stress halt the written reason
+    // carries the `market_stress:<leg>` suffix (M23, ADR 0004 §6d); loss-based reasons are written
+    // unchanged. Pure command: the per-day breadth re-halt counters are advanced by the
+    // market_stress call site, not here (CQS).
     private async persistHalt(context: IRiskGateContext, state: ILoadedState, reason: RejectReasonEnum): Promise<void> {
         if (state.today !== null && state.today.isHalted) {
             return;
         }
 
-        const base = state.today ?? this.emptyDay(context.utcDateString);
         const haltReason = this.buildPersistedHaltReason(context, reason);
 
-        await context.riskState.upsertDay({ ...base, isHalted: true, haltReason });
+        await context.riskState.upsertHaltForDay(context.utcDateString, true, haltReason);
     }
 
     // The persisted halt_reason string. market_stress carries the classified trigger-leg suffix
@@ -975,17 +976,6 @@ export class RiskGateService {
         const leg = this.stress.classifyHaltLeg(context.snapshot, context.params, this.appConfig.paperRelaxMarketStress);
 
         return `${RejectReasonEnum.MARKET_STRESS}:${leg}`;
-    }
-
-    private emptyDay(dateString: string): IRiskStateDay {
-        return {
-            date: dateString,
-            realizedPnlDay: new Money(0),
-            openExposure: new Money(0),
-            tradesCount: 0,
-            isHalted: false,
-            haltReason: null,
-        };
     }
 
     // Consecutive closed losses today, derived from closed positions ordered by closedAt

@@ -2,7 +2,7 @@
 //
 // Extends the existing HttpTransport.auth.spec.ts with adversarial scenarios
 // that specifically target the claim-level attack surface:
-//   [A] Token with aud='engine' (wrong audience) → -32000 (BAD_SCOPE).
+//   [A] Token with aud='engine' (wrong audience) → -32000 (BAD_AUDIENCE).
 //   [B] Token signed with a different HS256 key → -32000 (BAD_SIGNATURE).
 //   [C] Revoked JTI present in revoked_jti store → -32000 (REVOKED).
 //   [D] Loopback bind: connecting to 127.0.0.1 from the test process works;
@@ -135,8 +135,8 @@ describe('HttpTransport — adversarial transport spoofing (M13 W6a vector 5)', 
         const res = await postJsonRpc(handle.port, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, tok);
         expect(res.status).toBe(401);
         expect(res.body.error?.code).toBe(-32000);
-        // BAD_SCOPE is the current mapping (BAD_AUDIENCE not yet in shared enum — ADR 0038 §2.2 note).
-        expect(res.body.error?.data?.reason).toBe(AuthFailureReasonEnum.BAD_SCOPE);
+        // M45 D5: an audience-allowlist miss now maps to the dedicated BAD_AUDIENCE reason (ADR 0038 §2.2).
+        expect(res.body.error?.data?.reason).toBe(AuthFailureReasonEnum.BAD_AUDIENCE);
     });
 
     it('[A] token with aud=dashboard (wrong audience) is rejected with -32000', async () => {

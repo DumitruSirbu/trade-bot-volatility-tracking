@@ -121,6 +121,7 @@ describe('ExecutionService entry fill path — arm/record ordering invariant', (
             { emitSyntheticClose: jest.fn() } as any,
             exchangeClient,
             events,
+            { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
         );
 
         // OPERATE: an open fill triggers the entry fill path.

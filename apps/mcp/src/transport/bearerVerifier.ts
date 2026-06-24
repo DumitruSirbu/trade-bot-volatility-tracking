@@ -135,12 +135,10 @@ export async function verifyBearer(token: string, secret: Buffer, revoked: IRevo
     }
 
     if (parsed.aud !== MCP_AUTH_REQUIRED_AUDIENCE) {
-        // ADR 0038 §2.2 names a `BAD_AUDIENCE` reason. The shared enum
-        // currently exposes only the M9-era reasons; adding BAD_AUDIENCE is a
-        // packages/shared change that must route through bot-shared-maintainer
-        // — deferred. BAD_SCOPE is the closest existing semantic (token does
-        // not bear the required surface scope).
-        throw new BearerVerificationError(AuthFailureReasonEnum.BAD_SCOPE, 'audience mismatch');
+        // ADR 0038 §2.2 names a `BAD_AUDIENCE` reason for an audience-allowlist
+        // miss (token minted for a different surface). Added to the shared enum
+        // in M45; the verifier no longer overloads BAD_SCOPE here.
+        throw new BearerVerificationError(AuthFailureReasonEnum.BAD_AUDIENCE, 'audience mismatch');
     }
 
     if (await revoked.isRevoked(parsed.jti)) {

@@ -7,4 +7,5 @@ export enum AuthFailureReasonEnum {
     CORS_FORBIDDEN = 'cors_forbidden',
     BAD_SECRET = 'bad_secret',
     BAD_SIGNATURE = 'bad_signature',
+    BAD_AUDIENCE = 'bad_audience',
 }

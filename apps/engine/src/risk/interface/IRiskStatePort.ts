@@ -21,6 +21,11 @@ export interface IRiskStatePort {
     // upper bound prevents a future-dated replay/seed row from leaking into the sum.
     sumRealizedPnlBetween(fromDate: string, toDate: string): Promise<MoneyValue>;
     upsertDay(day: IRiskStateDay): Promise<void>;
+    // M45 D3a. Column-scoped halt write: persists ONLY is_halted + halt_reason for the UTC day,
+    // PRESERVING the PnL/exposure/trade counters. The full-row upsertDay carried a read-then-write
+    // race where an accounting write between the gate's read and its upsert clobbered the halt;
+    // this narrow write closes it. Idempotent on the UTC-day key.
+    upsertHaltForDay(date: string, isHalted: boolean, haltReason: string | null): Promise<void>;
     // M23 (ADR 0004 §6d). Inverse of a halt write for breadth auto-resume: set is_halted=false,
     // halt_reason=null for the UTC day, PRESERVING the PnL/exposure/trade counters so the
     // daily/weekly loss windows still bind after resume. Idempotent on the UTC-day key.

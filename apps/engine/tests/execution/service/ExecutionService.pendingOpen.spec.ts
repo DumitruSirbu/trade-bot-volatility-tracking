@@ -145,6 +145,7 @@ function makeWiredService(
         { emitSyntheticClose: jest.fn() } as any,
         exchangeClient,
         events,
+        { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
     );
 
     return { service, positions, positionService, protectiveAttacher, emitSpy, armSpy, disarmSpy };

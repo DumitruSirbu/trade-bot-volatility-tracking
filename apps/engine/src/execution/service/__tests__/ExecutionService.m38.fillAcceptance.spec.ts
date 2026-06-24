@@ -249,6 +249,7 @@ function buildService(
         positionCloseCoordinator, // positionCloseCoordinator
         {} as any, // exchangeClient
         events, // events
+        { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any, // riskState
     );
 }
 

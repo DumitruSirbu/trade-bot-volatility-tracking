@@ -120,6 +120,7 @@ function buildService(): ExecutionService {
         { emitSyntheticClose: jest.fn() } as any, // positionCloseCoordinator
         {} as any, // exchangeClient
         { emit: jest.fn() } as any, // events
+        { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any, // riskState
     );
 }
 

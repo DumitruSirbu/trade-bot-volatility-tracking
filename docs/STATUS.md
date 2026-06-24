@@ -4,7 +4,7 @@ Living snapshot (~15 lines). **Single writer = scribe** at milestone close. Do n
 
 | Field | Value |
 |-------|-------|
-| **ACTIVE** | **M44** — Shadow-fill fidelity B5 verification gate (soak accumulation, no fix required) |
-| **Last DONE** | **M43** — Strategy selectivity (D1a `catalyst_risk → skip`), long-book RR geometry (D2, 3.5× long multiplier + cost-floor anchor), phantom purge (D5) (2026-06-22). Branch: `feat/m43-strategy-selectivity-rr-geometry`, ready for PR / deploy. |
-| **Deploy** | M43 coded+reviewed. **Engine restart required.** No schema migration. D1a takes effect on restart. D1b deferred (v3 promotion blocked — no soak-data path in engine; queued with prerequisites). D3 investigation pending (post-D1a soak day). B5 status: `!hasNextBarEntry` rate not measured (engine unreachable) — remains open, blocks deferred D1b. |
-| **Next queue** | D3 residual dead-signal investigation (needs post-D1a soak data); D1b v3 promotion prerequisites (soak-promotion pathway ADR, B5 closed, paired-CI + mechanism-attribution + ≥30 floor); M15 (cloud go-live). |
+| **ACTIVE** | **M44** — Shadow-fill fidelity B5 verification gate (soak accumulation, no fix required). ≥30 clean v3 fills from ≥2026-06-21; currently ≈10 fills, need ≈9–10 more soak days. |
+| **Last DONE** | **M45** — Position-risk sizing + risk-accounting hardening (D1 sizer/stop alignment, D2 newer-wins upsert, D3a halt isolation, D3b ADD recompute, D4 double-close guard, D5 BAD_AUDIENCE). Migration `20260624172000-AddUpdatedAtToRiskState` applied on soak DB. D6 (branch protection) pending operator. Branch: `feat/m45-tech-debt-hardening`. |
+| **Deploy** | M45 coded+reviewed. **Engine restart required** (D1 stop-distance sizing takes effect, D4 in-memory guard wires). No additional migration. D6 ops: apply branch protection via `docs/runbooks/ci-gates.md` §2 before any live merge. |
+| **Next queue** | M44 B5 soak closure (≥30 fills, re-measure from 2026-06-21); M15 cloud go-live (gated on B5 + v3-edge evaluation); D6 branch protection ops (operator). |
