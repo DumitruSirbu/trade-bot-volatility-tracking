@@ -6,6 +6,7 @@ Exactly **one** row may be `ACTIVE`. Status lives here only — not in plan fron
 
 | ID | Status | Summary (1 line) | ADRs | Modules |
 |----|--------|------------------|------|---------|
+| M46 | DONE | Rate-limit ledger audit — Scenario A1 confirmed (separate-ledger: host boundary `/fapi` vs `/sapi`). New `SAPI_REQUEST_WEIGHT_1M` bucket (local-only); `REQUEST_WEIGHT_1M` now `/fapi`-only. ADR 0030 §2.7 amended. H4 resolved. | 0030 | exchange |
 | M45 | DONE | Position-risk sizing integrity + risk-accounting hardening (D1 sizer/stop alignment H1, D2 newer-wins upsert H2, D3 persistHalt+ADD accounting M4/M5, D4 double-close race M3, D5 BAD_AUDIENCE enum H5, D6 branch-protection ops H7) | — | risk, execution, auth |
 | M44 | ACTIVE | Verify shadow-fill fidelity & close the B5 gap — **soak verification gate, no fix required** (degeneracy was a pre-fix artifact, already resolved; B5 closes by ≥30-fill soak accumulation + re-measurement on pinned `from ≥ 2026-06-21` window). Optional non-blocking hardening (D1.1 schema invariant, D1.3 miss observability); contingency-only fix if degeneracy recurs at n≥30. Unblocks D1b v3-promotion *evaluation* + trustworthy `compareVersions` | 0029 | shadow, analysis |
 | M43 | DONE | Strategy selectivity (D1a `catalyst_risk → skip` in v2, D2 3.5× long TP + cost-floor anchor, D5 phantom purge; D1b/D3 deferred) | 0003, 0045 | strategy, backtest, analysis |

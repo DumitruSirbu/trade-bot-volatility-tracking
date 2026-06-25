@@ -5,6 +5,7 @@ import { ALERT_SINK, IAlertSink } from '../../alert/sink/AlertSinkModule';
 import { CLOCK, IClock } from '../../common/clock/Clock';
 import { AppConfigService } from '../../config/service';
 import {
+    FAPI_OPERATION_WEIGHTS,
     OPERATION_REQUEST_WEIGHTS,
     ORDERS_10S_PUBLISHED_LIMIT,
     ORDERS_10S_WINDOW_MS,
@@ -22,6 +23,9 @@ import {
     RAW_REQUESTS_5M_WINDOW_MS,
     REQUEST_WEIGHT_1M_PUBLISHED_LIMIT,
     REQUEST_WEIGHT_1M_WINDOW_MS,
+    SAPI_OPERATION_WEIGHTS,
+    SAPI_REQUEST_WEIGHT_1M_PUBLISHED_LIMIT,
+    SAPI_REQUEST_WEIGHT_1M_WINDOW_MS,
 } from '../const/rateLimitConsts';
 import { ExchangeRateLimitExhaustedException, RateLimitConfigInvariantException, SymbolRateLimitExhaustedException } from '../exception';
 import { IRateLimitHaltPort, RATE_LIMIT_HALT_PORT } from '../interface/IRateLimitHaltPort';
@@ -29,10 +33,11 @@ import { IRateLimitClassSnapshot, IRateLimitHeaders, IRateLimitPolicy, IRateLimi
 
 // M11a W1.4 (ADR 0030). In-process multi-class token-bucket limiter.
 //
-// Four buckets per ADR 0030 §2.1 (REQUEST_WEIGHT_1M, ORDERS_10S, ORDERS_1M,
-// RAW_REQUESTS_5M) + per-symbol sub-buckets on the ORDERS classes (§2.4).
-// Token cost = call.requestWeight (REQUEST_WEIGHT_1M) or 1 (others). Refill is
-// continuous (capacity / windowSeconds per second).
+// Five buckets per ADR 0030 §2.1 + §2.7 (REQUEST_WEIGHT_1M, SAPI_REQUEST_WEIGHT_1M,
+// ORDERS_10S, ORDERS_1M, RAW_REQUESTS_5M) + per-symbol sub-buckets on the ORDERS
+// classes (§2.4). The `/fapi` and `/sapi` hosts carry independent per-IP weight
+// budgets, so a call's request-weight cost debits whichever host bucket its
+// operation maps to. Refill is continuous (capacity / windowSeconds per second).
 //
 // `acquire()` honours the caller-declared mode:
 //   - fail-fast: any class below cost throws immediately. Used by createOrder /
@@ -64,6 +69,7 @@ export class RateLimitPolicyService implements IRateLimitPolicy, OnModuleInit {
     private readonly logger = new Logger(RateLimitPolicyService.name);
 
     private readonly requestWeight1m: IBucket;
+    private readonly sapiRequestWeight1m: IBucket;
     private readonly orders10s: IBucket;
     private readonly orders1m: IBucket;
     private readonly rawRequests5m: IBucket;
@@ -92,6 +98,7 @@ export class RateLimitPolicyService implements IRateLimitPolicy, OnModuleInit {
         const nowMs = this.clock.now().getTime();
 
         this.requestWeight1m = makeBucket('REQUEST_WEIGHT_1M', REQUEST_WEIGHT_1M_PUBLISHED_LIMIT, REQUEST_WEIGHT_1M_WINDOW_MS, nowMs);
+        this.sapiRequestWeight1m = makeBucket('SAPI_REQUEST_WEIGHT_1M', SAPI_REQUEST_WEIGHT_1M_PUBLISHED_LIMIT, SAPI_REQUEST_WEIGHT_1M_WINDOW_MS, nowMs);
         this.orders10s = makeBucket('ORDERS_10S', ORDERS_10S_PUBLISHED_LIMIT, ORDERS_10S_WINDOW_MS, nowMs);
         this.orders1m = makeBucket('ORDERS_1M', ORDERS_1M_PUBLISHED_LIMIT, ORDERS_1M_WINDOW_MS, nowMs);
         this.rawRequests5m = makeBucket('RAW_REQUESTS_5M', RAW_REQUESTS_5M_PUBLISHED_LIMIT, RAW_REQUESTS_5M_WINDOW_MS, nowMs);
@@ -116,7 +123,7 @@ export class RateLimitPolicyService implements IRateLimitPolicy, OnModuleInit {
         const product = maxOpenPositions * PER_SYMBOL_ORDERS_SHARE;
 
         if (product > 1.0) {
-            throw new RateLimitConfigInvariantException(maxOpenPositions, PER_SYMBOL_ORDERS_SHARE);
+            throw RateLimitConfigInvariantException.perSymbolShareTooLarge(maxOpenPositions, PER_SYMBOL_ORDERS_SHARE);
         }
     }
 
@@ -204,9 +211,10 @@ export class RateLimitPolicyService implements IRateLimitPolicy, OnModuleInit {
 
     private findInsufficientClass(call: IRateLimitedCall): string | null {
         const weightCost = call.requestWeight;
+        const weightBucket = this.weightBucketFor(call);
 
-        if (weightCost > 0 && this.requestWeight1m.currentTokens < weightCost) {
-            return this.requestWeight1m.className;
+        if (weightCost > 0 && weightBucket.currentTokens < weightCost) {
+            return weightBucket.className;
         }
 
         if (this.rawRequests5m.currentTokens < 1) {
@@ -262,9 +270,26 @@ export class RateLimitPolicyService implements IRateLimitPolicy, OnModuleInit {
         return null;
     }
 
+    // M46 (ADR 0030 §2.7). Routes a call to its request-weight bucket by HOST:
+    // `/sapi` operations debit the independent SAPI bucket, everything else the
+    // `/fapi` REQUEST_WEIGHT_1M bucket. An operation in NEITHER host map is a
+    // config invariant violation — the limiter must never silently let an
+    // unknown call site through, so we throw rather than default a host.
+    private weightBucketFor(call: IRateLimitedCall): IBucket {
+        if (SAPI_OPERATION_WEIGHTS[call.operation] !== undefined) {
+            return this.sapiRequestWeight1m;
+        }
+
+        if (FAPI_OPERATION_WEIGHTS[call.operation] !== undefined) {
+            return this.requestWeight1m;
+        }
+
+        throw RateLimitConfigInvariantException.unknownOperation(call.operation);
+    }
+
     private debitAll(call: IRateLimitedCall): void {
         if (call.requestWeight > 0) {
-            this.requestWeight1m.currentTokens -= call.requestWeight;
+            this.weightBucketFor(call).currentTokens -= call.requestWeight;
         }
 
         this.rawRequests5m.currentTokens -= 1;
@@ -292,7 +317,8 @@ export class RateLimitPolicyService implements IRateLimitPolicy, OnModuleInit {
     private async sleepUntilNextTick(failingClass: string, call: IRateLimitedCall, nowMs: number, deadlineMs: number | null): Promise<void> {
         // Sleep just long enough for one token to refill in the failing class.
         const bucket = this.findBucketByName(failingClass);
-        const tokensNeeded = call.requestWeight > 0 && failingClass === this.requestWeight1m.className ? call.requestWeight - bucket.currentTokens : 1;
+        const isWeightClass = failingClass === this.weightBucketFor(call).className;
+        const tokensNeeded = call.requestWeight > 0 && isWeightClass ? call.requestWeight - bucket.currentTokens : 1;
         const sleepMs = Math.max(10, Math.ceil(tokensNeeded / bucket.refillPerMs));
         const bounded = deadlineMs !== null ? Math.min(sleepMs, Math.max(1, deadlineMs - nowMs)) : sleepMs;
 
@@ -332,8 +358,11 @@ export class RateLimitPolicyService implements IRateLimitPolicy, OnModuleInit {
 
     // Single bucket-array accessor (DRY, ADR 0030 §2.1). Order matches the
     // table in §2.1 so snapshots render deterministically.
+    // M46 (ADR 0030 §2.7): `sapiRequestWeight1m` MUST be in `allBuckets` — a
+    // `/sapi` call during an IP ban hits the SAME IP, so `engageFreeze()` must
+    // drain and suspend it alongside the `/fapi` buckets.
     private get allBuckets(): readonly IBucket[] {
-        return [this.requestWeight1m, this.orders10s, this.orders1m, this.rawRequests5m];
+        return [this.requestWeight1m, this.sapiRequestWeight1m, this.orders10s, this.orders1m, this.rawRequests5m];
     }
 
     private refillAll(nowMs: number): void {
@@ -551,6 +580,10 @@ export class RateLimitPolicyService implements IRateLimitPolicy, OnModuleInit {
             return this.requestWeight1m;
         }
 
+        if (className === this.sapiRequestWeight1m.className) {
+            return this.sapiRequestWeight1m;
+        }
+
         if (className === this.orders10s.className) {
             return this.orders10s;
         }
@@ -559,7 +592,11 @@ export class RateLimitPolicyService implements IRateLimitPolicy, OnModuleInit {
             return this.orders1m;
         }
 
-        return this.rawRequests5m;
+        if (className === this.rawRequests5m.className) {
+            return this.rawRequests5m;
+        }
+
+        throw RateLimitConfigInvariantException.unknownBucket(className);
     }
 
     private getOrCreateSymbolBucket(parentClass: 'ORDERS_10S' | 'ORDERS_1M', symbol: string, parent: IBucket): IBucket {
@@ -598,7 +635,7 @@ export function buildRateLimitedCall(input: {
     const weight = OPERATION_REQUEST_WEIGHTS[input.operation];
 
     if (weight === undefined) {
-        throw new Error(`No REQUEST_WEIGHT entry for ccxt operation '${input.operation}' — add to OPERATION_REQUEST_WEIGHTS.`);
+        throw RateLimitConfigInvariantException.unknownOperation(input.operation);
     }
 
     return {

@@ -23,10 +23,19 @@ export const ORDERS_10S_PUBLISHED_LIMIT = 300;
 export const ORDERS_1M_PUBLISHED_LIMIT = 1200;
 export const RAW_REQUESTS_5M_PUBLISHED_LIMIT = 61_000;
 
+// M46 (ADR 0030 §2.7). `/sapi` host carries its OWN IP request-weight budget,
+// distinct from the `/fapi` REQUEST_WEIGHT_1M class above. The split follows the
+// HOST boundary (`/fapi` vs `/sapi`), not endpoint type — Binance accounts the
+// two hosts' weight independently, so a saturated `/fapi` budget must not block
+// a `/sapi` call and vice versa. Published `/sapi` IP weight limit is 1200/min
+// (the wallet/account REST cluster's per-IP minute budget).
+export const SAPI_REQUEST_WEIGHT_1M_PUBLISHED_LIMIT = 1200;
+
 export const REQUEST_WEIGHT_1M_WINDOW_MS = 60_000;
 export const ORDERS_10S_WINDOW_MS = 10_000;
 export const ORDERS_1M_WINDOW_MS = 60_000;
 export const RAW_REQUESTS_5M_WINDOW_MS = 300_000;
+export const SAPI_REQUEST_WEIGHT_1M_WINDOW_MS = 60_000;
 
 // Per-symbol sub-bucket share (ADR 0030 §2.4). 30% of ORDERS_* per symbol so
 // a single symbol cannot starve the other 2 slots of the M4 3-slot model.
@@ -63,15 +72,27 @@ export const RATE_LIMIT_DRIFT_LOG_COALESCE_MS = 5 * 60_000;
 // Binance header names (case-insensitive at the HTTP layer; the helper
 // normalises to lowercase before lookup).
 export const HEADER_USED_WEIGHT_1M = 'x-mbx-used-weight-1m';
+// M46 (ADR 0030 §2.7). The `/sapi` host returns the SAME header NAME
+// (`x-mbx-used-weight-1m`) as `/fapi`; only the HOST differs. The bucket
+// distinction therefore lives in the router (operation -> bucket map), NOT in
+// the header string. We intentionally do NOT reconcile `sapiRequestWeight1m`
+// from this header — a `/fapi` response's `x-mbx-used-weight-1m` reflects the
+// `/fapi` budget, so cross-applying it to the `/sapi` bucket would corrupt it.
+// The `/sapi` bucket is local-only, like RAW_REQUESTS_5M (§2.7).
 export const HEADER_ORDER_COUNT_10S = 'x-mbx-order-count-10s';
 export const HEADER_ORDER_COUNT_1M = 'x-mbx-order-count-1m';
 export const HEADER_RETRY_AFTER = 'retry-after';
 
-// Per-operation REQUEST_WEIGHT table (ADR 0030 §2.2). Adding a new ccxt method
-// requires an entry here; calling an unknown operation throws so the call-site
-// cannot drift past the limiter. Weights re-verified against Binance Futures
-// 2026-05-25 — same caveat as the limit constants above.
-export const OPERATION_REQUEST_WEIGHTS: Readonly<Record<string, number>> = {
+// Per-operation REQUEST_WEIGHT table (ADR 0030 §2.2, §2.7). Adding a new ccxt
+// method requires an entry in the host-appropriate map below; calling an unknown
+// operation throws so the call-site cannot drift past the limiter. Weights
+// re-verified against Binance Futures 2026-05-25 — same caveat as the limit
+// constants above.
+//
+// M46 (ADR 0030 §2.7): the table is split by HOST so the router can debit the
+// correct request-weight bucket. `/fapi` operations debit REQUEST_WEIGHT_1M;
+// `/sapi` operations debit the independent SAPI_REQUEST_WEIGHT_1M bucket.
+export const FAPI_OPERATION_WEIGHTS: Readonly<Record<string, number>> = {
     loadMarkets: 1,
     fetchBalance: 5,
     fetchOpenInterest: 1,
@@ -86,12 +107,28 @@ export const OPERATION_REQUEST_WEIGHTS: Readonly<Record<string, number>> = {
     cancelOrder: 1,
     cancelOrderByClientId: 1,
     cancelAllOrders: 1,
-    sapiGetAccountApiRestrictions: 1,
-    sapiGetAccountApiRestrictionsIpRestriction: 1,
     // WS calls do not consume REST weight but the helper still routes through
     // the limiter for RAW_REQUESTS observability; weight=0 means they do not
     // count toward REQUEST_WEIGHT_1M.
     watchTickers: 0,
     watchOrderBook: 0,
     watchTrades: 0,
+};
+
+// `/sapi`-host operations. These debit SAPI_REQUEST_WEIGHT_1M (per-IP `/sapi`
+// budget) + RAW_REQUESTS_5M, never the `/fapi` REQUEST_WEIGHT_1M bucket.
+export const SAPI_OPERATION_WEIGHTS: Readonly<Record<string, number>> = {
+    sapiGetAccountApiRestrictions: 1,
+    sapiGetAccountApiRestrictionsIpRestriction: 1,
+};
+
+// Union of FAPI_OPERATION_WEIGHTS and SAPI_OPERATION_WEIGHTS. Still consumed by
+// `buildRateLimitedCall` as its own operation-known guard: the per-host maps
+// (FAPI_OPERATION_WEIGHTS, SAPI_OPERATION_WEIGHTS) are the *routing* authority
+// (which bucket to charge), while this union is the *existence* authority (is
+// this op registered at all). Not a removable alias — dropping it breaks the
+// guard.
+export const OPERATION_REQUEST_WEIGHTS: Readonly<Record<string, number>> = {
+    ...FAPI_OPERATION_WEIGHTS,
+    ...SAPI_OPERATION_WEIGHTS,
 };

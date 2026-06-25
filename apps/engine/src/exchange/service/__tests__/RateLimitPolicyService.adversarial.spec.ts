@@ -12,10 +12,12 @@ import { ExchangeRateLimitExhaustedException, SymbolRateLimitExhaustedException 
 import { IRateLimitHeaders, IRateLimitedCall } from '../../interface/IRateLimitPolicy';
 import {
     ORDERS_10S_PUBLISHED_LIMIT,
+    RATE_LIMIT_418_DEFAULT_FREEZE_MS,
     RATE_LIMIT_DRIFT_LOG_COALESCE_MS,
     RATE_LIMIT_DRIFT_THRESHOLD_FRACTION,
     RATE_LIMIT_SAFETY_MARGIN,
     REQUEST_WEIGHT_1M_PUBLISHED_LIMIT,
+    SAPI_REQUEST_WEIGHT_1M_PUBLISHED_LIMIT,
 } from '../../const/rateLimitConsts';
 import { parseRateLimitHeaders } from '../../utils/parseRateLimitHeaders';
 
@@ -33,14 +35,14 @@ function buildOrderCall(overrides: Partial<IRateLimitedCall> = {}): IRateLimited
     };
 }
 
-function _buildReadCall(overrides: Partial<IRateLimitedCall> = {}): IRateLimitedCall {
+function buildSapiCall(overrides: Partial<IRateLimitedCall> = {}): IRateLimitedCall {
     return {
-        operation: 'fetchPositions',
-        requestWeight: 5,
+        operation: 'sapiGetAccountApiRestrictions',
+        requestWeight: 1,
         isOrderOp: false,
         symbol: null,
-        mode: 'await',
-        maxWaitMs: 500,
+        mode: 'fail-fast',
+        maxWaitMs: null,
         ...overrides,
     };
 }
@@ -86,6 +88,7 @@ function buildService(nowMs = Date.now()): {
 
 const ORDERS_10S_CAPACITY = Math.floor(ORDERS_10S_PUBLISHED_LIMIT * RATE_LIMIT_SAFETY_MARGIN);
 const REQUEST_WEIGHT_CAPACITY = Math.floor(REQUEST_WEIGHT_1M_PUBLISHED_LIMIT * RATE_LIMIT_SAFETY_MARGIN);
+const SAPI_REQUEST_WEIGHT_CAPACITY = Math.floor(SAPI_REQUEST_WEIGHT_1M_PUBLISHED_LIMIT * RATE_LIMIT_SAFETY_MARGIN);
 
 describe('RateLimitPolicyService — adversarial', () => {
     // ── Fail-fast when ORDERS_10S bucket is empty ────────────────────────────
@@ -173,7 +176,6 @@ describe('RateLimitPolicyService — adversarial', () => {
             // BUILD — drain BTC's per-symbol ORDERS_10S bucket
             const { service } = buildService();
             const btcOrderCall = buildOrderCall({ symbol: 'BTCUSDT', mode: 'fail-fast' });
-            const _etcOrderCall = buildOrderCall({ symbol: 'ETHUSDT', mode: 'fail-fast' });
 
             // We may need to drain the per-symbol 30% share
             let btcDrained = false;
@@ -533,6 +535,207 @@ describe('RateLimitPolicyService — adversarial', () => {
             expect(result.usedWeight1m).toBeNull();
             expect(result.orderCount10s).toBeNull();
             expect(result.retryAfterSec).toBeNull();
+        });
+    });
+
+    // ── M46: SAPI_REQUEST_WEIGHT_1M routing ──────────────────────────────────
+    //
+    // ADR 0030 §2.7. The `/sapi` and `/fapi` hosts carry independent per-IP
+    // request-weight budgets. The four tests below are the paired regression
+    // guards for the four M46 implementation items:
+    //
+    //   T1 — sapi op debits sapi bucket only
+    //   T2 — fapi op debits fapi bucket only
+    //   T3 — 418 freeze drains sapi bucket alongside all others (allBuckets guard)
+    //   T4 — reconcileFromHeaders does NOT corrupt the sapi bucket
+    //   T5 — unknown operation throws RateLimitConfigInvariantException
+
+    describe('SAPI_REQUEST_WEIGHT_1M routing', () => {
+        // T1 ─────────────────────────────────────────────────────────────────
+
+        it('T1: sapi operation debits the sapi bucket and leaves fapi bucket untouched', async () => {
+            // BUILD
+            const { service } = buildService();
+
+            // OPERATE — two sapi calls (2 × 1 = 2 tokens consumed from sapi)
+            await service.acquire(buildSapiCall({ mode: 'await', maxWaitMs: 0 }));
+            await service.acquire(buildSapiCall({ operation: 'sapiGetAccountApiRestrictionsIpRestriction', mode: 'await', maxWaitMs: 0 }));
+
+            // CHECK
+            const snap = service.snapshot();
+            const sapiBucket = snap.classes.find((c) => c.className === 'SAPI_REQUEST_WEIGHT_1M');
+            const fapiBucket = snap.classes.find((c) => c.className === 'REQUEST_WEIGHT_1M');
+
+            expect(sapiBucket).toBeDefined();
+            expect(sapiBucket!.currentTokens).toBe(SAPI_REQUEST_WEIGHT_CAPACITY - 2);
+
+            expect(fapiBucket).toBeDefined();
+            expect(fapiBucket!.currentTokens).toBe(REQUEST_WEIGHT_CAPACITY);
+        });
+
+        // T2 ─────────────────────────────────────────────────────────────────
+
+        it('T2: fapi operation debits the fapi bucket and leaves sapi bucket untouched', async () => {
+            // BUILD
+            const { service } = buildService();
+
+            const fapiCall: IRateLimitedCall = {
+                operation: 'fetchPositions',
+                requestWeight: 5,
+                isOrderOp: false,
+                symbol: null,
+                mode: 'await',
+                maxWaitMs: 0,
+            };
+
+            // OPERATE
+            await service.acquire(fapiCall);
+
+            // CHECK
+            const snap = service.snapshot();
+            const fapiBucket = snap.classes.find((c) => c.className === 'REQUEST_WEIGHT_1M');
+            const sapiBucket = snap.classes.find((c) => c.className === 'SAPI_REQUEST_WEIGHT_1M');
+
+            expect(fapiBucket).toBeDefined();
+            expect(fapiBucket!.currentTokens).toBe(REQUEST_WEIGHT_CAPACITY - 5);
+
+            expect(sapiBucket).toBeDefined();
+            expect(sapiBucket!.currentTokens).toBe(SAPI_REQUEST_WEIGHT_CAPACITY);
+        });
+
+        // T3 ─────────────────────────────────────────────────────────────────
+        //
+        // Critical safety test: if SAPI_REQUEST_WEIGHT_1M were missing from
+        // allBuckets, engageFreeze() would skip it — the bucket would keep
+        // refilling through an IP ban window and allow sapi calls to fire.
+        // This test fails without the allBuckets inclusion and passes with it.
+
+        it('T3: 418 freeze drains the sapi bucket to zero and suspends its refill', async () => {
+            // BUILD — use a controllable clock
+            const startMs = 5_000_000;
+            let currentMs = startMs;
+            const clock = { now: jest.fn<Date, []>(() => new Date(currentMs)) };
+            const alerts = { publish: jest.fn().mockResolvedValue(undefined) };
+            const service = new RateLimitPolicyService(clock as never, alerts as never);
+
+            // OPERATE — engage a 418 freeze
+            service.reconcileFromHeaders(buildHeaders({ responseStatus: 418, retryAfterSec: null }));
+
+            // CHECK 1 — sapi bucket drained immediately
+            const snapAfterFreeze = service.snapshot();
+            const sapiBucketFrozen = snapAfterFreeze.classes.find((c) => c.className === 'SAPI_REQUEST_WEIGHT_1M');
+            expect(sapiBucketFrozen).toBeDefined();
+            expect(sapiBucketFrozen!.currentTokens).toBe(0);
+
+            // CHECK 2 — advance clock WITHIN the freeze window; refill must be suspended
+            const shortIntervalMs = 5_000; // 5 s — well inside the 120 s default 418 freeze
+            currentMs += shortIntervalMs;
+
+            // Calling snapshot() does NOT trigger refill (refillAll runs inside acquire).
+            // Force a refill attempt by calling acquire — it will throw because frozen,
+            // but refillAll runs first; the bucket must remain at 0.
+            await expect(service.acquire(buildSapiCall())).rejects.toThrow(ExchangeRateLimitExhaustedException);
+
+            const snapMidFreeze = service.snapshot();
+            const sapiBucketMid = snapMidFreeze.classes.find((c) => c.className === 'SAPI_REQUEST_WEIGHT_1M');
+            expect(sapiBucketMid!.currentTokens).toBe(0);
+
+            // CHECK 3 — advance past the freeze window; the next acquire triggers
+            // refillAll, which should unblock and start refilling the sapi bucket.
+            currentMs += RATE_LIMIT_418_DEFAULT_FREEZE_MS + 1_000;
+
+            // After the freeze elapses refillAll runs and the bucket gains tokens.
+            await expect(service.acquire(buildSapiCall())).resolves.toBeUndefined();
+
+            const snapAfterThaw = service.snapshot();
+            const sapiBucketThawed = snapAfterThaw.classes.find((c) => c.className === 'SAPI_REQUEST_WEIGHT_1M');
+            expect(sapiBucketThawed!.currentTokens).toBeGreaterThan(0);
+        });
+
+        // T4 ─────────────────────────────────────────────────────────────────
+        //
+        // reconcileFromHeaders() maps the fapi `x-mbx-used-weight-1m` header
+        // to REQUEST_WEIGHT_1M only. The sapi bucket is local-only (ADR §2.7
+        // comment in rateLimitConsts.ts). A high usedWeight1m must never touch
+        // the sapi bucket — cross-applying would corrupt its accounting.
+
+        it('T4: reconcileFromHeaders does not touch the sapi bucket even when usedWeight1m is high', async () => {
+            // BUILD
+            const { service } = buildService();
+
+            const highFapiUsed = 500;
+
+            // OPERATE — simulate a response that shows heavy fapi weight usage
+            service.reconcileFromHeaders(buildHeaders({ usedWeight1m: highFapiUsed }));
+
+            // CHECK — sapi bucket unchanged
+            const snap = service.snapshot();
+            const sapiBucket = snap.classes.find((c) => c.className === 'SAPI_REQUEST_WEIGHT_1M');
+            const fapiBucket = snap.classes.find((c) => c.className === 'REQUEST_WEIGHT_1M');
+
+            expect(sapiBucket).toBeDefined();
+            expect(sapiBucket!.currentTokens).toBe(SAPI_REQUEST_WEIGHT_CAPACITY);
+
+            // Sanity: fapi WAS reconciled (header > local since we did not acquire anything)
+            expect(fapiBucket).toBeDefined();
+            expect(fapiBucket!.currentTokens).toBe(REQUEST_WEIGHT_CAPACITY - highFapiUsed);
+        });
+
+        // T5 (adversarial) ───────────────────────────────────────────────────
+        //
+        // The "no silent bypass" invariant: an operation absent from both
+        // FAPI_OPERATION_WEIGHTS and SAPI_OPERATION_WEIGHTS must throw
+        // immediately rather than silently bypass rate-limit accounting.
+
+        it('T5: unknown operation throws RateLimitConfigInvariantException', async () => {
+            // BUILD
+            const { service } = buildService();
+
+            const unknownCall: IRateLimitedCall = {
+                operation: 'unknownOp_m46_test',
+                requestWeight: 1,
+                isOrderOp: false,
+                symbol: null,
+                mode: 'fail-fast',
+                maxWaitMs: null,
+            };
+
+            // OPERATE + CHECK — RateLimitConfigInvariantException has a private constructor
+            // so we cannot pass the class directly to toThrow. DomainException stores the
+            // code in `.code`, not `.message`; the message carries the operation name.
+            await expect(service.acquire(unknownCall)).rejects.toThrow(/unknownOp_m46_test/);
+        });
+
+        // T6 (adversarial) ───────────────────────────────────────────────────
+        //
+        // Paired test for the logic reviewer finding: the non-freeze exhaustion
+        // path through throwExhausted → findBucketByName for the sapi branch is
+        // correct but was untested. This locks both the exception type and the
+        // failingClass field for sapi-bucket exhaustion.
+
+        it('T6: exhausted sapi bucket throws ExchangeRateLimitExhaustedException with failingClass SAPI_REQUEST_WEIGHT_1M', async () => {
+            // BUILD — drain the sapi bucket completely (capacity = 960 at 80% margin;
+            // each sapiGetAccountApiRestrictions call costs 1 token).
+            const { service } = buildService();
+            const drainCall = buildSapiCall();
+
+            for (let i = 0; i < SAPI_REQUEST_WEIGHT_CAPACITY; i++) {
+                await service.acquire(drainCall);
+            }
+
+            // OPERATE — next sapi acquire must fail-fast
+            let caught: ExchangeRateLimitExhaustedException | null = null;
+            try {
+                await service.acquire(buildSapiCall());
+            } catch (err) {
+                caught = err as ExchangeRateLimitExhaustedException;
+            }
+
+            // CHECK
+            expect(caught).not.toBeNull();
+            expect(caught).toBeInstanceOf(ExchangeRateLimitExhaustedException);
+            expect(caught!.failingClass).toBe('SAPI_REQUEST_WEIGHT_1M');
+            expect(caught!.remainingTokens).toBeGreaterThanOrEqual(0);
         });
     });
 
