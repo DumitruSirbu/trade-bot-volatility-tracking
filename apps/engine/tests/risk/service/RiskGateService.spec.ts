@@ -883,8 +883,10 @@ describe('RiskGateService', () => {
                 entryPrice: new Money('30000'),
                 sizing: buildSizing({ leverage: new Money('1') }),
                 proposedExit: buildProposedExit({
-                    stopLossPrice: new Money('20000'), // 10000 away
-                    takeProfitPrice: new Money('31000'), // above entry (correct side for LONG)
+                    stopLossPrice: new Money('20000'), // sl_dist = 10000
+                    // tp_dist = 11000 (R:R = 1.1) clears the M47 rr_too_low backstop; this test
+                    // exercises the liquidation-clamp PASS path, not the R:R floor.
+                    takeProfitPrice: new Money('41000'), // above entry (correct side for LONG)
                     timeStopAtMs: NOW_MS + 30 * 60_000,
                 }),
                 tradeSide: PositionSideEnum.LONG,
@@ -932,6 +934,7 @@ describe('RiskGateService', () => {
             // tightened = entry - safeDistance = 100 - 39.6 = 60.4 (LONG)
             const intent = buildPassingIntent({
                 entryPrice: new Money('100'),
+                referencePrice: new Money('100'),
                 maintenanceMarginRate: new Money('0.005'),
                 sizing: buildSizing({ leverage: new Money('2') }),
                 tradeSide: PositionSideEnum.LONG,
@@ -959,6 +962,7 @@ describe('RiskGateService', () => {
             // stop at 65 → stopDistance=35 ≤ 39.6 → passes unchanged
             const intent = buildPassingIntent({
                 entryPrice: new Money('100'),
+                referencePrice: new Money('100'),
                 maintenanceMarginRate: new Money('0.005'),
                 sizing: buildSizing({ leverage: new Money('2') }),
                 tradeSide: PositionSideEnum.LONG,
@@ -1033,6 +1037,149 @@ describe('RiskGateService', () => {
             const result = await gate.evaluate(intent, buildPassingContext());
 
             expect(result.rejectReason).toBe(RejectReasonEnum.SL_OUTSIDE_LIQUIDATION);
+        });
+    });
+
+    // ─── R:R backstop (M47 Task 4, ADR 0004) ───────────────────────────────────
+
+    describe('R:R backstop (rr_too_low)', () => {
+        // SHORT, entry=30000, leverage=1 (no liquidation clamp): sl_dist/tp_dist measured
+        // against the signal reference (intent.entryPrice). Default slippage 0.1% → round-trip
+        // cost ≈ 84, so the chosen tp distances all clear the cost floor and the R:R check is
+        // the binding reject.
+        it('rejects with rr_too_low when tp_dist/sl_dist is just below MIN_RR_GATE_FLOOR', async () => {
+            const { gate } = makeGate();
+            const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
+            // SL above entry by 500, TP below entry by 480 → R:R = 480/500 = 0.96 < 1.0.
+            const intent = buildPassingIntent({
+                entryPrice: new Money('30000'),
+                tradeSide: PositionSideEnum.SHORT,
+                sizing: buildSizing({ leverage: new Money('1') }),
+                proposedExit: buildProposedExit({
+                    stopLossPrice: new Money('30500'), // sl_dist = 500
+                    takeProfitPrice: new Money('29520'), // tp_dist = 480
+                    timeStopAtMs: NOW_MS + 30 * 60_000,
+                }),
+            });
+
+            const result = await gate.evaluate(intent, buildPassingContext());
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.RR_TOO_LOW);
+        });
+
+        it('passes when tp_dist/sl_dist is just above MIN_RR_GATE_FLOOR', async () => {
+            const { gate } = makeGate();
+            const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
+            // sl_dist = 500, tp_dist = 510 → R:R = 1.02 > 1.0.
+            const intent = buildPassingIntent({
+                entryPrice: new Money('30000'),
+                tradeSide: PositionSideEnum.SHORT,
+                sizing: buildSizing({ leverage: new Money('1') }),
+                proposedExit: buildProposedExit({
+                    stopLossPrice: new Money('30500'), // sl_dist = 500
+                    takeProfitPrice: new Money('29490'), // tp_dist = 510
+                    timeStopAtMs: NOW_MS + 30 * 60_000,
+                }),
+            });
+
+            const result = await gate.evaluate(intent, buildPassingContext());
+
+            expect(result.outcome).toBe(RiskOutcomeEnum.APPROVED);
+        });
+
+        it('passes when tp_dist/sl_dist is exactly at the floor (strict less-than)', async () => {
+            const { gate } = makeGate();
+            const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
+            // sl_dist = 500, tp_dist = 500 → R:R = 1.0 exactly → strict `<` lets it pass.
+            const intent = buildPassingIntent({
+                entryPrice: new Money('30000'),
+                tradeSide: PositionSideEnum.SHORT,
+                sizing: buildSizing({ leverage: new Money('1') }),
+                proposedExit: buildProposedExit({
+                    stopLossPrice: new Money('30500'), // sl_dist = 500
+                    takeProfitPrice: new Money('29500'), // tp_dist = 500
+                    timeStopAtMs: NOW_MS + 30 * 60_000,
+                }),
+            });
+
+            const result = await gate.evaluate(intent, buildPassingContext());
+
+            expect(result.outcome).toBe(RiskOutcomeEnum.APPROVED);
+        });
+
+        // sl_dist == 0 (stop sits at the reference) is a degenerate / infinite-risk geometry. In
+        // the live pipeline the wrong-side-stop guard inside clampStopInsideLiquidation rejects
+        // it FIRST (SL_OUTSIDE_LIQUIDATION), so the div-by-zero guard in isRewardRiskTooLow is
+        // defense-in-depth. The contract this asserts is: a degenerate sl_dist == 0 is REJECTED,
+        // never approved and never a divide-by-zero crash.
+        it('rejects (never divides by zero) when sl_dist == 0 (stop at reference)', async () => {
+            const { gate } = makeGate();
+            const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
+            const intent = buildPassingIntent({
+                entryPrice: new Money('30000'),
+                tradeSide: PositionSideEnum.SHORT,
+                sizing: buildSizing({ leverage: new Money('1') }),
+                proposedExit: buildProposedExit({
+                    stopLossPrice: new Money('30000'), // sl_dist = 0 (stop == reference)
+                    takeProfitPrice: new Money('29000'),
+                    timeStopAtMs: NOW_MS + 30 * 60_000,
+                }),
+            });
+
+            const result = await gate.evaluate(intent, buildPassingContext());
+
+            expect(result.outcome).toBe(RiskOutcomeEnum.REJECTED);
+        });
+
+        // Clamp-interaction (HIGH 3): SL already inside liquidation (no clamp fires) but the
+        // intent R:R is below the floor → rr_too_low.
+        it('rejects with rr_too_low when SL is inside liquidation (no clamp) and R:R is below the floor', async () => {
+            const { gate } = makeGate();
+            const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
+            // entry=100, leverage=2, mmr=0.005 → safeDistance=39.6. SL at 130 → sl_dist=30 < 39.6
+            // (no clamp). TP at 72 → tp_dist=28 → R:R = 28/30 ≈ 0.93 < 1.0.
+            const intent = buildPassingIntent({
+                entryPrice: new Money('100'),
+                maintenanceMarginRate: new Money('0.005'),
+                tradeSide: PositionSideEnum.SHORT,
+                sizing: buildSizing({ leverage: new Money('2') }),
+                proposedExit: buildProposedExit({
+                    stopLossPrice: new Money('130'), // sl_dist = 30, inside safe distance
+                    takeProfitPrice: new Money('72'), // tp_dist = 28
+                    timeStopAtMs: NOW_MS + 30 * 60_000,
+                }),
+            });
+
+            const result = await gate.evaluate(intent, buildPassingContext());
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.RR_TOO_LOW);
+        });
+
+        // Clamp-interaction (HIGH 3): SL outside liquidation → the clamp TIGHTENS it, which
+        // IMPROVES R:R above the floor. The gate reads the clamped (tightened) SL and passes.
+        it('passes when the liquidation clamp tightens the SL and improves R:R above the floor', async () => {
+            const { gate } = makeGate();
+            const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
+            // entry=100, leverage=2, mmr=0.005 → safeDistance=39.6. SL at 150 → sl_dist=50 > 39.6
+            // → clamp tightens to 139.6, clamped sl_dist=39.6. TP at 40 → tp_dist=60.
+            // Pre-clamp R:R = 60/50 = 1.2; post-clamp R:R = 60/39.6 ≈ 1.52 (improved) → passes.
+            const intent = buildPassingIntent({
+                entryPrice: new Money('100'),
+                referencePrice: new Money('100'),
+                maintenanceMarginRate: new Money('0.005'),
+                tradeSide: PositionSideEnum.SHORT,
+                sizing: buildSizing({ leverage: new Money('2') }),
+                proposedExit: buildProposedExit({
+                    stopLossPrice: new Money('150'), // sl_dist = 50, outside safe distance → tightened
+                    takeProfitPrice: new Money('40'), // tp_dist = 60
+                    timeStopAtMs: NOW_MS + 30 * 60_000,
+                }),
+            });
+
+            const result = await gate.evaluate(intent, buildPassingContext());
+
+            expect(result.outcome).toBe(RiskOutcomeEnum.APPROVED);
+            expect(result.clampedExit?.stopLossPrice.equals(new Money('139.6'))).toBe(true);
         });
     });
 

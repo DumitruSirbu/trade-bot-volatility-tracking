@@ -21,6 +21,7 @@ export enum RejectReasonEnum {
     SL_OUTSIDE_LIQUIDATION = 'sl_outside_liquidation',
     TP_WRONG_SIDE = 'tp_wrong_side',
     TP_BELOW_COST = 'tp_below_cost',
+    RR_TOO_LOW = 'rr_too_low',
     TIER3_NOT_VALIDATED = 'tier3_not_validated',
     MODEL_DIVERGENCE_HALT = 'model_divergence_halt',
     GLOBAL_HALT = 'global_halt',

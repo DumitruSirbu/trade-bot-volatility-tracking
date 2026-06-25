@@ -197,6 +197,77 @@ for the two sub-reasons, that is acceptable. Nothing here touches `packages/shar
 
 ---
 
+## M47 Amendment — momentum TP no longer rebased (Option B mandatory) (2026-06-25)
+
+Status: Accepted (re-blessed before the M47 implementation wave).
+Milestone: M47 — Risk:Reward geometry fix. See `docs/plans/m47-rr-geometry-fix.md`.
+
+This amends **D1**. M38's single-leg rebase (TP re-anchored to fill, SL pinned at VWAP) is the
+source of Bug 2 in M47: after a fill landing off the signal reference, the TP moves but the SL
+does not, voiding the signal-time R:R the gate approved. M47 resolves this by **removing the
+momentum fill-time rebase entirely**.
+
+### D1.A — Momentum TP is frozen at signal time (`tpRebaseEligible: false`)
+
+`momentumCore` now sets `tpRebaseEligible: false` (it previously set `true`). **Both legs stay
+at their signal-time price levels** — TP at `reference ± tpDist`, SL at the VWAP-session level.
+There is **no single-leg rebase and no fill-time rebase at all for momentum**. Geometry is fixed
+at signal time and never mutated for the life of the position.
+
+If the fill drifts materially from the reference, the M38 D2 fill-acceptance guard already
+rejects over-slippage fills (this ADR §D2), bounding the drift; the surviving geometry is the
+signal-time geometry.
+
+**Rebase-path audit (confirmed):** only `ExecutionService.ts:1051` and
+`BacktestOrchestrator.ts:452` consume `tpRebaseEligible`. All other producers already set
+`false`. Setting momentum to `false` fully closes the fill-time rebase path; no SL-update path
+during the position lifecycle re-introduces drift.
+
+### D1.B — Why Option A (rebase both legs) was rejected
+
+Re-anchoring *both* TP and SL from the actual fill price would preserve the signal-time
+distances, but it is **not viable**:
+
+- The M47 risk-gate R:R backstop (ADR 0004 M47 amendment) validates **pre-fill** geometry — it
+  runs at intent time on `intent.proposedExit`. It **cannot be moved to fill-acceptance time
+  without restructuring the gate architecture**. Under Option A the gate would approve a
+  signal-time geometry that does **not** match what the position holds after the rebase. Option B
+  keeps the gate-approved geometry identical to the held geometry, which is what makes the
+  pre-fill gate check sound.
+- Option A also re-opens the "is the momentum stop a level or a distance" question ADR 0003
+  settled, and a distance-preserved SL can land on the wrong side of the now-irrelevant VWAP.
+
+Option A is dropped from consideration.
+
+### D1.C — `atrDistance` survives Option B — it is NOT dead code
+
+After Option B removes the fill-time rebase, a future reader may assume `atrDistance` is now
+dead. It is not — **do not remove it.** Post-M47:
+
+- `atrDistance` is still set on `clampedExit`, and now **equals the coupled `tpDist`** computed in
+  `momentumCore` (ADR 0003 M47 amendment / M47 Task 2 — the `max(atrLeg, costFloorLeg, rrFloor)`
+  result, including the `rrFloor` and its cap).
+- It serves as the **single-composite-distance carrier** (D1.2 in this ADR — computed once in the
+  strategy layer, never re-derived at the arm/backtest seams).
+- It serves as the **sweep-tool reference seed**: `BacktestOrchestrator.applyTargetTpSlRatioOverride`
+  (line 187) reads `proposedExit.atrDistance` to reconstruct the signal reference for an R:R sweep.
+  For momentum this works post-M47 because `atrDistance == tpDist`. **The sweep tool is
+  momentum-only** — for mean-reversion `atrDistance` is `null` and the override no-ops; do not use
+  `targetTpSlRatioOverride` to validate `min_rr` on reversion trades.
+
+Only the **fill-time rebase consumption** of `atrDistance` (the `rebaseMomentumTakeProfit` call at
+the arm/backtest seams) is removed. The field and its other two roles remain.
+
+### D1.D — `max_tp_dist_factor` cap on the momentum TP
+
+The coupled momentum TP distance is `tpDist = max(atrLeg, costFloorLeg, rrFloor)` where
+`rrFloor = min(slDist × min_rr, max_tp_dist_factor × atr14)`. The `max_tp_dist_factor` cap
+(default 5.0, versioned param — ADR 0003 M47 amendment) prevents `rrFloor` from placing the TP at
+a negative (SHORT) or unreachable (LONG) price on an extreme spike where VWAP sits far from
+reference. If the cap binds and `tpDist / slDist < min_rr`, or the capped TP price is degenerate,
+`momentumCore` **skips the signal** (ADR 0003 M47 amendment A2) — it does not arm a sub-target or
+degenerate TP.
+
 ## Consequences
 
 - The execution layer gains a small fill-acceptance stage (rebase + drift gate + synthetic-close

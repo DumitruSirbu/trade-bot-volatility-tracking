@@ -1200,6 +1200,123 @@ per-trade risk budget. Below-min trades are skipped, not inflated (§8).
 `MoneyValue`; the dashboard reads the persisted `decisions`/`positions` rows. Only the
 money-free vocabulary enums go shared — same rule as ADR 0003 §2.
 
+## M47 Amendment — R:R backstop check (`isRewardRiskTooLow`) (2026-06-25)
+
+Status: Accepted (re-blessed before the M47 implementation wave).
+Milestone: M47 — Risk:Reward geometry fix. See `docs/plans/m47-rr-geometry-fix.md`.
+
+This amends §1 (the check chain / `RejectReasonEnum`). The three existing geometry checks
+(`clampStopInsideLiquidation` → `SL_OUTSIDE_LIQUIDATION`, `isWrongSideTakeProfit` →
+`TP_WRONG_SIDE`, `isTakeProfitBelowCost` → `TP_BELOW_COST`) check stop-vs-liquidation, TP sign,
+and an *absolute* cost floor respectively. **None compares `sl_dist` to `tp_dist`** — a trade with
+`sl_dist = 3%` and `tp_dist = 1.2%` (R:R 0.4) passes all three. M47 adds a ratio backstop.
+
+### M47-1. New check `isRewardRiskTooLow` and reject reason `RR_TOO_LOW`
+
+- Add `RR_TOO_LOW = 'rr_too_low'` to `RejectReasonEnum` (shared — persisted to
+  `decisions.reason`, read by the dashboard, same placement rule as the other reject reasons).
+- Add `isRewardRiskTooLow(intent)`: returns true when `tp_dist / sl_dist < MIN_RR_GATE_FLOOR`,
+  rejecting with `RR_TOO_LOW`. Insert it in the entry-only pipeline **after**
+  `isTakeProfitBelowCost` and before the reserve step.
+- **This check is strategy-agnostic and defense-in-depth.** Every current and future strategy
+  core passes through it, so a new core that forgets to couple its legs cannot reach execution
+  with inverted geometry. It does not duplicate the cores' job — see the two-tier design below.
+
+### M47-2. Two-tier design — gate floor is loose, distinct from the core target
+
+There are two intentionally-different R:R values:
+
+- `min_rr` (default 1.5) — the **core target**, a versioned strategy param (ADR 0003 M47
+  amendment). The cores *shape* every trade to R:R ≥ `min_rr` or skip. This is the binding
+  constraint.
+- `MIN_RR_GATE_FLOOR` (default 1.0) — a loose **engine constant** in `risk/const/riskConsts.ts`,
+  a code-level safety net. The gate only catches pathological edge cases that slip past the cores.
+
+The separation is deliberate. A *hard* gate at 1.5 would reject ~92% of historical signals — a
+kill-switch, not a filter — and starve the bot of trades and labeled-outcome data. The cores
+correct geometry in-place (widen TP / tighten SL) instead of rejecting, preserving trade
+frequency. **Asymmetry to remember:** `min_rr` is hot-adjustable via a param-row UPDATE + restart
+(no code deploy); lowering `MIN_RR_GATE_FLOOR` requires a code deploy. The safety-net floor is by
+design hard to weaken.
+
+### M47-3. Anchor — a dedicated `referencePrice` field, never `intent.entryPrice` / `nextBarOpen` (BLOCKER 1 — RESOLVED via Option A)
+
+The R:R distances are measured against the **signal reference price** — the same anchor the cores
+used to compute the SL and TP — in **both** live and backtest, or live and backtest would yield
+different R:R for the same signal (Invariant 7, the same-code-live-and-backtest determinism rule).
+
+**Decision (M47 QA wave, BLOCKER 1 — Option A, binding).** The earlier draft of this clause left
+the implementation open ("a dedicated `referencePrice` field on the intent, *or* an explicit
+gate-geometry anchor"). That ambiguity was the gap: the first cut of `isRewardRiskTooLow` read
+`intent.entryPrice`, which is the signal reference **only in live** — in backtest it is
+`ctx.nextBarOpen` (the fill estimate), so live and backtest computed different R:R for the same
+signal. The resolution is binding: **add a dedicated `referencePrice: MoneyValue` field to
+`IOrderIntent`, and the gate reads `intent.referencePrice`, NOT `intent.entryPrice`.** Reusing
+`entryPrice` is rejected — `entryPrice` must stay the fill anchor for sizing/PnL (in backtest it is
+deliberately `nextBarOpen` per the M7 R1a forward-look fix), so the geometry anchor needs its own
+field. This mirrors the existing `entryPrice` / `midAtTrigger` split (distinct anchors for distinct
+math, never cross-wired).
+
+- `IOrderIntent` is **engine-internal** (`apps/engine/src/risk/interface/IOrderIntent.ts`), not a
+  `packages/shared` type — it carries `MoneyValue`. The `referencePrice` addition therefore stays
+  inside the engine boundary: it does **not** require `bot-shared-maintainer` and does **not**
+  require a serial shared wave ahead of engine work. The four edits (interface + two construction
+  sites + the gate read) land together in the **Task 4 engine wave**.
+- Live (`StrategyService.buildOrderIntent`): set `referencePrice = entryPrice` (live's
+  `entryPrice` already equals `reconstructReferencePrice(event)`, so they coincide — set both
+  explicitly for clarity).
+- Backtest (`BacktestOrchestrator.buildOrderIntent`): set
+  `referencePrice = reconstructReferencePrice(event)`, carried **separately** from
+  `entryPrice = ctx.nextBarOpen`. `nextBarOpen` continues to feed PnL/sizing; it **must not** feed
+  the geometry anchor.
+- The gate (`isRewardRiskTooLow`) reads `intent.referencePrice`. Concretely, for a LONG:
+  `sl_dist = referencePrice − stopLossPrice`, `tp_dist = takeProfitPrice − referencePrice` (mirror
+  for SHORT). The same signal through live and through the backtest seam now yields the identical
+  `tp_dist / sl_dist` at the gate — the BLOCKER 1 anchor-parity regression test (plan §5 Task 4)
+  asserts exactly this.
+
+### M47-4. `sl_dist` reads the CLAMPED exit; `tp_dist` reads the (frozen) intent TP
+
+- `sl_dist` is computed from `clampedExit.stopLossPrice` — the SL **after** any
+  `clampStopInsideLiquidation` tightening — so the backstop sees the SL the position will
+  actually hold, not the pre-clamp intent. (`clampStopInsideLiquidation` only ever *tightens* the
+  SL toward the reference, which *improves* R:R; a widening clamp cannot occur.)
+- `tp_dist` is computed from `intent.proposedExit.takeProfitPrice`. **Under ADR 0045's M47
+  amendment (Option B, `tpRebaseEligible: false`) the TP is never rebased**, so the intent TP and
+  the held TP are identical. The gate therefore reads the clamped (worst-case) SL plus the frozen
+  intent TP — exactly the geometry the position will hold for its entire life. **This soundness
+  guarantee depends on ADR 0045 Option B: it is a hard prerequisite for M47-3/M47-4's
+  correctness, not merely for Bug 2 remediation.** Were the TP rebased at fill (Option A), the
+  pre-fill gate would approve a geometry the held position does not match.
+
+### M47-5. Division-by-zero guard
+
+The check computes `tp_dist / sl_dist`. **If `sl_dist == 0`** (VWAP == reference for momentum, or
+a degenerate wick for mean-reversion), reject with `RR_TOO_LOW` — do **not** divide. R:R is
+undefined / infinite-risk when the stop sits at the reference. Do not rely on
+`clampStopInsideLiquidation` rejecting `sl_dist == 0` first; this is a defensive in-check guard.
+
+### M47-6. Comparator rationale — strict `<` (at-floor passes)
+
+`isRewardRiskTooLow` uses **strict** `<`: a trade exactly at `MIN_RR_GATE_FLOOR` passes. This is
+deliberately inconsistent with `isTakeProfitBelowCost`'s `≤` (at-cost rejects). The R:R floor is a
+*soft* backstop that should not reject borderline-acceptable trades; the cost floor is a *hard*
+economic limit (a trade that exactly covers cost has zero expected profit and is correctly
+rejected).
+
+### M47-7. Handoff
+
+- `bot-shared-maintainer`: add `RR_TOO_LOW` to `RejectReasonEnum`. **The `referencePrice` anchor
+  field is NOT a shared-contract change** — `IOrderIntent` is engine-internal (M47-3), so it does
+  not route through shared-maintainer.
+- `bot-engine-nestjs` (Task 4 wave — all four edits land together): (1) add
+  `referencePrice: MoneyValue` to `IOrderIntent` (`apps/engine/src/risk/interface/IOrderIntent.ts`);
+  (2) set it in `StrategyService.buildOrderIntent` (`= entryPrice`) and
+  `BacktestOrchestrator.buildOrderIntent` (`= reconstructReferencePrice(event)`, separate from
+  `nextBarOpen`); (3) add `MIN_RR_GATE_FLOOR = 1.0` to `risk/const/riskConsts.ts`; (4) add
+  `isRewardRiskTooLow` after `isTakeProfitBelowCost`, reading `intent.referencePrice` (NOT
+  `intent.entryPrice`).
+
 ## See also
 
 - `docs/plans/archive/M4-risk-management.md` (milestone brief), `docs/plans/00-overview.md`

@@ -1,4 +1,13 @@
-import { CoinTierEnum, FlowTypeEnum, IStrategyParams, PositionSideEnum, RegimeLabelEnum, SkipReasonEnum, StopTypeEnum } from '@bot/shared';
+import {
+    CoinTierEnum,
+    FlowTypeEnum,
+    IStrategyParams,
+    IVolatilityDetectedEvent,
+    PositionSideEnum,
+    RegimeLabelEnum,
+    SkipReasonEnum,
+    StopTypeEnum,
+} from '@bot/shared';
 
 import { Money, MoneyValue } from '../../common/utils/money';
 import {
@@ -37,6 +46,14 @@ export function evaluateMomentum(input: IStrategyInput): ISignal {
         return buildSkipSignal({ signalType, skipReason: SkipReasonEnum.REGIME_SUPPRESSED, signalScore, flowType });
     }
 
+    // M47 Task 2 (BLOCKER 5): refuse degenerate geometry at the core — a zero SL distance
+    // (VWAP == reference) or a TP the rrFloor cap could not lift to the core min_rr target.
+    // The loose gate is a backstop, not the binding constraint for Invariant 1.
+
+    if (isDegenerateMomentumGeometry(input, tradeSide)) {
+        return buildSkipSignal({ signalType, skipReason: SkipReasonEnum.DEGENERATE_VWAP_GEOMETRY, signalScore, flowType });
+    }
+
     return buildOpenSignal({
         signalType,
         tradeSide,
@@ -57,7 +74,7 @@ function buildMomentumExit(input: IStrategyInput, tradeSide: PositionSideEnum, n
     const { event, params } = input;
 
     const referencePrice = reconstructReferencePrice(event);
-    const atrTarget = resolveTakeProfitDistance(tradeSide, referencePrice, event.atr14, event.coinTier, params);
+    const atrTarget = resolveTakeProfitDistance(tradeSide, referencePrice, event, params);
     const takeProfitPrice = tradeSide === PositionSideEnum.LONG ? referencePrice.plus(atrTarget) : referencePrice.minus(atrTarget);
 
     return {
@@ -66,19 +83,39 @@ function buildMomentumExit(input: IStrategyInput, tradeSide: PositionSideEnum, n
         stopLossPrice: new Money(event.vwapSession),
         stopType: StopTypeEnum.STRUCTURAL,
         timeStopAtMs: nowMs + params.time_stop_minutes * MS_PER_MINUTE,
-        // M38 D1 (ADR 0045): momentum TP is reference+ATR, so it is rebase-eligible — the
-        // execution layer re-anchors it from the signal-time reference to the actual fill
-        // price. atrDistance carries the SAME atrTarget computed above (consumed verbatim
-        // at the arm/backtest seams; never re-derived).
-        tpRebaseEligible: true,
+        // M47 Task 0 (ADR 0045 amendment, Option B — MANDATORY): the momentum TP must NOT be
+        // rebased at fill time. Both legs stay frozen at their signal-time price levels (TP at
+        // reference ± atrTarget, SL at VWAP), so the signal-time R:R geometry the risk gate
+        // approved survives the fill unchanged. Option A (rebase both legs) was REJECTED: the
+        // gate validates pre-fill geometry on intent.proposedExit and cannot see a post-fill
+        // rebase, so a single-leg (TP-only) rebase voids the gate's guarantee the instant a fill
+        // lands off-reference. atrDistance is still carried (it equals the coupled tpDist) — the
+        // sweep tool reconstructs the reference from it; only the fill-time rebase consumption is
+        // removed (the seams at ExecutionService/BacktestOrchestrator already gate on this flag).
+        tpRebaseEligible: false,
         atrDistance: atrTarget,
     };
 }
 
 // The single composite distance threaded verbatim into both takeProfitPrice and atrDistance
 // (the M38 rebase invariant — ADR 0045 §D1.2: computed once, never re-derived at the seams).
-// SHORT keeps the symmetric 2.0× ATR leg; LONG floors the leg at the cost-aware anchor.
+// SHORT keeps the symmetric 2.0× ATR leg; LONG floors the leg at the cost-aware anchor; M47
+// Task 2 folds a capped rrFloor into the max() on BOTH sides so the TP is widened (never the
+// VWAP SL tightened) whenever the ATR/cost legs would otherwise shape R:R below min_rr.
 function resolveTakeProfitDistance(
+    tradeSide: PositionSideEnum,
+    referencePrice: MoneyValue,
+    event: IVolatilityDetectedEvent,
+    params: IStrategyParams,
+): MoneyValue {
+    const baseLeg = resolveBaseTakeProfitLeg(tradeSide, referencePrice, event.atr14, event.coinTier, params);
+    const rrFloor = resolveRrFloor(referencePrice, event, params);
+
+    return Money.max(baseLeg, rrFloor);
+}
+
+// The pre-M47 take-profit leg: SHORT = atr14 × 2.0; LONG = max(atr14 × 3.5, cost floor + margin).
+function resolveBaseTakeProfitLeg(
     tradeSide: PositionSideEnum,
     referencePrice: MoneyValue,
     atr14: string,
@@ -93,6 +130,45 @@ function resolveTakeProfitDistance(
     }
 
     return new Money(atr14).times(MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER);
+}
+
+// M47 Task 2: couples the TP distance to the SL distance. rrFloorRaw = slDist × min_rr lifts
+// the TP to meet the core R:R target; the cap (max_tp_dist_factor × atr14, BLOCKER 5) keeps an
+// extreme-spike TP from running to a negative/unreachable price. slDist is the momentum stop
+// distance |reference − vwapSession| — the VWAP stop is never tightened, only the TP widened.
+function resolveRrFloor(referencePrice: MoneyValue, event: IVolatilityDetectedEvent, params: IStrategyParams): MoneyValue {
+    const slDist = resolveMomentumStopDistance(referencePrice, event);
+    const rrFloorRaw = slDist.times(params.min_rr);
+    const cap = new Money(event.atr14).times(params.max_tp_dist_factor);
+
+    return Money.min(rrFloorRaw, cap);
+}
+
+function resolveMomentumStopDistance(referencePrice: MoneyValue, event: IVolatilityDetectedEvent): MoneyValue {
+    return referencePrice.minus(new Money(event.vwapSession)).abs();
+}
+
+// M47 Task 2 (BLOCKER 5): refuse a momentum signal whose geometry cannot reach the core
+// min_rr target. Three degenerate cases: (1) slDist == 0 (VWAP == reference — the stop sits at
+// entry, R:R undefined), (2) the capped tpDist still yields tpDist / slDist < min_rr (the
+// cap prevented the rrFloor from lifting the TP to the target), and (3) SHORT TP price ≤ 0
+// (extreme-spike: 2×ATR ≥ reference — the TP would be placed at or below zero, unexecutable).
+function isDegenerateMomentumGeometry(input: IStrategyInput, tradeSide: PositionSideEnum): boolean {
+    const { event, params } = input;
+    const referencePrice = reconstructReferencePrice(event);
+    const slDist = resolveMomentumStopDistance(referencePrice, event);
+
+    if (slDist.isZero()) {
+        return true;
+    }
+
+    const tpDist = resolveTakeProfitDistance(tradeSide, referencePrice, event, params);
+
+    if (tradeSide === PositionSideEnum.SHORT && referencePrice.minus(tpDist).lessThanOrEqualTo(0)) {
+        return true;
+    }
+
+    return tpDist.dividedBy(slDist).lessThan(params.min_rr);
 }
 
 // Tier-aware round-trip cost distance plus the safety margin — the floor below which a LONG
@@ -110,8 +186,15 @@ function resolveLongCostFloorLeg(referencePrice: MoneyValue, coinTier: CoinTierE
 // Per-tier slippage as a price fraction. Params carry slippage as percent points (0.15 =
 // 0.15%), so divide by 100 — matching the risk gate's slippageFraction derivation.
 function resolveTierSlippageFraction(coinTier: CoinTierEnum, params: IStrategyParams): MoneyValue {
-    const slippagePct =
-        coinTier === CoinTierEnum.TIER_1 ? params.slippage_tier1_pct : coinTier === CoinTierEnum.TIER_2 ? params.slippage_tier2_pct : params.slippage_tier3_pct;
+    let slippagePct: number;
+
+    if (coinTier === CoinTierEnum.TIER_1) {
+        slippagePct = params.slippage_tier1_pct;
+    } else if (coinTier === CoinTierEnum.TIER_2) {
+        slippagePct = params.slippage_tier2_pct;
+    } else {
+        slippagePct = params.slippage_tier3_pct;
+    }
 
     return new Money(slippagePct).dividedBy(new Money(100));
 }

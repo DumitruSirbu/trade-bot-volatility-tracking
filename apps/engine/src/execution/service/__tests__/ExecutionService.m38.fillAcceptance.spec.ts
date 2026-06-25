@@ -138,6 +138,7 @@ function buildApprovedEvent(
             coinTier: 'tier_1' as any,
             idiosyncrasyScore: 0.72,
             entryPrice: new Money('50505'),
+            referencePrice: new Money('50505'),
             midAtTrigger: new Money('50505'),
             maintenanceMarginRate: new Money('0.005'),
             proposedExit: clampedExit,
@@ -250,6 +251,8 @@ function buildService(
         {} as any, // exchangeClient
         events, // events
         { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any, // riskState
+        // M47 Task 5a — instrumentor seed stub (synchronous open-path seeding).
+        { onPositionOpened: jest.fn(), applyEntryTick: jest.fn() } as never,
     );
 }
 

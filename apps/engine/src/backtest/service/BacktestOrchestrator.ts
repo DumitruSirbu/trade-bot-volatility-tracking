@@ -30,6 +30,7 @@ import { IApprovedRiskDecision, IOrderIntent, IRiskGateContext, isApprovedOpenin
 import { PositionSizer, ReservationLedger, RiskGateService } from '../../risk/service';
 import { buildMarketSnapshot } from '../../strategy/mapper';
 import { IOpenPositionState, IStrategy, ISignal } from '../../strategy/interface';
+import { reconstructReferencePrice } from '../../strategy/utils';
 import { BacktestInstrumentAdapter } from '../adapter/BacktestInstrumentAdapter';
 import { BacktestPositionAdapter } from '../adapter/BacktestPositionAdapter';
 import { BacktestRiskStateAdapter } from '../adapter/BacktestRiskStateAdapter';
@@ -148,7 +149,7 @@ export class BacktestOrchestrator {
             return SKIPPED;
         }
 
-        const gateContext = this.buildGateContext(stampedEvent, snapshot, nowMs, ctx);
+        const gateContext = this.buildGateContext(snapshot, nowMs, ctx);
         // M7 R1a fix-1 (security): thread the per-run reservation ledger so the gate never
         // mutates the DI singleton during a backtest replay.
         const decision = await this.riskGate.evaluate(intent, gateContext, ctx.reservationLedger);
@@ -306,6 +307,11 @@ export class BacktestOrchestrator {
             coinTier: event.coinTier,
             idiosyncrasyScore: event.idiosyncrasyScore,
             entryPrice,
+            // M47 W4 (BLOCKER 1) — entryPrice here is the nextBarOpen fill estimate (feeds
+            // PnL/sizing), DIFFERENT from the signal reference. The gate's R:R must anchor to the
+            // signal reference, not the fill, so live and backtest compute identical R:R for the
+            // same signal (invariant 7). This is the SAME anchor the cores used for SL/TP.
+            referencePrice: reconstructReferencePrice(event),
             midAtTrigger: entryPrice,
             maintenanceMarginRate: instrument.maintenanceMarginRate,
             proposedExit: signal.proposedExit,
@@ -326,12 +332,7 @@ export class BacktestOrchestrator {
         return CorrelationModeEnum.IDIOSYNCRATIC;
     }
 
-    private buildGateContext(
-        event: IVolatilityDetectedEvent,
-        snapshot: ReturnType<typeof buildMarketSnapshot>,
-        nowMs: number,
-        ctx: IBacktestOrchestratorContext,
-    ): IRiskGateContext {
+    private buildGateContext(snapshot: ReturnType<typeof buildMarketSnapshot>, nowMs: number, ctx: IBacktestOrchestratorContext): IRiskGateContext {
         return {
             nowMs,
             utcDateString: ctx.utcDateString,

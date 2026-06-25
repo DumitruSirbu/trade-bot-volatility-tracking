@@ -79,6 +79,7 @@ export function buildOrderIntent(overrides: Partial<IOrderIntent> = {}): IOrderI
         coinTier: CoinTierEnum.TIER_1,
         idiosyncrasyScore: 0.8, // above default min of 0.7
         entryPrice: new Money('30000'),
+        referencePrice: new Money('30000'),
         midAtTrigger: new Money('30000'),
         maintenanceMarginRate: new Money(DEFAULT_MAINTENANCE_MARGIN_RATE),
         proposedExit: buildProposedExit({ timeStopAtMs: NOW_MS + 30 * 60_000 }),

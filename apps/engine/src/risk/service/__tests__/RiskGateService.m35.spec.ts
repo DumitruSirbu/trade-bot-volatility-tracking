@@ -202,6 +202,7 @@ function buildIntent(tradeSide: PositionSideEnum, entryPrice: MoneyValue, takePr
         coinTier: CoinTierEnum.TIER_1,
         idiosyncrasyScore: 0.8,
         entryPrice,
+        referencePrice: entryPrice,
         midAtTrigger: entryPrice,
         maintenanceMarginRate: new Money('0.005'),
         proposedExit: {

@@ -36,12 +36,16 @@ import { evaluateMomentum } from '../momentumCore';
 
 // ─── fixture primitives ───────────────────────────────────────────────────────
 
-// deviationPct = 0 → referencePrice == vwapSession, so the expected-distance algebra below
-// is exact (no reconstruction factor to thread). The follow-side branch keys on `side`,
-// not on the deviation magnitude, so a 0% deviation still routes LONG (ABOVE) / SHORT (BELOW).
+// M47 Task 2: momentum now skips degenerate geometry where slDist == 0 (VWAP == reference).
+// These cost-floor / ATR-leg characterizations therefore use a TINY non-zero deviation so the
+// VWAP stop sits a non-zero distance from the reference (slDist > 0) while staying small enough
+// that the rrFloor leg (slDist × min_rr) is inert — the ATR / cost-floor legs still dominate
+// the max(), keeping the expected-distance algebra below exact.
+//   reference = VWAP × (1 + DEVIATION_PCT/100); slDist = |reference − VWAP| = 0.6
+//   rrFloor   = 0.6 × 1.5 = 0.9, far below the smallest base leg (SHORT atr14=1 → 2.0).
 const VWAP = '60000';
-const REFERENCE_PRICE = new Money(VWAP);
-const DEVIATION_PCT = 0;
+const DEVIATION_PCT = 0.001;
+const REFERENCE_PRICE = new Money(VWAP).times(new Money(1).plus(new Money(DEVIATION_PCT).dividedBy(100)));
 
 function buildParams() {
     return {
@@ -77,6 +81,10 @@ function buildParams() {
         stress_same_bar_trigger_count: 5,
         structural_stop_wick_buffer_pct: 0.1,
         structural_stop_hard_cap_pct: 3.0,
+        min_rr: 1.5,
+        entry_pct_floor: 0.3,
+        atr_floor_multiplier: 0.3,
+        max_tp_dist_factor: 5.0,
     };
 }
 
@@ -99,8 +107,8 @@ function buildInput(opts: IFixtureOpts = {}): IStrategyInput {
             side,
             entryCandleOpenTime: 1_700_000_000_000,
             eventId: 'BTCUSDT:1700000000000',
-            vwapSession: REFERENCE_PRICE.toFixed(18),
-            vwap20bar: REFERENCE_PRICE.toFixed(18),
+            vwapSession: new Money(VWAP).toFixed(18),
+            vwap20bar: new Money(VWAP).toFixed(18),
             vwapAnchorType: VwapAnchorTypeEnum.SESSION,
             vwapDeviationPct: DEVIATION_PCT,
             vwapDeviationSigma: 2.5,
@@ -209,12 +217,13 @@ describe('momentumCore D2 — B3: low-ATR long TP is anchored at the tier cost f
 // ─── B4 — M38 rebase parity ───────────────────────────────────────────────────
 
 describe('momentumCore D2 — B4: atrDistance carries the composite distance verbatim', () => {
-    it('LONG: tpRebaseEligible true; atrDistance == takeProfitPrice − referencePrice', () => {
+    it('LONG: tpRebaseEligible false (M47 Option B); atrDistance == takeProfitPrice − referencePrice', () => {
         const input = buildInput({ atr14: '100' });
         const signal = evaluateMomentum(input);
         const tpDistance = new Money(signal.proposedExit!.takeProfitPrice).minus(REFERENCE_PRICE);
 
-        expect(signal.proposedExit!.tpRebaseEligible).toBe(true);
+        // M47 Task 0: rebase eligibility is off, but atrDistance still equals the composite TP distance.
+        expect(signal.proposedExit!.tpRebaseEligible).toBe(false);
         expect(new Money(signal.proposedExit!.atrDistance!).toFixed()).toBe(tpDistance.toFixed());
     });
 

@@ -180,6 +180,7 @@ export class FillAcceptanceUnwindService {
             coinTier: position.coinTier ?? CoinTierEnum.TIER_2,
             idiosyncrasyScore: 0,
             entryPrice: position.entryPrice,
+            referencePrice: position.entryPrice,
             midAtTrigger: request.markPrice,
             maintenanceMarginRate: new Money(0),
             proposedExit: {

@@ -19,6 +19,13 @@ export interface IOrderIntent {
     // Bar-close reference price used for SL/TP DISTANCE math (ADR 0003 §3, ADR 0004 §8).
     // NOT the IOC-limit-price reference — see midAtTrigger for that (ADR 0005 §2).
     readonly entryPrice: MoneyValue;
+    // The SIGNAL REFERENCE price (reconstructReferencePrice(event)), the
+    // same anchor the cores used to compute proposedExit's SL/TP. The gate's R:R geometry
+    // (isRewardRiskTooLow) anchors to THIS, never to entryPrice. In live entryPrice already
+    // equals this reference; in backtest entryPrice is the nextBarOpen fill estimate (different
+    // value) while referencePrice stays the signal reference — so the same signal yields the
+    // same gate R:R in live and backtest (invariant 7). Engine-internal — no shared change.
+    readonly referencePrice: MoneyValue;
     // Trigger-time order-book mid carried on the intent (ADR 0005 §2). Sourced by the
     // strategy from the persisted book_snapshots row stamped at the trigger event; the
     // orchestrator passes it through and the executor's OrderPolicyRouter uses it as the

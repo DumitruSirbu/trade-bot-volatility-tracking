@@ -127,6 +127,10 @@ function buildParams() {
         stress_same_bar_trigger_count: 5,
         structural_stop_wick_buffer_pct: 0.1,
         structural_stop_hard_cap_pct: 3.0,
+        min_rr: 1.5,
+        entry_pct_floor: 0.3,
+        atr_floor_multiplier: 0.3,
+        max_tp_dist_factor: 5.0,
     };
 }
 
@@ -158,6 +162,7 @@ function buildIntent(coinTier: CoinTierEnum = CoinTierEnum.TIER_1): IOrderIntent
         coinTier,
         idiosyncrasyScore: 0.8,
         entryPrice,
+        referencePrice: entryPrice,
         midAtTrigger: entryPrice,
         maintenanceMarginRate: new Money('0.005'),
         proposedExit: {

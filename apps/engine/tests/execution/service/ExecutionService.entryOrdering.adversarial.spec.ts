@@ -122,6 +122,8 @@ describe('ExecutionService entry fill path — arm/record ordering invariant', (
             exchangeClient,
             events,
             { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
+            // M47 Task 5a — instrumentor seed stub (synchronous open-path seeding).
+            { onPositionOpened: jest.fn(), applyEntryTick: jest.fn() } as never,
         );
 
         // OPERATE: an open fill triggers the entry fill path.
