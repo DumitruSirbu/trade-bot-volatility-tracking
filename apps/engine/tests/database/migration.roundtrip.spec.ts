@@ -168,15 +168,21 @@ describe('Migration round-trip (integration — requires Postgres)', () => {
         }[];
 
         // After all migrations the paper-soak profile produces:
-        //   v0 (id=1): 'shadow'
-        //   v1 (id=2): 'shadow'  — demoted when v2 momentum promoted (M25)
-        //   v2 (id=3): 'active'  — matches ACTIVE_STRATEGY_VERSION_ID=3
-        //   v3 (id=4): 'shadow'
-        expect(rows).toHaveLength(4);
+        //   v0  (id=1): 'shadow'
+        //   v1  (id=2): 'shadow'  — demoted when v2 momentum promoted (M25)
+        //   v2  (id=3): 'active'  — matches ACTIVE_STRATEGY_VERSION_ID=3
+        //   v3  (id=4): 'shadow'
+        //   v11 (M47): 'shadow'   — geometry-coupled clone of v1 (mean-reversion)
+        //   v21 (M47): 'shadow'   — geometry-coupled clone of v2 (momentum)
+        //   v31 (M47): 'shadow'   — geometry-coupled clone of v3 (hybrid)
+        expect(rows).toHaveLength(7);
         expect(rows[0]).toMatchObject({ version: 0, direction: 'mean_reversion', status: 'shadow' });
         expect(rows[1]).toMatchObject({ version: 1, direction: 'mean_reversion', status: 'shadow' });
         expect(rows[2]).toMatchObject({ version: 2, direction: 'momentum', status: 'active' });
         expect(rows[3]).toMatchObject({ version: 3, direction: 'hybrid', status: 'shadow' });
+        expect(rows[4]).toMatchObject({ version: 11, direction: 'mean_reversion', status: 'shadow' });
+        expect(rows[5]).toMatchObject({ version: 21, direction: 'momentum', status: 'shadow' });
+        expect(rows[6]).toMatchObject({ version: 31, direction: 'hybrid', status: 'shadow' });
     });
 
     it('v0 seed row has trade_enabled: false in params', async () => {

@@ -49,11 +49,14 @@ import { evaluateMomentum } from '../momentumCore';
 
 // ─── fixture primitives ───────────────────────────────────────────────────────
 
-// deviationPct = 0 → referencePrice == vwapSession exactly.
-// The momentum follow-side branches on `side` (ABOVE → LONG, BELOW → SHORT),
-// so a 0% deviation still routes the correct trade side.
+// M47 Task 2: momentum now skips degenerate geometry where slDist == 0 (VWAP == reference).
+// A TINY non-zero deviation keeps the VWAP stop a non-zero distance from the reference (slDist
+// = 0.6) while the rrFloor leg (0.6 × 1.5 = 0.9) stays far below the cost-floor / ATR legs
+// (≈168 here), so it is inert and the cost-floor crossover algebra below is unaffected.
+// The momentum follow-side branches on `side` (ABOVE → LONG, BELOW → SHORT).
 const VWAP = '60000';
-const REFERENCE_PRICE = new Money(VWAP);
+const DEVIATION_PCT = 0.001;
+const REFERENCE_PRICE = new Money(VWAP).times(new Money(1).plus(new Money(DEVIATION_PCT).dividedBy(100)));
 
 function buildParams() {
     return {
@@ -94,6 +97,10 @@ function buildParams() {
         stress_same_bar_trigger_count: 5,
         structural_stop_wick_buffer_pct: 0.1,
         structural_stop_hard_cap_pct: 3.0,
+        min_rr: 1.5,
+        entry_pct_floor: 0.3,
+        atr_floor_multiplier: 0.3,
+        max_tp_dist_factor: 5.0,
     };
 }
 
@@ -118,10 +125,10 @@ function buildInput(opts: IFixtureOpts = {}): IStrategyInput {
             side,
             entryCandleOpenTime: 1_700_000_000_000,
             eventId: 'BTCUSDT:1700000000000',
-            vwapSession: REFERENCE_PRICE.toFixed(18),
-            vwap20bar: REFERENCE_PRICE.toFixed(18),
+            vwapSession: new Money(VWAP).toFixed(18),
+            vwap20bar: new Money(VWAP).toFixed(18),
             vwapAnchorType: VwapAnchorTypeEnum.SESSION,
-            vwapDeviationPct: 0,
+            vwapDeviationPct: DEVIATION_PCT,
             vwapDeviationSigma: 2.5,
             volumeRatio: 2.5,
             volume20barAvg: new Money('1000000').toFixed(18),
@@ -341,12 +348,16 @@ describe('momentumCore D2 adversarial — ADV-4: SHORT takeProfitPrice is strict
         expect(new Money(signal.proposedExit!.takeProfitPrice).lessThan(REFERENCE_PRICE)).toBe(true);
     });
 
-    it('SHORT with low atr14=0.01: takeProfitPrice is still below referencePrice (direction safe at tiny ATR)', () => {
-        // BUILD: near-zero ATR — TP is barely below entry, but must not be at or above it
+    it('SHORT with low atr14=0.01: degenerate geometry is SKIPPED (TP cannot reach min_rr vs the VWAP stop)', () => {
+        // M47 Task 2: a near-zero ATR against a non-zero VWAP-stop distance (slDist ≈ 0.6 here)
+        // is inverted geometry — the capped rrFloor cannot lift the TP to min_rr — so the core
+        // refuses it rather than ship a sub-target position. Pre-M47 this opened with a TP barely
+        // below entry; that is exactly the inverted-geometry trade M47 eliminates.
         const signal = evaluateMomentum(buildInput({ side: DeviationSideEnum.BELOW, atr14: '0.01', flowType: FlowTypeEnum.TREND_INITIATION }));
 
-        // CHECK: even an infinitesimal ATR produces a TP that is strictly below entry
-        expect(new Money(signal.proposedExit!.takeProfitPrice).lessThan(REFERENCE_PRICE)).toBe(true);
+        expect(signal.action).toBe(SignalActionEnum.SKIP);
+        expect(signal.skipReason).toBe(SkipReasonEnum.DEGENERATE_VWAP_GEOMETRY);
+        expect(signal.proposedExit).toBeNull();
     });
 
     it('SHORT with high atr14=5000: takeProfitPrice is still below referencePrice (direction safe at huge ATR)', () => {
@@ -409,11 +420,11 @@ describe('momentumCore D2 adversarial — ADV-5: atrDistance carries the floor-l
         expect(new Money(signal.proposedExit!.atrDistance!).toFixed()).toBe(tpDistance.toFixed());
     });
 
-    it('LONG at low ATR (floor leg wins): tpRebaseEligible stays true (M38 contract not broken)', () => {
-        // BUILD: when the floor leg wins, the TP is still reference-price-relative and rebase-eligible
+    it('LONG at low ATR (floor leg wins): tpRebaseEligible stays false (M47 Option B contract)', () => {
+        // BUILD: when the floor leg wins, the TP is still reference-price-relative
         const signal = evaluateMomentum(buildInput({ atr14: '1', coinTier: CoinTierEnum.TIER_1 }));
 
-        // CHECK: floor-leg win does not flip rebase eligibility off
-        expect(signal.proposedExit!.tpRebaseEligible).toBe(true);
+        // CHECK: M47 Task 0 freezes both legs at signal time regardless of which TP leg wins
+        expect(signal.proposedExit!.tpRebaseEligible).toBe(false);
     });
 });

@@ -171,6 +171,8 @@ function makeService(
         exchangeClient,
         events,
         { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
+        // M47 Task 5a — instrumentor seed stub (synchronous open-path seeding).
+        { onPositionOpened: jest.fn(), applyEntryTick: jest.fn() } as never,
     );
 
     return {
@@ -500,6 +502,8 @@ describe('ExecutionService — POST_ONLY_MAKER awaitPolicyTimeout: cancel + clas
             exchangeClient,
             events,
             { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
+            // M47 Task 5a — instrumentor seed stub (synchronous open-path seeding).
+            { onPositionOpened: jest.fn(), applyEntryTick: jest.fn() } as never,
         );
 
         const event = buildApprovedEvent({ intent: buildOrderIntent({ tradeSide: PositionSideEnum.SHORT }) });
@@ -592,6 +596,8 @@ describe('ExecutionService — POST_ONLY_MAKER would-cross → CANCELLED, no res
             exchangeClient,
             events,
             { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
+            // M47 Task 5a — instrumentor seed stub (synchronous open-path seeding).
+            { onPositionOpened: jest.fn(), applyEntryTick: jest.fn() } as never,
         );
 
         // LONG intent: tradeSide = LONG, limitPrice (30000) >= bestAsk (29999) → would cross
@@ -711,6 +717,8 @@ describe('ExecutionService — ADD path with weighted-average entry', () => {
             exchangeClient,
             events,
             { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
+            // M47 Task 5a — instrumentor seed stub (synchronous open-path seeding).
+            { onPositionOpened: jest.fn(), applyEntryTick: jest.fn() } as never,
         );
 
         const addIntent = buildOrderIntent({
@@ -841,6 +849,8 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
             exchangeClient,
             events,
             { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
+            // M47 Task 5a — instrumentor seed stub (synchronous open-path seeding).
+            { onPositionOpened: jest.fn(), applyEntryTick: jest.fn() } as never,
         );
 
         const reduceIntent = buildOrderIntent({
@@ -954,6 +964,8 @@ describe('ExecutionService — REDUCE_MARKET remainder retry', () => {
             exchangeClient,
             events,
             { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
+            // M47 Task 5a — instrumentor seed stub (synchronous open-path seeding).
+            { onPositionOpened: jest.fn(), applyEntryTick: jest.fn() } as never,
         );
 
         const intent = buildOrderIntent({

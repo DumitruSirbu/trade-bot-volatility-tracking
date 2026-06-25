@@ -121,6 +121,8 @@ function makeWiredService() {
         exchangeClient,
         events,
         { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any,
+        // M47 Task 5a — instrumentor seed stub (synchronous open-path seeding).
+        { onPositionOpened: jest.fn(), applyEntryTick: jest.fn() } as never,
     );
 
     return { service, positions };

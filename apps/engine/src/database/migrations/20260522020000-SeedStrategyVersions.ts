@@ -5,6 +5,13 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 // (name, version): up() upserts, down() deletes exactly those four rows. v0 is the
 // no-trade baseline (trade_enabled:false). Direction/status are the shared enum string
 // values (StrategyDirectionEnum / StrategyStatusEnum).
+//
+// IMPORTANT (post-M47): After M47 deploys to the live database with geometry-coupled
+// v1.1/v2.1/v3.1 rows, this seeder must NEVER be re-run against live — the ON CONFLICT
+// DO UPDATE SET params = EXCLUDED.params line performs a full-blob overwrite that would
+// clobber production-tuned params back to these BASE_PARAMS defaults. This seeder is
+// dev/CI bootstrap only, not a live re-sync tool. For live param re-tuning, use a targeted
+// JSON-merge UPDATE migration instead.
 
 const STRATEGY_NAME = 'volatility-vwap';
 
@@ -43,6 +50,11 @@ const BASE_PARAMS = {
     stress_same_bar_trigger_count: 5,
     structural_stop_wick_buffer_pct: 0.1,
     structural_stop_hard_cap_pct: 2.0,
+    // M47 R:R geometry coupling params (added by Task 1)
+    min_rr: 1.5,
+    entry_pct_floor: 0.3,
+    atr_floor_multiplier: 0.3,
+    max_tp_dist_factor: 5.0,
 };
 
 interface ISeedVersion {

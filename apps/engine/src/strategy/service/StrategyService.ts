@@ -250,6 +250,10 @@ export class StrategyService implements OnModuleInit {
             coinTier: event.coinTier,
             idiosyncrasyScore: event.idiosyncrasyScore,
             entryPrice,
+            // M47 W4 (BLOCKER 1) — in live entryPrice is already reconstructReferencePrice(event),
+            // so referencePrice equals it; carried explicitly so the gate anchors R:R to the
+            // signal reference (matches backtest, invariant 7).
+            referencePrice: entryPrice,
             midAtTrigger,
             maintenanceMarginRate: instrument.maintenanceMarginRate,
             proposedExit: signal.proposedExit,

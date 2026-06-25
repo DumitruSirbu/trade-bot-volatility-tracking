@@ -121,6 +121,8 @@ function buildService(): ExecutionService {
         {} as any, // exchangeClient
         { emit: jest.fn() } as any, // events
         { upsertAccountingForDay: jest.fn().mockResolvedValue(undefined) } as any, // riskState
+        // M47 Task 5a — instrumentor seed stub (synchronous open-path seeding).
+        { onPositionOpened: jest.fn(), applyEntryTick: jest.fn() } as never,
     );
 }
 

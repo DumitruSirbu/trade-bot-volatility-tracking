@@ -3,6 +3,10 @@ import { PositionSideEnum } from '@bot/shared';
 import { Money } from '../../../src/common/utils/money';
 import { computeAtrStop, computeStructuralStop } from '../../../src/strategy/utils/computeStops';
 
+// A non-binding R:R SL cap distance: large enough that the wick/hard-cap bound always wins,
+// so these characterizations exercise the pre-M47 structural-stop math without rrCap tightening.
+const NO_RR_CAP = new Money('1e9');
+
 // ─── ATR stop ────────────────────────────────────────────────────────────────
 
 describe('computeAtrStop', () => {
@@ -101,7 +105,7 @@ describe('computeStructuralStop', () => {
             const entry = new Money('30000.00');
             const wick = new Money('30400.00');
 
-            const stop = computeStructuralStop(PositionSideEnum.SHORT, entry, wick, 0.3, 2.0);
+            const stop = computeStructuralStop(PositionSideEnum.SHORT, entry, wick, 0.3, 2.0, NO_RR_CAP);
 
             // raw = 30400 × (1 + 0.003) = 30400 × 1.003 = 30491.2
             // hardCap = 30000 × (1 + 0.02) = 30600
@@ -114,7 +118,7 @@ describe('computeStructuralStop', () => {
             const entry = new Money('30000.00');
             const wick = new Money('32000.00'); // wick is 6.67% above entry
 
-            const stop = computeStructuralStop(PositionSideEnum.SHORT, entry, wick, 0.3, 2.0);
+            const stop = computeStructuralStop(PositionSideEnum.SHORT, entry, wick, 0.3, 2.0, NO_RR_CAP);
 
             // raw = 32000 × 1.003 = 32096
             // hardCap = 30000 × 1.02 = 30600
@@ -126,7 +130,7 @@ describe('computeStructuralStop', () => {
             const entry = new Money('10000.00');
             const wick = new Money('10500.00');
 
-            const stop = computeStructuralStop(PositionSideEnum.SHORT, entry, wick, 0.3, 2.0);
+            const stop = computeStructuralStop(PositionSideEnum.SHORT, entry, wick, 0.3, 2.0, NO_RR_CAP);
 
             expect(stop.greaterThan(entry)).toBe(true);
         });
@@ -139,7 +143,7 @@ describe('computeStructuralStop', () => {
             const entry = new Money('10000.00');
             const wick = new Money('10200.00');
 
-            const stop = computeStructuralStop(PositionSideEnum.SHORT, entry, wick, 0.0, 2.0);
+            const stop = computeStructuralStop(PositionSideEnum.SHORT, entry, wick, 0.0, 2.0, NO_RR_CAP);
 
             // raw = 10200 × 1.0 = 10200; hardCap = 10000 × 1.02 = 10200 → equal
             expect(stop.toFixed()).toBe('10200');
@@ -152,7 +156,7 @@ describe('computeStructuralStop', () => {
             const entry = new Money('30000.00');
             const wick = new Money('28800.00');
 
-            const stop = computeStructuralStop(PositionSideEnum.LONG, entry, wick, 0.3, 2.0);
+            const stop = computeStructuralStop(PositionSideEnum.LONG, entry, wick, 0.3, 2.0, NO_RR_CAP);
 
             // raw = 28800 × (1 - 0.003) = 28800 × 0.997 = 28713.6
             // hardCap = 30000 × (1 - 0.02) = 29400
@@ -165,7 +169,7 @@ describe('computeStructuralStop', () => {
             const entry = new Money('30000.00');
             const wick = new Money('29900.00');
 
-            const stop = computeStructuralStop(PositionSideEnum.LONG, entry, wick, 0.3, 2.0);
+            const stop = computeStructuralStop(PositionSideEnum.LONG, entry, wick, 0.3, 2.0, NO_RR_CAP);
 
             // raw = 29900 × 0.997 = 29810.3
             // hardCap = 30000 × 0.98 = 29400
@@ -177,7 +181,7 @@ describe('computeStructuralStop', () => {
             const entry = new Money('10000.00');
             const wick = new Money('9800.00');
 
-            const stop = computeStructuralStop(PositionSideEnum.LONG, entry, wick, 0.3, 2.0);
+            const stop = computeStructuralStop(PositionSideEnum.LONG, entry, wick, 0.3, 2.0, NO_RR_CAP);
 
             expect(stop.lessThan(entry)).toBe(true);
         });
@@ -189,7 +193,7 @@ describe('computeStructuralStop', () => {
             const entry = new Money('1.00');
             const wick = new Money('1.03');
 
-            const stop = computeStructuralStop(PositionSideEnum.SHORT, entry, wick, 0.1, 5.0);
+            const stop = computeStructuralStop(PositionSideEnum.SHORT, entry, wick, 0.1, 5.0, NO_RR_CAP);
 
             // raw = 1.03 × 1.001 = 1.03103
             // hardCap = 1.00 × 1.05 = 1.05

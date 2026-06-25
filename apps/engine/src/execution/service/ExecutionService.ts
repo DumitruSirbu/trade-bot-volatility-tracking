@@ -14,7 +14,7 @@ import {
     TransactionTypeEnum,
     VwapAnchorTypeEnum,
 } from '@bot/shared';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 
 import {
@@ -37,7 +37,7 @@ import { EXCHANGE_CLIENT, IExchangeClient } from '../../exchange/interface';
 import { PositionEntity } from '../../position/entity';
 import { PositionRepository } from '../../position/repository/PositionRepository';
 import { TransactionRepository } from '../../position/repository/TransactionRepository';
-import { PositionService } from '../../position/service';
+import { PositionInstrumentor, PositionService } from '../../position/service';
 import { computeFillCashflow } from '../../position/util/pnlMath';
 import { IOrderIntent, IOrderIntentApprovedEvent } from '../../risk/interface';
 import { RiskStateRepository } from '../../risk/repository/RiskStateRepository';
@@ -133,6 +133,12 @@ export class ExecutionService {
         @Inject(EXCHANGE_CLIENT) private readonly exchangeClient: IExchangeClient,
         private readonly events: EventEmitter2,
         private readonly riskState: RiskStateRepository,
+        // M47 Task 5a (tech-debt M7) — seeded synchronously at open time so the entry-window
+        // peak-excursion ticks are captured, not dropped by the async seed-timing race.
+        // forwardRef: ExecutionModule imports PositionModule via forwardRef (a real cycle).
+        // Placed last to keep the existing positional constructor order stable for callers.
+        @Inject(forwardRef(() => PositionInstrumentor))
+        private readonly positionInstrumentor: PositionInstrumentor,
     ) {}
 
     @OnEvent(ORDER_INTENT_APPROVED_EVENT)
@@ -1082,6 +1088,17 @@ export class ExecutionService {
                 stopLossPrice: event.clampedExit.stopLossPrice,
                 takeProfitPrice: resolvedTakeProfitPrice,
             });
+
+            // M47 Task 5a (tech-debt M7) — close the async seed-timing race. Register the symbol
+            // in the instrumentor's positionsBySymbol index SYNCHRONOUSLY here, after
+            // createPositionFromFill returns its freshly-written in-memory row and BEFORE the first
+            // downstream await (recordEntryTransactionOrEscalate). Any PRICE_UPDATE_EVENT arriving
+            // during the subsequent awaits then finds the symbol indexed and is captured, not
+            // silently dropped. applyEntryTick seeds mfe_pct=0/mae_pct=0 (signed pct, not price) as
+            // the entry-instant excursion sample. The async onPositionOpenedEvent handler stays for
+            // the adoption-ack / reconcile-recover recovery paths (it is now idempotent re-seed).
+            this.positionInstrumentor.onPositionOpened(positionRow);
+            this.positionInstrumentor.applyEntryTick(positionRow);
         }
 
         await this.recordEntryTransactionOrEscalate(positionRow.id, event, submitResult, fillSummary);

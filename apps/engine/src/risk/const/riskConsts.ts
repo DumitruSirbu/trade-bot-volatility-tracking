@@ -252,6 +252,14 @@ export const DEFAULT_MAINTENANCE_MARGIN_RATE = 0.005;
 
 export const RISK_TAKER_FEE_RATE = new Money('0.0004');
 
+// --- R:R backstop (ADR 0004) ---
+
+// Loose backstop — cores are the binding constraint (min_rr=1.5 in version params). Gate
+// only catches pathological edge cases that slip past the cores (e.g. post-clamp geometry
+// inversion). Intentionally loose; a gate at 1.5 would be a kill-switch rejecting 92% of
+// historical signals.
+export const MIN_RR_GATE_FLOOR = new Money('1.0');
+
 // --- isolated margin default (§13) ---
 
 // Live defaults to isolated margin unless a documented reason selects cross.

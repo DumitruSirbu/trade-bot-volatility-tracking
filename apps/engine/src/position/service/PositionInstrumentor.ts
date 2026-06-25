@@ -145,6 +145,23 @@ export class PositionInstrumentor {
         this.logger.debug(`instrumentation seeded positionId=${position.id} symbol=${position.symbol} side=${position.side}`);
     }
 
+    // M47 Task 5a (tech-debt M7) — synchronous entry-tick seed. Called by ExecutionService
+    // immediately after `onPositionOpened` on the open path, BEFORE the first downstream await,
+    // so the entry-instant peak-excursion window is captured rather than lost to the async
+    // seed-timing race. Applies the entry price as the initial excursion sample: mark ≈ entry at
+    // open, so the excursion is zero and both columns seed to 0 under the signed convention
+    // (`mfe_pct >= 0` via `max`, `mae_pct <= 0` via `min`). Seeds SIGNED PERCENTAGES, never the
+    // entry price itself. No-ops if the position is not tracked (onPositionOpened must run first).
+    applyEntryTick(position: PositionEntity): void {
+        const state = this.states.get(position.id);
+
+        if (state === undefined) {
+            return;
+        }
+
+        this.applyTick(state, position.entryPrice, position.openedAt.getTime());
+    }
+
     // ADR 0013 §1g — the reconciliation tick (ADR 0010 §2) refreshes liquidation
     // prices via `exchange.fetchPositions()`. The instrumentor caches the latest
     // per position so `onPriceUpdate` can compute the signed distance without

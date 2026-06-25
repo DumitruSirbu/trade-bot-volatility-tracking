@@ -54,6 +54,15 @@ const baseSchema = z
         structural_stop_wick_buffer_pct: z.number().positive(),
         structural_stop_hard_cap_pct: z.number().positive(),
 
+        // M47 R:R geometry coupling params (core target and noise floors)
+        // Unit convention: min_rr, atr_floor_multiplier, max_tp_dist_factor are plain multipliers.
+        // entry_pct_floor is a percent-number (e.g., 0.3 = 0.3%), matching structural_stop_hard_cap_pct.
+        // Do NOT mix fraction and percent-number forms; divide entry_pct_floor by 100 before applying to a price.
+        min_rr: z.number().positive(),
+        entry_pct_floor: z.number().positive(),
+        atr_floor_multiplier: z.number().positive(),
+        max_tp_dist_factor: z.number().positive(),
+
         // Per-version optional keys
         trade_enabled: z.boolean().optional(),
         direction: z.string().optional(), // Redundant with strategy_versions.direction column; column is authoritative

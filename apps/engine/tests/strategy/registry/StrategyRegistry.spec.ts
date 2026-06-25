@@ -63,6 +63,45 @@ describe('StrategyRegistry', () => {
         });
     });
 
+    describe('resolve — M47 geometry-coupled version aliases (11/21/31)', () => {
+        it('resolves version 11 (v1.1) to the V1 mean-reversion implementation', () => {
+            const registry = buildRegistry();
+
+            const { strategy } = registry.resolve('volatility-vwap', 11, VALID_PARAMS);
+
+            // The alias points at the same V1 class — the version bump is a data partition key only.
+            expect(strategy.version).toBe(1);
+            expect(strategy.direction).toBe(StrategyDirectionEnum.MEAN_REVERSION);
+        });
+
+        it('resolves version 21 (v2.1) to the V2 momentum implementation', () => {
+            const registry = buildRegistry();
+
+            const { strategy } = registry.resolve('volatility-vwap', 21, VALID_PARAMS);
+
+            expect(strategy.version).toBe(2);
+            expect(strategy.direction).toBe(StrategyDirectionEnum.MOMENTUM);
+        });
+
+        it('resolves version 31 (v3.1) to the V3 hybrid-router implementation', () => {
+            const registry = buildRegistry();
+
+            const { strategy } = registry.resolve('volatility-vwap', 31, VALID_PARAMS);
+
+            expect(strategy.version).toBe(3);
+            expect(strategy.direction).toBe(StrategyDirectionEnum.HYBRID);
+        });
+
+        it('returns the same V1 instance for both version 1 and its alias 11', () => {
+            const registry = buildRegistry();
+
+            const { strategy: v1 } = registry.resolve('volatility-vwap', 1, VALID_PARAMS);
+            const { strategy: alias } = registry.resolve('volatility-vwap', 11, VALID_PARAMS);
+
+            expect(alias).toBe(v1);
+        });
+    });
+
     describe('resolve — unknown name/version', () => {
         it('throws StrategyConfigException for an unknown strategy name', () => {
             const registry = buildRegistry();

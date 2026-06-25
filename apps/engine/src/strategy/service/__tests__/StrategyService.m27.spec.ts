@@ -103,6 +103,7 @@ function buildIntent(overrides: Partial<IOrderIntent> = {}): IOrderIntent {
         coinTier: CoinTierEnum.TIER_1,
         idiosyncrasyScore: 0.7,
         entryPrice,
+        referencePrice: entryPrice,
         midAtTrigger: entryPrice,
         maintenanceMarginRate: new Money('0.005'),
         proposedExit: {

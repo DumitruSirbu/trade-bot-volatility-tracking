@@ -17,11 +17,19 @@ interface IResolvedStrategy {
 // miss/invalid params — fail fast, never run with an unresolved impl or bad params.
 @Injectable()
 export class StrategyRegistry {
-    private readonly strategiesByKey: ReadonlyMap<string, IStrategy>;
+    private readonly strategiesByKey: Map<string, IStrategy>;
 
     constructor(v0: V0BaselineStrategy, v1: V1MeanReversionStrategy, v2: V2MomentumStrategy, v3: V3HybridRouterStrategy) {
         const strategies: IStrategy[] = [v0, v1, v2, v3];
         this.strategiesByKey = new Map(strategies.map((strategy) => [this.buildKey(strategy.name, strategy.version), strategy]));
+
+        // M47: alias the geometry-coupled version rows (11/21/31 = v1.1/v2.1/v3.1) to the same
+        // implementations. The version bump is a data partition key (pre/post-M47, BLOCKER 4),
+        // not a new code implementation — the geometry coupling lives in the cores the V1/V2/V3
+        // classes already delegate to, so the new rows resolve to the existing instances.
+        this.strategiesByKey.set(this.buildKey(v1.name, 11), v1);
+        this.strategiesByKey.set(this.buildKey(v2.name, 21), v2);
+        this.strategiesByKey.set(this.buildKey(v3.name, 31), v3);
     }
 
     resolve(name: string, version: number, params: unknown): IResolvedStrategy {

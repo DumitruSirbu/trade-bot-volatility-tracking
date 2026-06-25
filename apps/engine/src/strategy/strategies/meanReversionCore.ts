@@ -1,4 +1,4 @@
-import { DeviationSideEnum, IVolatilityDetectedEvent, PositionSideEnum, RegimeLabelEnum, SkipReasonEnum, StopTypeEnum } from '@bot/shared';
+import { DeviationSideEnum, IStrategyParams, IVolatilityDetectedEvent, PositionSideEnum, RegimeLabelEnum, SkipReasonEnum, StopTypeEnum } from '@bot/shared';
 
 import {
     BAND_REENTRY_LOWER_PCT_B,
@@ -10,7 +10,7 @@ import {
     TAKE_PROFIT_VWAP_SIGMA_OFFSET,
     VOLUME_DECELERATION_RATIO,
 } from '../const';
-import { Money } from '../../common/utils/money';
+import { Money, MoneyValue } from '../../common/utils/money';
 import { ISignal, IStrategyInput } from '../interface';
 import {
     buildOpenSignal,
@@ -21,6 +21,8 @@ import {
     resolveFadeSide,
     resolveSignalType,
 } from '../utils';
+
+const PCT_DIVISOR = new Money(100);
 
 // Pure mean-reversion (fade) decision core, shared by v1 and v3's forced_exhaustion route
 // (ADR 0003 §4; M3 brief v1). Returns one ISignal. No I/O, no clock — nowMs comes from
@@ -50,7 +52,13 @@ export function evaluateMeanReversion(input: IStrategyInput): ISignal {
         return skip(SkipReasonEnum.NO_EXHAUSTION_CONFIRMATION);
     }
 
-    if (isDegenerateReversionGeometry(event, tradeSide)) {
+    // M47 Task 3: compute tpDist FIRST, then the R:R SL cap (slCap = tpDist / min_rr) and the
+    // ATR-relative noise floor — the cap cannot be known until tpDist exists. The geometry
+    // context is threaded into both the degeneracy check and the exit builder so the decimal
+    // math is computed once.
+    const geometry = resolveMeanReversionGeometry(input);
+
+    if (isDegenerateReversionGeometry(event, tradeSide, geometry)) {
         return skip(SkipReasonEnum.DEGENERATE_VWAP_GEOMETRY);
     }
 
@@ -60,8 +68,39 @@ export function evaluateMeanReversion(input: IStrategyInput): ISignal {
         signalScore,
         flowType,
         reason: REASON_MEAN_REVERSION_FADE,
-        proposedExit: buildMeanReversionExit(input, tradeSide, nowMs),
+        proposedExit: buildMeanReversionExit(input, tradeSide, nowMs, geometry),
     });
+}
+
+// M47 Task 3 geometry context: the half-retrace TP distance, the R:R-derived SL cap
+// (slCap = tpDist / min_rr — the max allowed stop distance), and the noise floor below which
+// a stop would be a hair-trigger. Computed once in evaluateMeanReversion and threaded through
+// the degeneracy check and the exit builder (clean-code: one named object, not a flat arg list).
+interface IMeanReversionGeometryContext {
+    readonly slCapDistance: MoneyValue;
+    readonly slFloorDistance: MoneyValue;
+}
+
+function resolveMeanReversionGeometry(input: IStrategyInput): IMeanReversionGeometryContext {
+    const { event, params } = input;
+    const referencePrice = reconstructReferencePrice(event);
+    const takeProfitPrice = computeMeanReversionTakeProfit(input);
+
+    const tpDist = takeProfitPrice.minus(referencePrice).abs();
+    const slCapDistance = tpDist.dividedBy(params.min_rr);
+    const slFloorDistance = resolveSlFloorDistance(referencePrice, event.atr14, params);
+
+    return { slCapDistance, slFloorDistance };
+}
+
+// Noise floor for the mean-reversion stop: the LARGER of an ATR-relative bound (the binding
+// constraint for most signals) and a percent-of-entry sanity bound (for zero/near-zero ATR).
+// entry_pct_floor is a percent-NUMBER (0.3 = 0.3%), so divide by 100 before applying to entry.
+function resolveSlFloorDistance(referencePrice: MoneyValue, atr14: string, params: IStrategyParams): MoneyValue {
+    const atrFloor = new Money(atr14).times(params.atr_floor_multiplier);
+    const pctFloor = referencePrice.times(new Money(params.entry_pct_floor).dividedBy(PCT_DIVISOR));
+
+    return Money.max(atrFloor, pctFloor);
 }
 
 // Suppress a fade that leans against the prevailing trend: a short in an uptrend or a long
@@ -127,16 +166,20 @@ function isOiNotRising(openInterestChange5mPct: number): boolean {
 // TP = VWAP pulled in by TAKE_PROFIT_VWAP_SIGMA_OFFSET × the deviation band for
 // conservatism (M3 brief: VWAP ± 0.5σ). SL = structural stop (just beyond the wick, hard
 // capped). time-stop = nowMs + time_stop_minutes.
-function buildMeanReversionExit(input: IStrategyInput, tradeSide: PositionSideEnum, nowMs: number) {
+function buildMeanReversionExit(input: IStrategyInput, tradeSide: PositionSideEnum, nowMs: number, geometry: IMeanReversionGeometryContext) {
     const { event, params } = input;
 
     const takeProfitPrice = computeMeanReversionTakeProfit(input);
+    // M47 Task 3: the structural stop is now additionally bounded by slCap (= tpDist / min_rr),
+    // tightening the stop toward entry whenever the wick-based stop would invert R:R below the
+    // core target. The existing hard cap remains the outer (widest-allowed) bound.
     const stopLossPrice = computeStructuralStop(
         tradeSide,
         reconstructReferencePrice(event),
         resolveDeviationWickPrice(event),
         params.structural_stop_wick_buffer_pct,
         params.structural_stop_hard_cap_pct,
+        geometry.slCapDistance,
     );
 
     return {
@@ -152,13 +195,22 @@ function buildMeanReversionExit(input: IStrategyInput, tradeSide: PositionSideEn
     };
 }
 
-// Degenerate VWAP geometry: VWAP sits on (or past) the SAME side of entry as the deviation,
-// so the TP target — drawn from entry toward VWAP — lands on the wrong side of entry and the
-// position can be "taken profit" at a loss. SHORT needs vwap < referencePrice; LONG needs
-// vwap > referencePrice. Skip when that invariant is violated rather than emit a doomed exit.
-function isDegenerateReversionGeometry(event: IVolatilityDetectedEvent, tradeSide: PositionSideEnum): boolean {
+// Degenerate VWAP geometry, two cases:
+//   1. Wrong-side VWAP: VWAP sits on (or past) the SAME side of entry as the deviation, so the
+//      TP target — drawn from entry toward VWAP — lands on the wrong side of entry and the
+//      position can be "taken profit" at a loss. SHORT needs vwap < referencePrice; LONG needs
+//      vwap > referencePrice.
+//   2. M47 Task 3 noise-floor: the R:R SL cap (slCap = tpDist / min_rr) falls BELOW the noise
+//      floor (max(atr_floor_multiplier × atr14, (entry_pct_floor/100) × entry)), which would
+//      place the stop inside market noise — a hair-trigger that normal volatility trips at once.
+// Skip rather than ship a doomed or noise-tight exit.
+function isDegenerateReversionGeometry(event: IVolatilityDetectedEvent, tradeSide: PositionSideEnum, geometry: IMeanReversionGeometryContext): boolean {
     const vwap = new Money(event.vwapSession);
     const referencePrice = reconstructReferencePrice(event);
+
+    if (geometry.slCapDistance.lessThan(geometry.slFloorDistance)) {
+        return true;
+    }
 
     if (tradeSide === PositionSideEnum.LONG) {
         return vwap.lessThanOrEqualTo(referencePrice);

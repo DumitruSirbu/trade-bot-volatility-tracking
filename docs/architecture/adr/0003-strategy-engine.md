@@ -407,6 +407,111 @@ engine's `strategy/{interface,registry,service,const}` folders. This is a struct
 addition the scribe should fold into that paragraph (no separate file is created by this
 ADR, per the project's "no unsolicited docs" rule).
 
+## M47 Amendment — SL/TP coupling at signal time (2026-06-25)
+
+Status: Accepted (re-blessed before the M47 implementation wave).
+Milestone: M47 — Risk:Reward geometry fix. See `docs/plans/m47-rr-geometry-fix.md`.
+
+This amends §3 (protective-exit ownership) and §8 (params typing). It is an addition, not a
+contradiction: the strategy still only *proposes* exit geometry; M47 constrains the *shape*
+of that proposal so no core can emit a structurally-losing trade.
+
+### A1. New invariant — TP and SL are coupled at signal time
+
+`momentumCore` and `meanReversionCore` historically computed `takeProfitPrice` and
+`stopLossPrice` from **independent** price references, so the realized SL distance routinely
+exceeded the TP distance (inverted R:R). M47 makes this a hard contract:
+
+> **No strategy core may emit a signal whose signal-time R:R (`tp_dist / sl_dist`) is below
+> `min_rr`** (the versioned param, provisionally 1.5). The TP and SL are coupled at the moment
+> the signal is built — a core that cannot reach `min_rr` without degenerate geometry **skips
+> the signal**, it never emits a sub-target or degenerate one.
+
+The coupling direction is asymmetric per strategy and is itself part of the contract:
+
+- **Momentum: only the TP is ever widened** to satisfy the ratio. The VWAP-session stop is the
+  thesis-invalidation level (a reversion to VWAP kills the momentum thesis) and **is never
+  tightened**. The fix adds an `rrFloor = slDist × min_rr` leg to the existing TP `max()`,
+  **capped** at `max_tp_dist_factor × atr14` (so an extreme spike cannot place the TP at a
+  negative or unreachable price).
+- **Mean-reversion: only the structural stop is tightened (capped)** to satisfy the ratio. The
+  half-retrace TP is intentionally conservative and inherently reachable and **is never
+  widened**. The fix caps the structural stop at `slCap = tpDist / min_rr`, bounded below by an
+  ATR-relative noise floor (see A3).
+
+### A2. Degenerate geometry is a skip, never a degenerate signal
+
+When coupling cannot produce a geometry that meets `min_rr` above the relevant floor/cap, the
+core **skips the signal** (a first-class `SKIP` outcome per §2), it does not emit it:
+
+- **Momentum (cap-bound):** if the `rrFloor` cap binds and the resulting `tpDist / slDist <
+  min_rr`, or the capped TP price is itself degenerate (`≤ 0` for a SHORT, absurd multiple of
+  entry for a LONG), the core skips via an `isDegenerateMomentumGeometry` check. It does **not**
+  rely on the loose risk gate to catch a cap-bound sub-`min_rr` trade — Invariant 1 (no
+  sub-`min_rr` signal) is enforced in the core.
+- **Mean-reversion (SL-floor):** if `slCap = tpDist / min_rr` falls below the noise floor
+  `slFloor`, the core skips via `isDegenerateReversionGeometry` rather than ship a hair-trigger
+  stop that normal volatility trips immediately.
+
+This keeps the core as the *binding* constraint that shapes geometry; the gate backstop
+(ADR 0004 M47 amendment) is a loose, defense-in-depth net, never the primary enforcement of
+Invariant 1.
+
+### A3. New versioned params added to `baseSchema` (§8)
+
+Four new **base (non-optional)** params join `strategyParamsSchema` (`packages/shared`,
+persisted snake_case, versioned and replayable so live and backtest read the identical value):
+
+| Param | Purpose | Default | Unit |
+|-------|---------|---------|------|
+| `min_rr` | Core R:R target — the coupling floor both cores shape toward | 1.5 | plain multiplier |
+| `atr_floor_multiplier` | Mean-reversion SL noise floor, ATR-relative (binding) | 0.3 | plain multiplier |
+| `entry_pct_floor` | Mean-reversion SL noise floor, %-of-entry sanity bound (zero-ATR edge) | 0.3 | **percent-number** (0.3 = 0.3%), divided by 100 before use, matching `structural_stop_hard_cap_pct` |
+| `max_tp_dist_factor` | Caps the momentum `rrFloor` TP distance at `max_tp_dist_factor × atr14` | 5.0 | plain multiplier |
+
+Where `slFloor = max(atr_floor_multiplier × atr14, (entry_pct_floor / 100) × entry)`.
+
+- **Unit convention:** do not mix the fraction form (`0.003`) and the percent-number form
+  (`0.3`); percent-of-entry quantities use the percent-number form throughout, exactly as the
+  existing `structural_stop_hard_cap_pct` (`2.0` = 2%).
+- The fixed `min_sl_floor` from earlier drafts is **removed and must not be reintroduced** — the
+  ATR-relative pair replaces it.
+- `min_rr` is the *core target*; the gate's loose floor `MIN_RR_GATE_FLOOR` is a separate
+  **engine constant** (ADR 0004), deliberately not a version param, so the binding constraint
+  stays in version params and the safety net stays a code-level value.
+- `min_rr = 1.5` ships **provisional**. It is not validated within M47 (pre-M47 closed positions
+  carried inverted geometry, so their backfilled excursion data describes badly-shaped trades);
+  it is confirmed or re-tuned in a post-deploy review and re-tuned, if needed, via a targeted
+  JSON-merge param-row UPDATE on the new version rows + restart (no code deploy).
+
+### A4. New geometry-coupled version rows — v1.1 / v2.1 / v3.1
+
+The coupling is a behavioral change to v1/v2/v3, so M47 introduces **new strategy version rows**
+(v1 → v1.1, v2 → v2.1, v3 → v3.1, or the project's equivalent next-version numbering) carrying
+the four new params. The migration activates the new rows and clears the active flag from the
+old rows.
+
+- **Old version rows stay immutable and read-only** for historical replay of pre-M47
+  inverted-geometry trades. The JSON-merge backfill still adds the four keys to the old rows so
+  they continue to load under the `.strict()` schema, but they are not traded under after deploy.
+- The version bump is the clean partition key for pre/post-M47 success metrics and the
+  `position_segment_stats` view (ADR 0002 / data-model) — correct by construction, no deploy-date
+  arithmetic.
+- **Non-rolling deploy** is mandatory: stop engine → run the param migration (JSON-merge backfill
+  + new rows + activation) → start the new engine. The `.strict()` schema makes a partial deploy
+  unsafe (an un-migrated row crashes strategy resolution).
+- **The seeder is dev/CI-bootstrap only post-M47** — `SeedStrategyVersions.ts` does a full-blob
+  `params` overwrite that would clobber production-tuned values; never re-run it against the live
+  DB.
+
+### A5. Relationship to the existing exit-ownership split (§3)
+
+Unchanged: the strategy still only *proposes* `proposedExit`; M4 (risk) may still clamp the SL
+inside liquidation; M6 enforces the actual closes. M47 narrows what the proposal may contain
+(R:R ≥ `min_rr` or skip) and does not move the enforcement boundary. The momentum-rebase
+interaction (the proposal must survive the fill unchanged) is settled in ADR 0045's M47
+amendment (Option B / `tpRebaseEligible: false`).
+
 ## Conflicts surfaced (for the main session)
 
 1. **`direction` duplicated.** `strategy_versions.direction` (column,

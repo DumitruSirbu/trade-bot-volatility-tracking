@@ -25,8 +25,12 @@ import { evaluateMeanReversion } from '../meanReversionCore';
 // For LONG:  side=BELOW, deviationPct<0, so referencePrice < vwapSession.
 
 const EDGE_VWAP = '0.400'; // session VWAP in USDT
-const EDGE_ENTRY_ABOVE = 0.415 / 0.4 - 1; // ~3.75% above VWAP for SHORT scenario
-const EDGE_ENTRY_BELOW = -(1 - 0.385 / 0.4); // ~-3.75% below VWAP for LONG scenario
+// Percent-NUMBERS (vwapDeviationPct is consumed as a percent, divided by 100 in
+// reconstructReferencePrice). The earlier 0.415/0.4-1 = 0.0375 form was a ratio mistakenly used
+// as a percent, collapsing the real deviation to ~0.0375% — a near-zero tpDist that M47's noise
+// floor (Task 3) correctly flags as degenerate. The intended deviation is ~3.75%.
+const EDGE_ENTRY_ABOVE = (0.415 / 0.4 - 1) * 100; // ~3.75% above VWAP for SHORT scenario
+const EDGE_ENTRY_BELOW = -(1 - 0.385 / 0.4) * 100; // ~-3.75% below VWAP for LONG scenario
 
 // A SHORT setup: price deviated ABOVE VWAP. referencePrice = 0.400 * 1.0375 ≈ 0.415.
 function buildShortEvent(vwapSession: string, overrides: Partial<ReturnType<typeof buildBaseEvent>> = {}): ReturnType<typeof buildBaseEvent> {
@@ -180,6 +184,10 @@ function buildParams() {
         stress_same_bar_trigger_count: 5,
         structural_stop_wick_buffer_pct: 0.1,
         structural_stop_hard_cap_pct: 3.0,
+        min_rr: 1.5,
+        entry_pct_floor: 0.3,
+        atr_floor_multiplier: 0.3,
+        max_tp_dist_factor: 5.0,
     };
 }
 
@@ -378,19 +386,22 @@ describe('meanReversionCore M35 — DV5: boundary SHORT (vwapSession exactly equ
         expect(result.skipReason).toBe(SkipReasonEnum.DEGENERATE_VWAP_GEOMETRY);
     });
 
-    it('SHORT: vwapSession one tick below referencePrice (just valid) → OPEN, not SKIP', () => {
-        // At vwapDeviationPct=0.01%, referencePrice = vwap * 1.0001 > vwap → valid SHORT geometry.
+    it('SHORT: vwapSession below referencePrice (valid wrong-side geometry) → OPEN, not SKIP', () => {
+        // referencePrice = vwap × (1 + dev/100) > vwap → valid SHORT (not wrong-side degenerate).
+        // M47 Task 3: the deviation must also clear the noise floor — a one-tick (0.01%) deviation
+        // now yields a hair-trigger stop (slCap < slFloor) that is correctly skipped, so this
+        // wrong-side-boundary case uses a real 3% deviation to isolate the VWAP-side check.
         const vwapSession = '0.415';
-        const tinyPositiveDev = 0.01;
+        const positiveDev = 3.0;
 
         const event = {
-            ...buildBaseEvent(DeviationSideEnum.ABOVE, vwapSession, tinyPositiveDev),
-            vwapDeviationPct: tinyPositiveDev,
+            ...buildBaseEvent(DeviationSideEnum.ABOVE, vwapSession, positiveDev),
+            vwapDeviationPct: positiveDev,
         };
         const input = buildInput(event);
         const result = evaluateMeanReversion(input);
 
-        // referencePrice = 0.415 * 1.0001 = 0.4150415 > vwap=0.415 → not degenerate → OPEN
+        // referencePrice = 0.415 × 1.03 > vwap=0.415 → not degenerate → OPEN
         expect(result.action).toBe(SignalActionEnum.OPEN);
         expect(result.skipReason).toBeNull();
     });

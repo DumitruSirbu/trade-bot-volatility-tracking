@@ -59,6 +59,10 @@ function buildParams() {
         stress_same_bar_trigger_count: 5,
         structural_stop_wick_buffer_pct: 0.1,
         structural_stop_hard_cap_pct: 3.0,
+        min_rr: 1.5,
+        entry_pct_floor: 0.3,
+        atr_floor_multiplier: 0.3,
+        max_tp_dist_factor: 5.0,
     };
 }
 
@@ -66,7 +70,12 @@ function buildParams() {
 
 const MOMENTUM_VWAP = '50000';
 const MOMENTUM_ATR14 = '100';
-const MOMENTUM_DEVIATION_PCT = 1.5; // ABOVE → LONG momentum (follow the breakout)
+// M47 Task 2: a small deviation keeps slDist (= |reference − vwap| = 100) below the coupled-TP
+// target, so the trade opens with R:R ≥ min_rr (LONG atr×3.5=350 → 3.5; SHORT atr×2.0=200 → 2.0).
+// The old 1.5% deviation produced slDist=750 vs atr=100 — genuinely inverted geometry that M47
+// now correctly skips as degenerate, so these rebase-field characterizations would never reach
+// an OPEN signal under it.
+const MOMENTUM_DEVIATION_PCT = 0.2; // ABOVE → LONG momentum (follow the breakout)
 
 function buildMomentumEvent(side: DeviationSideEnum = DeviationSideEnum.ABOVE, deviationPct = MOMENTUM_DEVIATION_PCT) {
     return {
@@ -238,22 +247,25 @@ function buildMeanReversionInput(side: DeviationSideEnum): IStrategyInput {
 
 // ─── SC1: momentumCore sets tpRebaseEligible=true ────────────────────────────
 
-describe('strategyExitFields M38 — SC1: momentumCore OPEN signal has tpRebaseEligible=true', () => {
-    it('LONG momentum open: proposedExit.tpRebaseEligible is true', () => {
+// M47 Task 0 (ADR 0045 amendment, Option B): momentum is now tpRebaseEligible=FALSE — both
+// legs stay frozen at signal time. The pre-M47 contract asserted `true` here; flipping it is
+// the one-field fix for Bug 2 (asymmetric single-leg fill rebase).
+describe('strategyExitFields M47 — SC1: momentumCore OPEN signal has tpRebaseEligible=false', () => {
+    it('LONG momentum open: proposedExit.tpRebaseEligible is false', () => {
         const signal = evaluateMomentum(buildMomentumInput(DeviationSideEnum.ABOVE));
 
         expect(signal.action).toBe(SignalActionEnum.OPEN);
         expect(signal.proposedExit).not.toBeNull();
-        expect(signal.proposedExit!.tpRebaseEligible).toBe(true);
+        expect(signal.proposedExit!.tpRebaseEligible).toBe(false);
     });
 
-    it('SHORT momentum open: proposedExit.tpRebaseEligible is true', () => {
+    it('SHORT momentum open: proposedExit.tpRebaseEligible is false', () => {
         // SHORT momentum: price fell below VWAP (BELOW deviation), follow down
         const signal = evaluateMomentum(buildMomentumInput(DeviationSideEnum.BELOW, -MOMENTUM_DEVIATION_PCT));
 
         expect(signal.action).toBe(SignalActionEnum.OPEN);
         expect(signal.proposedExit).not.toBeNull();
-        expect(signal.proposedExit!.tpRebaseEligible).toBe(true);
+        expect(signal.proposedExit!.tpRebaseEligible).toBe(false);
     });
 });
 
@@ -343,18 +355,21 @@ describe('strategyExitFields M38 — SC3: momentumCore atrDistance is consistent
 
 // ─── SC4: momentumCore sets fields on both LONG and SHORT opens ───────────────
 
-describe('strategyExitFields M38 — SC4: momentumCore sets tpRebaseEligible=true and non-null atrDistance on both sides', () => {
-    it('LONG open has tpRebaseEligible=true and non-null atrDistance', () => {
+// M47 Task 0: tpRebaseEligible=false on both sides, but atrDistance is STILL non-null — it
+// carries the coupled tpDist for the sweep tool's reference reconstruction (only the fill-time
+// rebase consumption of atrDistance is removed under Option B, not the field itself).
+describe('strategyExitFields M47 — SC4: momentumCore sets tpRebaseEligible=false and non-null atrDistance on both sides', () => {
+    it('LONG open has tpRebaseEligible=false and non-null atrDistance', () => {
         const signal = evaluateMomentum(buildMomentumInput(DeviationSideEnum.ABOVE));
 
-        expect(signal.proposedExit!.tpRebaseEligible).toBe(true);
+        expect(signal.proposedExit!.tpRebaseEligible).toBe(false);
         expect(signal.proposedExit!.atrDistance).not.toBeNull();
     });
 
-    it('SHORT open has tpRebaseEligible=true and non-null atrDistance', () => {
+    it('SHORT open has tpRebaseEligible=false and non-null atrDistance', () => {
         const signal = evaluateMomentum(buildMomentumInput(DeviationSideEnum.BELOW, -MOMENTUM_DEVIATION_PCT));
 
-        expect(signal.proposedExit!.tpRebaseEligible).toBe(true);
+        expect(signal.proposedExit!.tpRebaseEligible).toBe(false);
         expect(signal.proposedExit!.atrDistance).not.toBeNull();
     });
 });

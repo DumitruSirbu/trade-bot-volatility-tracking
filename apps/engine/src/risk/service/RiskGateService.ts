@@ -31,6 +31,7 @@ import {
     MARKET_STRESS_RESUME_CLEAR_TICKS,
     MARKET_STRESS_RESUME_ELIGIBLE_LEGS,
     MAX_LEVERAGE,
+    MIN_RR_GATE_FLOOR,
     RESERVATION_TTL_MS,
     RISK_TAKER_FEE_RATE,
     SAME_BAR_RESUME_CLEAR_TICKS,
@@ -474,6 +475,13 @@ export class RiskGateService {
 
         if (this.isTakeProfitBelowCost(intent, context)) {
             return this.rejected(intent, RejectReasonEnum.TP_BELOW_COST);
+        }
+
+        // M47 Task 4 (ADR 0004) — R:R backstop. Reads the CLAMPED SL (clampStopInsideLiquidation
+        // may have tightened it) so the check sees the geometry the position will actually hold.
+        // Anchored to the signal reference price, not nextBarOpen (BLOCKER 1) — see below.
+        if (this.isRewardRiskTooLow(clampedExit, intent)) {
+            return this.rejected(intent, RejectReasonEnum.RR_TOO_LOW);
         }
 
         return this.reserveAndApprove(intent, context, state, slot.slot, clampedExit, ledger);
@@ -1167,6 +1175,43 @@ export class RiskGateService {
         const tpDistance = intent.proposedExit.takeProfitPrice.minus(intent.entryPrice).abs();
 
         return tpDistance.lessThanOrEqualTo(roundTripCostDistance);
+    }
+
+    // Defense-in-depth R:R backstop (ADR 0004). Strategy-agnostic: every current
+    // and future core passes through here, so a core that forgets to couple its legs cannot reach
+    // execution with inverted geometry (invariant 6). The cores are the binding constraint
+    // (min_rr in version params); this is a LOOSE floor (MIN_RR_GATE_FLOOR) catching only
+    // pathological edge cases (e.g. a marginal trade inverted by the liquidation clamp).
+    //
+    // Anchor (BLOCKER 1): both distances are measured against `intent.referencePrice`, which on
+    // the gate intent is the BAR-CLOSE SIGNAL REFERENCE used for SL/TP distance math (see
+    // IOrderIntent.referencePrice doc, ADR 0003 §3 / ADR 0004 §8) — the SAME anchor the cores used
+    // when they computed `proposedExit`'s SL and TP. We deliberately measure side-relative from
+    // the SL/TP LEVELS (not from any fill estimate): for LONG `tp_dist = takeProfitPrice − ref`,
+    // `sl_dist = ref − stopLossPrice`; mirror for SHORT. This must NEVER anchor to `nextBarOpen`
+    // (the backtest fill estimate), or live and backtest would compute different R:R for the same
+    // signal (invariant 7). Sound under Task 0 Option B: the momentum TP is frozen at signal time
+    // (never rebased), so the intent TP equals the held TP; the SL is the clamped (worst-case)
+    // value — exactly the geometry the position holds for its life.
+    private isRewardRiskTooLow(clampedExit: IProposedExit, intent: IOrderIntent): boolean {
+        const referencePrice = intent.referencePrice;
+        const isLong = intent.tradeSide === PositionSideEnum.LONG;
+
+        const slDistance = isLong ? referencePrice.minus(clampedExit.stopLossPrice) : clampedExit.stopLossPrice.minus(referencePrice);
+        const tpDistance = isLong ? intent.proposedExit.takeProfitPrice.minus(referencePrice) : referencePrice.minus(intent.proposedExit.takeProfitPrice);
+
+        // Div-by-zero guard (BLOCKER 6): sl_dist == 0 means the stop sits at the reference (VWAP ==
+        // reference for momentum, or a degenerate wick for mean-reversion) — R:R is undefined /
+        // infinite-risk. Reject as RR_TOO_LOW rather than divide by zero. Do not rely on the
+        // liquidation clamp rejecting this first.
+        if (slDistance.lessThanOrEqualTo(0)) {
+            return true;
+        }
+
+        // Strict `<` (at-floor passes): the R:R floor is a SOFT backstop that must not reject a
+        // borderline-acceptable trade, unlike isTakeProfitBelowCost's hard `<=` economic limit.
+
+        return tpDistance.dividedBy(slDistance).lessThan(MIN_RR_GATE_FLOOR);
     }
 
     private tightenStop(intent: IOrderIntent, safeDistance: MoneyValue): IProposedExit {

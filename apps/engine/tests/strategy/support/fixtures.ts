@@ -168,6 +168,10 @@ export function buildParams(overrides: Partial<IStrategyParams> = {}): IStrategy
         stress_same_bar_trigger_count: 5,
         structural_stop_wick_buffer_pct: 0.3,
         structural_stop_hard_cap_pct: 2.0,
+        min_rr: 1.5,
+        entry_pct_floor: 0.3,
+        atr_floor_multiplier: 0.3,
+        max_tp_dist_factor: 5.0,
 
         ...overrides,
     };
