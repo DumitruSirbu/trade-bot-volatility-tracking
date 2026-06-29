@@ -1,4 +1,4 @@
-import { DeviationSideEnum, IStrategyParams, IVolatilityDetectedEvent, PositionSideEnum, RegimeLabelEnum, SkipReasonEnum, StopTypeEnum } from '@bot/shared';
+import { DeviationSideEnum, IVolatilityDetectedEvent, PositionSideEnum, RegimeLabelEnum, SkipReasonEnum, StopTypeEnum } from '@bot/shared';
 
 import {
     BAND_REENTRY_LOWER_PCT_B,
@@ -10,6 +10,7 @@ import {
     TAKE_PROFIT_VWAP_SIGMA_OFFSET,
     VOLUME_DECELERATION_RATIO,
 } from '../const';
+import { resolveSlFloorDistance } from '../../common/utils';
 import { Money, MoneyValue } from '../../common/utils/money';
 import { ISignal, IStrategyInput } from '../interface';
 import {
@@ -21,8 +22,6 @@ import {
     resolveFadeSide,
     resolveSignalType,
 } from '../utils';
-
-const PCT_DIVISOR = new Money(100);
 
 // Pure mean-reversion (fade) decision core, shared by v1 and v3's forced_exhaustion route
 // (ADR 0003 §4; M3 brief v1). Returns one ISignal. No I/O, no clock — nowMs comes from
@@ -88,19 +87,9 @@ function resolveMeanReversionGeometry(input: IStrategyInput): IMeanReversionGeom
 
     const tpDist = takeProfitPrice.minus(referencePrice).abs();
     const slCapDistance = tpDist.dividedBy(params.min_rr);
-    const slFloorDistance = resolveSlFloorDistance(referencePrice, event.atr14, params);
+    const slFloorDistance = resolveSlFloorDistance(referencePrice, { atr14: event.atr14, params });
 
     return { slCapDistance, slFloorDistance };
-}
-
-// Noise floor for the mean-reversion stop: the LARGER of an ATR-relative bound (the binding
-// constraint for most signals) and a percent-of-entry sanity bound (for zero/near-zero ATR).
-// entry_pct_floor is a percent-NUMBER (0.3 = 0.3%), so divide by 100 before applying to entry.
-function resolveSlFloorDistance(referencePrice: MoneyValue, atr14: string, params: IStrategyParams): MoneyValue {
-    const atrFloor = new Money(atr14).times(params.atr_floor_multiplier);
-    const pctFloor = referencePrice.times(new Money(params.entry_pct_floor).dividedBy(PCT_DIVISOR));
-
-    return Money.max(atrFloor, pctFloor);
 }
 
 // Suppress a fade that leans against the prevailing trend: a short in an uptrend or a long

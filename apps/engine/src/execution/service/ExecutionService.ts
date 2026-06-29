@@ -96,6 +96,10 @@ interface IFillAcceptanceContext {
     event: IOrderIntentApprovedEvent;
     positionRow: PositionEntity;
     fillSummary: IFillSummary;
+    // M48 (ADR 0045 §D2.9) — the actual armed TP at fill time (rebased to the fill price for
+    // tpRebaseEligible fills; the frozen signal-anchored TP otherwise). The geometry R:R leg
+    // anchors to this value, not clampedExit.takeProfitPrice.
+    resolvedTakeProfitPrice: MoneyValue;
 }
 
 @Injectable()
@@ -1062,7 +1066,7 @@ export class ExecutionService {
             ? await this.createPositionFromFill(event, plan, fillSummary, nowMs, resolvedTakeProfitPrice)
             : await this.applyAddToExistingPosition(event, fillSummary);
 
-        if (isOpenIntent && (await this.rejectAndUnwindIfUnacceptable({ event, positionRow, fillSummary }))) {
+        if (isOpenIntent && (await this.rejectAndUnwindIfUnacceptable({ event, positionRow, fillSummary, resolvedTakeProfitPrice }))) {
             return;
         }
 
@@ -1175,12 +1179,17 @@ export class ExecutionService {
             side: event.intent.tradeSide,
             entrySnapshot: event.entrySnapshot,
             maxDriftPct: MAX_SIGNAL_DRIFT_PCT,
+            geometryParams: event.geometryParams, // M48 — stamped on OPEN approvals; drives the geometry-integrity leg
+            referencePrice: event.intent.referencePrice, // M48 — signal-calibrated anchor for the slFloor PCT leg
+            resolvedTakeProfitPrice: ctx.resolvedTakeProfitPrice, // M48 — actual armed TP (rebased for momentum) for the R:R leg
         });
 
         this.logger.log(
             `fill-acceptance drift positionId=${positionRow.id} symbol=${event.intent.symbol} ` +
                 `driftPct=${driftResult.driftPct?.toFixed(4) ?? 'n/a'} shouldReject=${driftResult.shouldReject} reason=${driftResult.reason ?? 'none'}`,
         );
+
+        this.logGeometryAnchorDrift(ctx);
 
         if (!driftResult.shouldReject) {
             return false;
@@ -1189,6 +1198,27 @@ export class ExecutionService {
         await this.unwindRejectedFill(ctx, driftResult.reason);
 
         return true;
+    }
+
+    // M48 D2.12 (ADR 0045) — GEOMETRY_ANCHOR_DRIFT observability. Logs how far the actual fill
+    // diverged from the reconstructed signal reference, in ATR units (regime-independent canary for
+    // how unreliable reconstructReferencePrice is in live) and absolute %. LOG ONLY — never gates.
+    private logGeometryAnchorDrift(ctx: IFillAcceptanceContext): void {
+        const { event, positionRow, fillSummary } = ctx;
+
+        if (event.entrySnapshot === undefined || event.geometryParams === undefined || event.entrySnapshot.atr_14 === undefined) {
+            return;
+        }
+
+        const fill = new Money(fillSummary.avgFillPrice);
+        const ref = new Money(event.intent.referencePrice);
+        const absDriftPct = fill.minus(ref).abs().dividedBy(ref).times(100);
+        const atrDrift = fill.minus(ref).abs().dividedBy(new Money(event.entrySnapshot.atr_14));
+
+        this.logger.log(
+            `GEOMETRY_ANCHOR_DRIFT positionId=${positionRow.id} symbol=${event.intent.symbol} flowType=${event.intent.flowType} ` +
+                `driftPct=${absDriftPct.toFixed(4)} atrUnits=${atrDrift.toFixed(4)}`,
+        );
     }
 
     // Unwind a rejected open fill via a synthetic FLATTEN (one CLEAN CLOSED row, FORCE_CLOSE).
