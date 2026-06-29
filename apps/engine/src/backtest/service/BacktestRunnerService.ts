@@ -80,12 +80,17 @@ interface ITradeMetadata {
     readonly btcDataMissing: boolean;
 }
 
+interface IOiEntry {
+    readonly tsMs: number;
+    readonly entity: OpenInterestEntity;
+}
+
 // Per-symbol pre-loaded data the replay loop walks bar-by-bar. Eagerly loaded once per
 // symbol so the inner loop is index-driven and deterministic.
 interface ISymbolReplayData {
     readonly warmupBars: ICandle[];
     readonly replayBars: ICandle[];
-    readonly oiByTsMs: Map<number, OpenInterestEntity>;
+    readonly oiEntries: readonly IOiEntry[];
     readonly bookByBarOpenMs: Map<number, BookSnapshotEntity>;
     readonly fundingEvents: readonly IFundingEvent[];
 }
@@ -422,7 +427,7 @@ export class BacktestRunnerService {
         return {
             warmupBars,
             replayBars,
-            oiByTsMs: buildOiIndex(oiRows),
+            oiEntries: buildOiIndex(oiRows),
             bookByBarOpenMs: buildBookIndex(bookRows),
             fundingEvents,
         };
@@ -593,9 +598,9 @@ export class BacktestRunnerService {
         data: ISymbolReplayData,
         tier: CoinTierEnum,
     ): IVolatilityDetectedEvent {
-        const oiNow = this.resolveOpenInterestAt(data.oiByTsMs, bar.openTimeMs);
-        const oi5mAgo = this.resolveOpenInterestAt(data.oiByTsMs, bar.openTimeMs - CANDLE_5M_INTERVAL_MS);
-        const oi15mAgo = this.resolveOpenInterestAt(data.oiByTsMs, bar.openTimeMs - 3 * CANDLE_5M_INTERVAL_MS);
+        const oiNow = this.resolveOpenInterestAt(data.oiEntries, bar.openTimeMs);
+        const oi5mAgo = this.resolveOpenInterestAt(data.oiEntries, bar.openTimeMs - CANDLE_5M_INTERVAL_MS);
+        const oi15mAgo = this.resolveOpenInterestAt(data.oiEntries, bar.openTimeMs - 3 * CANDLE_5M_INTERVAL_MS);
         const oiChange5mPct = computeOiChangePct(oiNow, oi5mAgo);
         const oiChange15mPct = computeOiChangePct(oiNow, oi15mAgo);
 
@@ -910,22 +915,32 @@ export class BacktestRunnerService {
         return dailyMap.get(ctx.symbol) ?? null;
     }
 
-    private resolveOpenInterestAt(oiByTsMs: Map<number, OpenInterestEntity>, barOpenMs: number): OpenInterestEntity | null {
-        const exact = oiByTsMs.get(barOpenMs);
+    private resolveOpenInterestAt(oiEntries: readonly IOiEntry[], targetMs: number): OpenInterestEntity | null {
+        // Binary search for the most recent OI sample whose raw collection timestamp is
+        // at-or-before targetMs. OI rows are NOT aligned to 5m bar boundaries (they arrive
+        // at arbitrary sub-minute offsets), so the previous Map<barBoundary, entity> approach
+        // always missed — every lookup returned null, collapsing oiChange5mPct to 0 and
+        // silencing forced_exhaustion in backtest replay.
+        let lo = 0;
+        let hi = oiEntries.length - 1;
+        let found: IOiEntry | null = null;
 
-        if (exact !== undefined) {
-            return exact;
-        }
+        while (lo <= hi) {
+            const mid = (lo + hi) >>> 1;
 
-        for (let ts = barOpenMs - CANDLE_5M_INTERVAL_MS; ts >= barOpenMs - OI_LOOKBACK_WINDOW_MS; ts -= CANDLE_5M_INTERVAL_MS) {
-            const found = oiByTsMs.get(ts);
-
-            if (found !== undefined) {
-                return found;
+            if (oiEntries[mid].tsMs <= targetMs) {
+                found = oiEntries[mid];
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
             }
         }
 
-        return null;
+        if (found === null || targetMs - found.tsMs > OI_LOOKBACK_WINDOW_MS) {
+            return null;
+        }
+
+        return found.entity;
     }
 
     private resolveBtcMovePct(btcBars: Map<number, ICandle>, barOpenMs: number): number {
@@ -1071,14 +1086,10 @@ function msToUtcDate(ms: number): string {
     return `${year}-${month}-${day}`;
 }
 
-function buildOiIndex(rows: OpenInterestEntity[]): Map<number, OpenInterestEntity> {
-    const result: Map<number, OpenInterestEntity> = new Map();
-
-    for (const row of rows) {
-        result.set(row.ts.getTime(), row);
-    }
-
-    return result;
+// Rows arrive ASC by ts from the repository; preserve that order so binary search in
+// resolveOpenInterestAt can assume the array is sorted ascending.
+function buildOiIndex(rows: OpenInterestEntity[]): readonly IOiEntry[] {
+    return rows.map((row) => ({ tsMs: row.ts.getTime(), entity: row }));
 }
 
 // Bucket book snapshots into the 5m bar boundary they fall within. If multiple snapshots

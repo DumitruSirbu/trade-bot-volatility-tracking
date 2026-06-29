@@ -14,3 +14,8 @@ export const TELEGRAM_API_HOST = 'https://api.telegram.org';
 export const HTTP_TIMEOUT_MS = 5_000;
 export const HTTP_OK_STATUS = 200;
 export const HTTP_TOO_MANY = 429;
+
+// REST route fragments for the admin alert-probe surface. Pinned here so the
+// controller + integration tests import the same literals.
+export const ALERT_BASE_PATH = 'v1/control';
+export const TEST_ALERT_PATH = 'test-alert';

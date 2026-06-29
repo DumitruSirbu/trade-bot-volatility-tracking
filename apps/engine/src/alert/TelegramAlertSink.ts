@@ -34,7 +34,7 @@ export class TelegramAlertSink implements IAlertSink {
     private nextSendNotBeforeMs = 0;
 
     constructor(
-        private readonly config: AppConfigService,
+        config: AppConfigService,
         @Inject(AlertRateLimiter) private readonly rateLimiter: AlertRateLimiter,
     ) {
         const token = config.telegramBotToken ?? null;
@@ -58,6 +58,7 @@ export class TelegramAlertSink implements IAlertSink {
         const admitted = this.rateLimiter.admit(payload);
 
         if (admitted === null) {
+            this.logger.debug(`alert.telegram.suppressed type=${payload.type}`);
             return;
         }
 
@@ -97,6 +98,7 @@ export class TelegramAlertSink implements IAlertSink {
             });
 
             if (response.status === HTTP_OK_STATUS) {
+                this.logger.debug(`alert.telegram.sent`);
                 return;
             }
 

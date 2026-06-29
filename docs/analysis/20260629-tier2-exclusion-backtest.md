@@ -95,12 +95,34 @@ The hypothesis "excluding tier2 improves the `trend_initiation` book" is confirm
 
 The result is bounded and we state it plainly: tier1-only is **still net −$235** and not deployable as a standalone edge. Breakeven needs a 52.8% WR (delivered 28.8%), and even perfect (zero) slippage leaves it at −$64 because the price-only-plus-fees book is negative. Tier2 exclusion removes the worst cohort; it does not manufacture an edge in what remains. Promote it as a **defensive gate** (fewer, less-toxic trades, lower drawdown), not as the profitability lever.
 
-## 5. What this rules out
+## 5. Post-fix re-run (2026-06-29, OI bug fixed)
+
+After the `BacktestRunnerService` OI-index bug was fixed (see `tech-debt.md M25`), EXP-006 was re-run from scratch with the corrected harness (`backtest-v16-oi-fixed.json`, same window 2026-05-30 → 2026-06-29). Key differences vs the original analytical-filter run:
+
+| Metric | Original (broken harness) | Fixed harness | Change |
+|---|---|---|---|
+| Total trades | 350 | 208 | −40% (previously misclassified signals now correctly skipped) |
+| tier1 trades | 240 | 139 | −42% |
+| tier2 trades | 110 | 69 | −37% |
+| All WR | 23.4% | 24.5% | +1.1 pp |
+| tier1 WR | **28.8%** | **28.1%** | −0.7 pp (essentially unchanged) |
+| tier2 WR | 11.8% | 17.4% | +5.6 pp (fewer bad signals classified there) |
+| All net PnL | −$535.69 | −$293.62 | +$242 |
+| tier1 net PnL | **−$235.20** | **−$152.42** | +$82 |
+| tier2 net PnL | −$300.49 (56% of loss) | −$141.20 (48% of loss) | +$159 |
+| tier1 sub-window WR | 30.0% / 21.3% / 35.0% | **30.4% / 26.1% / 27.7%** | More stable (narrower spread) |
+
+**Verdict is unchanged: SUPPORTED.** Tier1 WR is statistically stable (28.8% → 28.1%; within estimation noise at n=139–240). Sub-window WR is *more* stable on the fixed harness (26–30% range vs 21–35% range before). Tier2 is still materially worse than tier1 on WR (+10.7 pp gap) and net/trade (−$1.09 vs −$2.05). Tier2 is 33% of trades and 48% of loss.
+
+**New finding — `forced_exhaustion` now appears in backtest:** 47 trades (23% of book); tier1 sub-cohort WR 30.8%. This is higher than the live `forced_exhaustion` WR of 10.3–11.4% (EXP-010). The discrepancy is likely a market-regime difference (the backtest window 2026-05-30 → 2026-06-29 saw different OI-collapse dynamics than the historical live window) and/or the limited n=26 for tier1 `forced_exhaustion`. Do not read the 30.8% figure as a validated edge — it requires independent soak-window confirmation before acting on it.
+
+**Trade count drop explained:** 350 → 208 (−40%) because the OI fix now correctly routes ~142 signals per 30-day window to `catalyst_risk` / `market_beta` / `low_quality_noise`, which V3HybridRouter skips. The fixed 6.9 trades/day aligns with the observed live open rate (~8/day). The broken harness was inflating trade count by ~70% by routing skippable signals as `trend_initiation`.
+
+## 6. What this rules out
 
 - **Do not treat tier2 as salvageable for `trend_initiation` momentum.** It is the dominant loss center on every axis and worst in all three sub-windows; no widening, sizing, or geometry change in prior experiments rescued it. Drop it, do not tune it.
-- **Do not expect tier2 exclusion to make the strategy profitable.** Tier1-only is still deeply negative with a 24-point breakeven-WR gap. Any plan that says "cut tier2 and we're green" is wrong by $235.
-- **Do not pursue slippage reduction as a tier1 silver bullet in isolation.** Even 100% slippage removal leaves tier1 at −$64; the price+fee book is negative. Slippage reduction must be paired with regime selection (cut `transitioning`) and/or selectivity to clear zero.
-- **Do not re-run this as a fresh backtest expecting different numbers.** The analytical filter is exact for a single-slot independent-trade book; a re-run omits the identical tier2 rows.
+- **Do not expect tier2 exclusion to make the strategy profitable.** Tier1-only is still deeply negative with a 24-point breakeven-WR gap. Any plan that says "cut tier2 and we're green" is wrong by $152 (fixed harness) / $235 (original).
+- **Do not pursue slippage reduction as a tier1 silver bullet in isolation.** Even 100% slippage removal leaves tier1 at ~−$54 (gross-ex-slippage −$29/139 trades); the price+fee book is negative. Slippage reduction must be paired with regime selection (cut `transitioning`) and/or selectivity to clear zero.
 
 ## 6. Implementation note
 

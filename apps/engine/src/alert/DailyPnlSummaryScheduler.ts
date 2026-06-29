@@ -47,14 +47,17 @@ export class DailyPnlSummaryScheduler {
         await this.runOnce(this.clock.now());
     }
 
-    // Public entrypoint used by tests + the optional `/v1/control/daily-summary` admin
-    // probe (M11). Pure on the injected clock.
-    async runOnce(now: Date): Promise<void> {
+    // Public entrypoint used by tests + the `POST /v1/control/test-alert` admin
+    // probe (M11). Pure on the injected clock. Returns the UTC date string the
+    // summary covered so the probe can echo it back to the operator.
+    async runOnce(now: Date): Promise<string> {
         const yesterdayDateString = priorUtcDayString(now);
+
+        this.logger.log(`dailyPnl.fired date=${yesterdayDateString}`);
 
         if (this.lastEmittedForDateUtc === yesterdayDateString) {
             this.logger.debug(`dailyPnl.skip date=${yesterdayDateString} reason=alreadyEmitted`);
-            return;
+            return yesterdayDateString;
         }
 
         const closed = await this.positions.findClosedOnUtcDay(yesterdayDateString);
@@ -80,9 +83,12 @@ export class DailyPnlSummaryScheduler {
         try {
             await this.alerts.publish(payload);
             this.lastEmittedForDateUtc = yesterdayDateString;
+            this.logger.debug(`dailyPnl.published date=${yesterdayDateString}`);
         } catch (cause) {
             this.logger.error(`dailyPnl.publishFailed date=${yesterdayDateString} cause=${describe(cause)}`);
         }
+
+        return yesterdayDateString;
     }
 }
 

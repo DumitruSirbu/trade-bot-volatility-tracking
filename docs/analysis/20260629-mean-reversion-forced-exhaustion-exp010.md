@@ -198,19 +198,22 @@ balance toward fade would lose more.
 
 ## 7. Recommended next action
 
-1. **File a backtest data-integrity ticket (high priority).** The backtest harness emits
-   `trend_initiation` for 100% of triggers while live routes four flow types. Every backtest
-   WR in EXP-001–009 is therefore computed on a flow-mix that does **not** match live (live
-   includes ~14 `forced_exhaustion` + heavy `catalyst_risk` skips/day). Until the harness'
-   `classifyFlowType` receives the OI/funding inputs it needs, no backtest can validate or
-   refute any flow-type hypothesis, and absolute backtest WR is biased by the missing mix.
-   This is the single most actionable output of EXP-010.
+1. **~~File a backtest data-integrity ticket~~ FIXED 2026-06-29.** Root cause identified and
+   patched in `BacktestRunnerService.ts`. `buildOiIndex` was keying OI rows by raw millisecond
+   timestamps (e.g., `19:15:31.435 → ms`), but `resolveOpenInterestAt` searched by exact 5m bar
+   boundaries (`19:15:00`). The keys never aligned → all OI lookups returned `null` →
+   `oiChange5mPct` was always 0 → `classifyFlowType` never satisfied the `≤ −0.5%` threshold
+   → 0 `forced_exhaustion` in 350 replay trades. Fixed by replacing the Map with a sorted
+   `IOiEntry[]` and binary-searching for "most recent sample at-or-before T" with a 60-min
+   staleness guard. See `tech-debt.md M25`. **EXP-001–009 backtests were run on the broken
+   harness; re-running them post-fix may produce a different flow-type mix and adjusted absolute
+   WRs. Relative rankings should be similar.**
 2. **Close the "direction" lever.** With both follow and fade sub-breakeven, stop testing
    direction permutations. The remaining open levers from EXP-009 are: (a) a longer
    same-version forward soak to grow n on the price-positive `tier1 ∩ trending` cohort, and
    (b) a step back to whether the VWAP-deviation *trigger itself* has any edge worth trading
    — the EXP-010 result (weak in both directions) is mild evidence that it may not, in the
    current regime.
-3. **No code change.** `forced_exhaustion` routing is working as designed; the design is
-   simply not profitable. Leave it wired (it is a cheap empirical probe) but do not lean into
-   it.
+3. **No code change to routing.** `forced_exhaustion` routing is working as designed; the
+   design is simply not profitable. Leave it wired (it is a cheap empirical probe) but do not
+   lean into it.

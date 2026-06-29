@@ -140,6 +140,8 @@ export class RiskListeners {
 
     @OnEvent(POSITION_OPENED_EVENT)
     async onPositionOpened(event: IPositionOpenedEvent): Promise<void> {
+        this.logger.debug(`alert.positionOpened positionId=${event.positionId} symbol=${event.symbol}`);
+
         const payload: IAlertPayload = {
             type: AlertTypeEnum.POSITION_OPENED,
             severity: AlertSeverityEnum.INFO,
@@ -162,6 +164,8 @@ export class RiskListeners {
 
     @OnEvent(POSITION_CLOSED_EVENT)
     async onPositionClosed(event: IPositionClosedEvent): Promise<void> {
+        this.logger.debug(`alert.positionClosed positionId=${event.positionId} symbol=${event.symbol} exitReason=${event.exitReason ?? 'unknown'}`);
+
         const payload: IAlertPayload = {
             type: AlertTypeEnum.POSITION_CLOSED,
             severity: AlertSeverityEnum.INFO,
