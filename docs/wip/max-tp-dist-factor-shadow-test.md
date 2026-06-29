@@ -278,7 +278,7 @@ v16 trend_initiation so far (9 closed, 4 days — too thin to conclude):
 
 ## Status
 
-**BACKTEST VERDICT COMPLETE (REJECTED)** — See `docs/analysis/max-tp-dist-factor-shadow-20260629.md` (EXP-004) for the 30-day backtest result. **Summary:** v19 (factor=7.0) adds 72 trades at identical 23.4% win rate; net PnL worsens −$535→−$671 (−$136). Extra trades are dominated by tier2 (34 trades at 11% WR); time-stop dominance persists 82% (vs 79% in v16). Do not promote to live. The real lever is signal quality, not cap width (see EXP-003 directional work on flow_type/idiosyncrasy/entry-timing).
+**BACKTEST VERDICT COMPLETE (REJECTED)** — See `docs/analysis/20260629-max-tp-dist-factor-shadow.md` (EXP-004) for the 30-day backtest result. **Summary:** v19 (factor=7.0) adds 72 trades at identical 23.4% win rate; net PnL worsens −$535→−$671 (−$136). Extra trades are dominated by tier2 (34 trades at 11% WR); time-stop dominance persists 82% (vs 79% in v16). Do not promote to live. The real lever is signal quality, not cap width (see EXP-003 directional work on flow_type/idiosyncrasy/entry-timing).
 
 **SHADOW CONTINUES** — forward data accumulation for monitoring; Stage-1 pre-screen unlikely to pass given backtest results.
 
