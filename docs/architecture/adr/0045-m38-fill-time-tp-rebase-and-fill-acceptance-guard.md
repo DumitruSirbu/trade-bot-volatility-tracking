@@ -268,8 +268,160 @@ reference. If the cap binds and `tpDist / slDist < min_rr`, or the capped TP pri
 `momentumCore` **skips the signal** (ADR 0003 M47 amendment A2) — it does not arm a sub-target or
 degenerate TP.
 
+## M48 Amendment — fill-anchored geometry-integrity leg in `evaluateFillDrift` (2026-06-26)
+
+Status: Accepted (re-blessed before the M48 implementation wave).
+Milestone: M48 — Fill-anchor geometry fix. See `docs/plans/m48-geometry-fill-anchor-fix.md`.
+
+This amends **D2** (it adds a leg to `evaluateFillDrift`) and adds **Amendment 1A** to the
+engine-internal `IOrderIntentApprovedEvent`. It does **not** amend D1 (no rebase is re-introduced),
+ADR 0003 (no strategy core changes), or ADR 0004 (no new `RiskGateService` check).
+
+### Why M48
+
+M47 froze SL/TP at signal time (D1.A / Option B) and added a *signal-anchored* R:R gate
+(`isRewardRiskTooLow`). But every M47 geometry check measures distance against the **reconstructed**
+signal reference (`reconstructReferencePrice`), never against the **actual fill price**. When the
+live fill diverges from that reconstruction (1.53% on live position 212), the realized SL distance
+collapses to a fraction of what the gate approved (34.5× smaller on 212 → 85:1 R:R at fill) and
+inverted geometry ships. The existing `evaluateFillDrift` already runs at fill time and already
+checks wrong-side-of-SL — but it has **no R:R / noise-floor leg**, so a fill landing the right side
+of the SL but only a hair away from it passes today. M48 adds that missing fill-anchored leg.
+
+### Amendment 1A — `IOrderIntentApprovedEvent` gains `geometryParams`
+
+`IOrderIntentApprovedEvent` (engine-internal) gains:
+
+```
+geometryParams: Pick<IStrategyParams, 'min_rr' | 'atr_floor_multiplier' | 'entry_pct_floor'>
+```
+
+stamped at gate-approval time in `StrategyService.emitApproval` from `activeParams`. The fill seam
+reads the three M47 versioned params off the event — **zero DB round-trip on the fill hot path**. No
+re-fetch and no re-resolve from the registry at fill time. `IOrderIntentApprovedEvent` is
+engine-internal so this stays inside the engine boundary (no `bot-shared-maintainer` wave);
+`IStrategyParams` is the existing shared type, only `Pick`ed here. This matches the D1 precedent of
+carrying signal-time values forward on the approved event rather than re-deriving them at the seam.
+
+### D2.9 — new fill-anchored geometry-integrity leg in `evaluateFillDrift`
+
+`evaluateFillDrift` gains one new leg, evaluated **at the fill seam against the actual fill price**
+(`avgFillPrice`), running **after** the existing wrong-side-of-SL leg (D2.3 operative) and **before**
+the existing magnitude-drift leg (D2.3 far-tail). The leg:
+
+1. **Step 0 — fail-closed input guard.** The leg is **unconditional** — it must NOT inherit the
+   magnitude leg's opt-in `if (entrySnapshot && maxDriftPct)` guard. If any of `geometryParams`,
+   `entrySnapshot`, or `atr_14` is absent on an OPEN approval, it **rejects/escalates (fail-closed)**,
+   never silently skips. A missing input is a wiring bug, not a license to pass a fill unchecked.
+2. **Step 1 — side-correct ordering first.** SHORT requires `stopLossPrice > fill > takeProfitPrice`;
+   LONG requires `takeProfitPrice > fill > stopLossPrice`. Absolute-value distances would mask a
+   wrong-side fill, so ordering is checked before any distance is taken. (The at/over-SL case still
+   routes to the existing `wrong_side_of_sl` reject, which fires first; this leg's ordering check
+   targets the **TP-end** ordering break.)
+3. **Step 2 — signed distances** (positive by Step 1): `slDist_fill`, `tpDist_fill`, both anchored to
+   `fill`.
+4. **Step 3 — collapsed-stop guard:** `slDist_fill <= 0` → reject (`<=`, not `==`).
+5. **Step 4 — noise floor:** `slDist_fill < slFloor` → reject. The ratio alone misses the 212
+   collapse, so the floor leg is required.
+6. **Step 5 — R:R ratio:** `tpDist_fill / slDist_fill < min_rr` → reject (defense-in-depth backstop).
+
+**Anchor split (the load-bearing decision).** All Step-2 *distances* are measured from the fill
+price. The **`slFloor` PCT threshold** anchors to **`intent.referencePrice`** (the signal-calibrated
+anchor), NOT the fill:
+
+```
+slFloor = max(atr_floor_multiplier × atr14, (entry_pct_floor / 100) × intent.referencePrice)
+```
+
+Anchoring the floor threshold to the fill would let it shift with slippage and weaken the 212 guard.
+This is the **same anchor convention already established** in `meanReversionCore.ts` (its private
+`resolveSlFloorDistance` already anchors its PCT leg to `referencePrice`). `entry_pct_floor` is a
+percent-number — divide by 100 before applying to a price (`strategyParamsSchema.ts`).
+
+**Two-tier `min_rr` is deliberate.** The ratio leg uses `min_rr` (1.5, the core target), not the
+M47 `MIN_RR_GATE_FLOOR` (1.0) loose signal-time floor. A fill landing in `[1.0, 1.5)` at fill is
+rejected here, stricter than the signal gate — intentional, because the fill is the ground truth.
+
+**Comparators.** Strict `<` (at-floor passes) for both `slDist_fill < slFloor` and
+`tpDist_fill / slDist_fill < min_rr`, matching `meanReversionCore` (`lessThan`) and
+`isRewardRiskTooLow`.
+
+**Extended `IFillDriftContext`.** The leg's inputs (`geometryParams`, `referencePrice`, `atr14`) are
+threaded through the engine-internal `IFillDriftContext`. No `packages/shared` change.
+
+### D2.10 — `DEGENERATE_GEOMETRY_AT_FILL` joins the fill-acceptance vocabulary
+
+On any Step-1..5 failure the leg rejects via the existing `FILL_ACCEPTANCE_REJECTED` execution-metric
+path with a new **engine-local named const** sub-reason `DEGENERATE_GEOMETRY_AT_FILL`, living in
+`apps/engine/src/execution/const/executionConsts.ts` alongside `wrong_side_of_sl` / `drift_over_cap`
+(the sub-reason set named in §D2.1 and the shared-contract boundary table above). It is **never** a
+shared `SkipReason` and **never** `DEGENERATE_VWAP_GEOMETRY` (a strategy-layer `SkipReason`, pre-trade
+only). The reject routes through the **existing** `unwindRejectedFill → emitSyntheticClose` path
+(§D2.5) — one clean CLOSED `FORCE_CLOSE` row, no phantom, no new close path. The unwind handles the
+new sub-reason identically to the existing two.
+
+### D2.11 — `resolveSlFloorDistance` moves to `common/utils/` (Option A)
+
+The `slFloor` formula already exists as a private `resolveSlFloorDistance(referencePrice, atr14,
+params)` in `meanReversionCore.ts`. The fill leg must reuse the **same** function, not a copy.
+**Decision: Option A — move it to `apps/engine/src/common/utils/geometryUtils.ts`, barrelled from
+`common/utils/index.ts`, imported by BOTH `meanReversionCore` and `exitGeometryHelper`.** Option B
+(duplicate-with-parity-test) is rejected — a single source removes drift risk entirely.
+
+**Why Option A is mandatory, not merely preferred.** Strategy modules do not import from the
+execution module today (verified — no `strategy → execution` edge exists). Placing the util in
+`exitGeometryHelper.ts` and importing it into `meanReversionCore` would create a **new
+`strategy → execution` dependency edge / circular-dependency risk**. `common/utils/` is importable by
+both layers with no new cross-module edge. The move is pure, decimal-only, and **behaviour-preserving
+for mean-reversion** (same function, new home) — `meanReversionCore`'s existing call must stay
+byte-identical, guarded by a `resolveSlFloorDistance` parity assertion.
+
+### D2.12 — `GEOMETRY_ANCHOR_DRIFT` observability (log only, never gates)
+
+At the call site (`ExecutionService.rejectAndUnwindIfUnacceptable`), log the reconstruction-vs-fill
+drift in **ATR units** (`|fill − reconstructedRef| / atr14`) and absolute %, labelled
+`GEOMETRY_ANCHOR_DRIFT` (engine-local label, never a shared column or `SkipReason`). The ATR-unit
+form is regime-independent — it is the canary for how unreliable `reconstructReferencePrice` is in
+live, feeding a future decision on replacing it wholesale (out of scope). It is a **log only; it does
+not gate.** A momentum-broken-out `DEGENERATE_GEOMETRY_AT_FILL` reject-rate counter lives at the same
+seam, broken out by `flow_type` so a mean-reversion over-reject is distinguishable from a momentum one.
+
+### Invariants preserved (confirmed for M48)
+
+- **Wrong-side check stays.** The D2.3 operative wrong-side-of-SL leg is unchanged and still fires
+  first for the at/over-SL case.
+- **Option B / no-rebase stays.** SL/TP **price levels** are never mutated (D1.A, §D2 Invariant 1).
+  The leg rejects-or-passes; the fill is the measurement *anchor* for the new distances (a local
+  variable), not a new SL/TP source. No fill-time rebase is re-introduced.
+- **`evaluateFillDrift` remains live-only** (§D2.8). The new leg is not invoked in
+  `BacktestOrchestrator` (it runs only the D1 rebase) and is inert in the shadow path (no exchange
+  fill). Backtest fill ≈ reconstructed reference, so even a future change that invoked the leg there
+  would not trip it — asserted by a parity test (`|backtest_fill − reconstructedRef| < slFloor`).
+- **Backtest/shadow paths inert; the unwind path unchanged** — the reject reuses the existing
+  synthetic-FLATTEN unwind verbatim.
+- **No new gate check, no strategy-core change, no `entryHelpers.ts` change** — the fill-time backstop
+  is this single `evaluateFillDrift` leg, not a duplicate `RiskGateService` method.
+- **Money is `decimal`, never float** — the leg matches the existing `Money`/decimal.js style.
+- **Mean-reversion fills also pass through the leg** — intentional defense-in-depth behind
+  mean-reversion's own signal-time guard; over-rejects are surfaced by the `flow_type`-broken-out
+  counter.
+
+### Out of scope (M48)
+
+Full replacement of `reconstructReferencePrice` (M48 only adds the drift canary), any
+`entryHelpers.ts` / pure-core change, any new `RiskGateService` check, the shadow
+`simulated_fill.entryPrice` "fix" (filled rows already store the real price; zero rows are correct
+`missed=true` semantics), parameter re-tuning, and re-enabling any fill-time rebase (forbidden).
+
 ## Consequences
 
+- M48: `evaluateFillDrift` gains one fill-anchored geometry-integrity leg (side-ordering → noise-floor
+  → R:R ratio, all anchored to `avgFillPrice`, with the `slFloor` PCT threshold anchored to
+  `intent.referencePrice`); the fill-acceptance vocabulary gains `DEGENERATE_GEOMETRY_AT_FILL`; the
+  shared `slFloor` formula `resolveSlFloorDistance` moves to `common/utils/geometryUtils.ts` (single
+  source for both layers); `IOrderIntentApprovedEvent` carries `geometryParams` and `IFillDriftContext`
+  carries `geometryParams`/`referencePrice`/`atr14` — all engine-internal. Option B no-rebase is
+  preserved; the leg is live-only and inert in backtest/shadow.
 - The execution layer gains a small fill-acceptance stage (rebase + drift gate + synthetic-close
   unwind) between `createPositionFromFill` and `arm`. The synchronous-arm guarantee is preserved.
 - Strategies stay pure; the live-vs-backtest contract is preserved via two pure helpers (with a
@@ -303,3 +455,33 @@ degenerate TP.
 9. **Tune `MOMENTUM_TAKE_PROFIT_ATR_MULTIPLIER` / `MAX_SIGNAL_DRIFT_PCT` from this window.** Rejected
    — the instrument is geometry-contaminated and per-flow n is below the noise floor. No
    calibration on a contaminated instrument.
+
+### M48 alternatives considered
+
+10. **Re-anchor the new fill-time geometry leg (and `reconstructReferencePrice`) instead of adding a
+    reject leg.** Rejected — Option B / no-rebase is the M47 invariant; the gate approves the
+    signal-time geometry, so the held geometry must match it. The fill is the measurement anchor for
+    the new leg's distances, never a new SL/TP source.
+11. **Anchor the `slFloor` PCT threshold to the fill price.** Rejected — the floor would then shift
+    with slippage and weaken the 212 guard. The floor threshold anchors to `intent.referencePrice`
+    (the established mean-reversion convention); only the distances are fill-anchored.
+12. **Add a new `RiskGateService` check / mirror the `meanReversionCore` signal-time degeneracy
+    check.** Rejected — the gate runs pre-fill and cannot see the fill; the signal-time core check
+    has no fill input and cannot be mirrored at a fill seam. The fill-time backstop is the single
+    `evaluateFillDrift` leg. Three touch-points doing the same fill-time math was a DRY violation.
+13. **Duplicate `resolveSlFloorDistance` into the execution helper (Option B).** Rejected — it would
+    drift from the `meanReversionCore` copy and, worse, importing the execution-located util back into
+    `meanReversionCore` would create a new `strategy → execution` dependency edge. Option A (move to
+    `common/utils/`) gives a single source importable by both layers with no new cross-module edge.
+14. **Make the new leg opt-in (inherit the magnitude leg's `if (entrySnapshot && maxDriftPct)`
+    guard).** Rejected — a missing input (`geometryParams`/`entrySnapshot`/`atr_14`) is a wiring bug,
+    not a license to pass a fill unchecked. The leg is unconditional and fail-closed.
+15. **Re-fetch the three M47 versioned params from the DB/registry at fill time instead of stamping
+    `geometryParams` on the event.** Rejected — a DB round-trip on the fill hot path. Stamping at
+    gate-approval time (Amendment 1A) carries them forward with zero round-trip, matching the D1
+    precedent.
+16. **Emit `DEGENERATE_VWAP_GEOMETRY` (the strategy `SkipReason`) at this seam.** Rejected — that is a
+    pre-trade strategy `SkipReason`; the fill seam emits `FILL_ACCEPTANCE_REJECTED` with the
+    engine-local sub-reason `DEGENERATE_GEOMETRY_AT_FILL` (§D2.1 vocabulary).
+17. **Invoke the new leg in backtest/shadow.** Rejected — `evaluateFillDrift` is live-only (§D2.8);
+    backtest fills are deterministic (no slippage), so the leg would invent rejects that cannot occur.

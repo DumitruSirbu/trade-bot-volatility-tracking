@@ -7,6 +7,7 @@ import type { BacktestReportParsed, PerformanceByVersionViewParsed } from '../..
 const ACTIVE_PERF: PerformanceByVersionViewParsed = {
     strategyVersionId: '7',
     label: 'volatility-vwap',
+    isLive: true,
     status: 'ACTIVE',
     windowDays: 90,
     tradeCount: 42,

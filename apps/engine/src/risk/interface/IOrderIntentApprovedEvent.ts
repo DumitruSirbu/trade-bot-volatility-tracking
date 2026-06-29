@@ -1,5 +1,4 @@
-import { PositionSlotEnum } from '@bot/shared';
-import { IMarketSnapshot } from '@bot/shared';
+import { IMarketSnapshot, IStrategyParams, PositionSlotEnum } from '@bot/shared';
 
 import { IProposedExit } from '../../strategy/interface';
 import { IIntentSizing } from './IIntentSizing';
@@ -29,4 +28,10 @@ export interface IOrderIntentApprovedEvent {
      */
     readonly entrySnapshot?: IMarketSnapshot;
     readonly strategyVersionId: number;
+    /**
+     * M48 (ADR 0045 Amendment 1A) — M47 versioned geometry params stamped at gate-approval time.
+     * Carried to the fill seam so the fill-anchored geometry leg has zero hot-path DB round-trip.
+     * Present on opening approvals; absent on close/reduce/flatten events.
+     */
+    readonly geometryParams?: Pick<IStrategyParams, 'min_rr' | 'atr_floor_multiplier' | 'entry_pct_floor'>;
 }

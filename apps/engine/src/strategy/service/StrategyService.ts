@@ -400,6 +400,11 @@ export class StrategyService implements OnModuleInit {
             reservationId: decision.reservationId,
             entrySnapshot,
             strategyVersionId: this.activeStrategyVersionId,
+            geometryParams: {
+                min_rr: this.activeParams.min_rr,
+                atr_floor_multiplier: this.activeParams.atr_floor_multiplier,
+                entry_pct_floor: this.activeParams.entry_pct_floor,
+            },
         };
 
         this.events.emit(ORDER_INTENT_APPROVED_EVENT, payload);

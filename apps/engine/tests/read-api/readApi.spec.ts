@@ -243,6 +243,7 @@ function buildHarness(): {
         versions as unknown as StrategyVersionRepository,
         null as unknown as ShadowDecisionRepository,
         cursors,
+        { activeStrategyVersionId: 1 } as never,
     );
 
     return { positions, decisions, snapshots, riskStates, versions, cursors, positionsController, metricsController };
@@ -379,6 +380,7 @@ describe('ReadApi DTO key snapshots (ADR 0022 §2.3 — anti-leakage)', () => {
 
         expect(Object.keys(view).sort()).toEqual([...PERFORMANCE_BY_VERSION_VIEW_KEYS].sort());
         expect(view.label).toBe('v0-baseline@v0');
+        expect(view.isLive).toBe(true);
         expect(view.winRate).toBe('0.600000');
         // ADR 0022 §2.3.1 — live engine has no per-version equity series.
         expect(view.maxDrawdownUsd).toBeNull();

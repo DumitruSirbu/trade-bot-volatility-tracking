@@ -55,6 +55,7 @@ const FIXTURE_DECISIONS_WITH_INJECTION: GetDecisionsResultParsed = {
 const FIXTURE_PERFORMANCE: PerformanceByVersionViewParsed = {
     strategyVersionId: '7',
     label: 'volatility-vwap',
+    isLive: true,
     status: 'ACTIVE',
     windowDays: 90,
     tradeCount: 42,

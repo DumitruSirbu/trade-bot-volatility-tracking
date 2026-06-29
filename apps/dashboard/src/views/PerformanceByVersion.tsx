@@ -136,7 +136,10 @@ const SummaryPanel = ({ windowDays }: { windowDays: number }): React.ReactElemen
                         !isError &&
                         sorted.map((row) => (
                             <TableRow key={row.strategyVersionId}>
-                                <TableCell className="font-medium">{row.label}</TableCell>
+                                <TableCell className="font-medium">
+                                    {row.label}
+                                    {row.isLive ? ' (live)' : ''}
+                                </TableCell>
                                 <TableCell className="text-right tabular-nums">{row.tradeCount}</TableCell>
                                 <TableCell className="text-right tabular-nums">{formatPct(row.winRate)}</TableCell>
                                 <TableCell className="text-right tabular-nums">{formatMoneyString(row.netPnlUsd)}</TableCell>
@@ -152,19 +155,85 @@ const SummaryPanel = ({ windowDays }: { windowDays: number }): React.ReactElemen
 
 const DAILY_COLUMNS_COUNT = 5;
 
+const latestDateByLabel = (rows: ReadonlyArray<IDailyPerformanceRow>): Map<string, string> => {
+    const latest = new Map<string, string>();
+
+    for (const row of rows) {
+        const current = latest.get(row.label);
+
+        if (current === undefined || row.date > current) {
+            latest.set(row.label, row.date);
+        }
+    }
+
+    return latest;
+};
+
+const resolveDefaultDailyVersionLabel = (rows: ReadonlyArray<IDailyPerformanceRow>): string | null => {
+    if (rows.length === 0) {
+        return null;
+    }
+
+    const liveLabel = rows.find((row) => row.isLive)?.label;
+
+    if (liveLabel !== undefined) {
+        return liveLabel;
+    }
+
+    const latestByLabel = latestDateByLabel(rows);
+    let bestLabel: string | null = null;
+    let bestDate = '';
+
+    for (const [label, date] of latestByLabel) {
+        if (bestLabel === null || date > bestDate) {
+            bestLabel = label;
+            bestDate = date;
+        }
+    }
+
+    return bestLabel;
+};
+
+const sortDailyVersionLabels = (rows: ReadonlyArray<IDailyPerformanceRow>): string[] => {
+    const latestByLabel = latestDateByLabel(rows);
+    const labels = [...new Set(rows.map((row) => row.label))];
+
+    labels.sort((left, right) => {
+        const leftLive = rows.some((row) => row.label === left && row.isLive);
+        const rightLive = rows.some((row) => row.label === right && row.isLive);
+
+        if (leftLive !== rightLive) {
+            return leftLive ? -1 : 1;
+        }
+
+        const leftDate = latestByLabel.get(left) ?? '';
+        const rightDate = latestByLabel.get(right) ?? '';
+
+        return rightDate.localeCompare(leftDate);
+    });
+
+    return labels;
+};
+
 const DailyBreakdownPanel = ({ windowDays }: { windowDays: number }): React.ReactElement => {
     const { data, isLoading, isError, error } = usePerformanceDailySeries(windowDays);
     const [selectedVersion, setSelectedVersion] = React.useState<string | null>(null);
 
-    const versionLabels = React.useMemo<string[]>(() => {
-        if (data === undefined) {
-            return [];
+    const versionLabels = React.useMemo<string[]>(() => (data === undefined ? [] : sortDailyVersionLabels(data)), [data]);
+
+    const defaultVersion = React.useMemo<string | null>(() => (data === undefined ? null : resolveDefaultDailyVersionLabel(data)), [data]);
+
+    React.useEffect(() => {
+        if (defaultVersion === null) {
+            return;
         }
 
-        return [...new Set(data.map((row) => row.label))];
-    }, [data]);
+        if (selectedVersion === null || !versionLabels.includes(selectedVersion)) {
+            setSelectedVersion(defaultVersion);
+        }
+    }, [defaultVersion, selectedVersion, versionLabels]);
 
-    const activeVersion = selectedVersion ?? versionLabels[0] ?? null;
+    const activeVersion = selectedVersion ?? defaultVersion;
 
     const rows = React.useMemo<IDailyPerformanceRow[]>(() => {
         if (data === undefined || activeVersion === null) {
@@ -187,6 +256,7 @@ const DailyBreakdownPanel = ({ windowDays }: { windowDays: number }): React.Reac
                         {versionLabels.map((label) => (
                             <option key={label} value={label}>
                                 {label}
+                                {data?.some((row) => row.label === label && row.isLive) ? ' (live)' : ''}
                             </option>
                         ))}
                     </select>

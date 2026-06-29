@@ -623,6 +623,98 @@ describe('ExecutionService M38 — FA8: atrDistance=0 → rebased TP equals fill
     });
 });
 
+// ─── FA-M48: 212-style fill → geometry leg rejects → emitSyntheticClose, never armed ─
+
+describe('ExecutionService M38 — FA-M48: 212-style fill at rejectAndUnwindIfUnacceptable seam → routes to emitSyntheticClose, never arms', () => {
+    // Build a 212-style SHORT event: referencePrice=62.294, fill=63.250, SL=63.278, TP=62.294.
+    // slDist_fill = 63.278 - 63.250 = 0.028; slFloor = max(1.5*0.8, 0.003*62.294) = max(1.2, 0.187) = 1.2
+    // 0.028 << 1.2 → DEGENERATE_GEOMETRY_AT_FILL → unwind via emitSyntheticClose.
+    const COLLAPSE_SL = '63.278';
+    const COLLAPSE_TP = '62.294';
+    const COLLAPSE_FILL = '63.250';
+    const COLLAPSE_REF = '62.294';
+
+    function buildM48ShortClampedExit() {
+        return {
+            takeProfitPrice: new Money(COLLAPSE_TP),
+            stopLossPrice: new Money(COLLAPSE_SL),
+            stopType: StopTypeEnum.STRUCTURAL,
+            timeStopAtMs: 1_700_000_000_000 + 3_600_000,
+            tpRebaseEligible: false,
+            atrDistance: null,
+        };
+    }
+
+    function buildM48Event(): IOrderIntentApprovedEvent {
+        const base = buildApprovedEvent({
+            tradeSide: PositionSideEnum.SHORT,
+            clampedExit: buildM48ShortClampedExit(),
+            entrySnapshot: buildSnapshot({ atr_14: '0.8' }),
+        });
+
+        // Stamp M48-specific fields: geometryParams + the signal-calibrated referencePrice.
+        // Cast through `any` to satisfy the readonly interface on a spread.
+        return {
+            ...base,
+            intent: {
+                ...base.intent,
+                tradeSide: PositionSideEnum.SHORT,
+                referencePrice: new Money(COLLAPSE_REF),
+            },
+            geometryParams: {
+                min_rr: 1.5,
+                atr_floor_multiplier: 1.5,
+                entry_pct_floor: 0.3,
+            },
+        } as IOrderIntentApprovedEvent;
+    }
+
+    it('emitSyntheticClose is called with FORCE_CLOSE when 212-style geometry collapses at fill', async () => {
+        const syntheticCloseSpy = jest.fn().mockResolvedValue(undefined);
+        const service = buildService({
+            positionCloseCoordinator: { emitSyntheticClose: syntheticCloseSpy },
+        });
+
+        const event = buildM48Event();
+        const fillSummary = buildFillSummary(COLLAPSE_FILL);
+
+        await (service as any).openOrAddPositionAndAttachProtection(event, {}, { fillSummary }, Date.now());
+
+        expect(syntheticCloseSpy).toHaveBeenCalledTimes(1);
+        const callArg = syntheticCloseSpy.mock.calls[0][0] as { exitReason: string };
+        expect(callArg.exitReason).toBe(ExitReasonEnum.FORCE_CLOSE);
+    });
+
+    it('POSITION_OPENED_EVENT is NOT emitted when 212-style geometry rejects at fill', async () => {
+        const emitSpy = jest.fn();
+        const service = buildService({
+            events: { emit: emitSpy },
+        });
+
+        const event = buildM48Event();
+        const fillSummary = buildFillSummary(COLLAPSE_FILL);
+
+        await (service as any).openOrAddPositionAndAttachProtection(event, {}, { fillSummary }, Date.now());
+
+        const openedEmit = emitSpy.mock.calls.find(([eventName]) => eventName === POSITION_OPENED_EVENT);
+        expect(openedEmit).toBeUndefined();
+    });
+
+    it('protective monitor is NOT armed when 212-style geometry rejects at fill', async () => {
+        const armSpy = jest.fn();
+        const service = buildService({
+            localProtectiveMonitor: { arm: armSpy, disarm: jest.fn() },
+        });
+
+        const event = buildM48Event();
+        const fillSummary = buildFillSummary(COLLAPSE_FILL);
+
+        await (service as any).openOrAddPositionAndAttachProtection(event, {}, { fillSummary }, Date.now());
+
+        expect(armSpy).not.toHaveBeenCalled();
+    });
+});
+
 // ─── FA9: PENDING_OPEN closing fill — in-memory promote before save ───────────
 
 describe('ExecutionService M38 — FA9: PENDING_OPEN closing fill promotes in-memory state before save', () => {

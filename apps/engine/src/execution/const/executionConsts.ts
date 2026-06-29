@@ -226,6 +226,18 @@ export const CCXT_ORDER_STATUS_REJECTED = 'rejected';
 // strategy SkipReason.
 export const FILL_ACCEPTANCE_REJECTED = 'fill_acceptance_rejected';
 
+// M38 D2 (ADR 0045) — fill-acceptance sub-reasons emitted by evaluateFillDrift. `WRONG_SIDE_OF_SL`
+// is the always-on hard structural reject (fill on the wrong side of its own SL); `DRIFT_OVER_CAP`
+// is the far-tail magnitude reject. Engine-local labels — NEVER shared SkipReasons.
+export const WRONG_SIDE_OF_SL = 'wrong_side_of_sl';
+export const DRIFT_OVER_CAP = 'drift_over_cap';
+
+// M48 D2.10 (ADR 0045) — fill-acceptance sub-reason for the new fill-anchored geometry-integrity
+// leg in evaluateFillDrift. Joins `wrong_side_of_sl` / `drift_over_cap` in the sub-reason set.
+// Engine-local named const — NEVER a shared SkipReason, NEVER `degenerate_vwap_geometry` (a
+// strategy-layer pre-trade SkipReason forbidden at this seam).
+export const DEGENERATE_GEOMETRY_AT_FILL = 'degenerate_geometry_at_fill';
+
 // Far-tail magnitude drift cap (% of the signal-time reference price). Shipped OFF
 // (undefined): the operative reject is the wrong-side-of-own-SL hard structural check, which
 // is always on regardless of this value. Set to ~8.0 as a WIDE, un-calibrated fat-finger
@@ -241,3 +253,7 @@ export const MAX_SIGNAL_DRIFT_PCT: number | undefined = undefined;
 // op-order as entryHelpers.ts:44-46 (parity invariant).
 export const PCT_DIVISOR = new Money(100);
 export const EXIT_GEOMETRY_ONE = new Money(1);
+
+// Decimal zero used by the exit-geometry collapsed-stop / div-by-zero guard (exitGeometryHelper).
+// Kept here (not module-local to the helper) per conventions §Constants Placement.
+export const GEOMETRY_ZERO = new Money('0');
