@@ -13,6 +13,7 @@
 | Milestone outcomes (forensics) | [milestone-log.md](milestone-log.md) | Regressions, "why was this built?" |
 | Active implementation spec | `docs/plans/archive/MN-*.md` (see [plans/README.md](plans/README.md)) | Current milestone work |
 | Deferred work | [tech-debt.md](tech-debt.md) | Planning, go-live gates |
+| Hypothesis registry (experiments, rejected approaches) | [analysis/README.md](analysis/README.md) | Before param changes or shadow tests |
 | Pre-milestone gaps | [wip/](wip/) | Before plan freeze |
 | Code style (authoritative) | [code-conventions.md](best-practices/code-conventions.md) | Before engine code |
 | QA / dispatch process | [dev-qa-cycle.md](best-practices/dev-qa-cycle.md) | Before fix/QA waves |

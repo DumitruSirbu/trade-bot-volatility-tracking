@@ -1,0 +1,38 @@
+# Analysis — Hypothesis Registry
+
+Quantitative investigations into strategy parameters, signal quality, and exit mechanics. This registry records every hypothesis tested, its verdict, and what it rules out. **Future sessions MUST consult this before proposing parameter changes or shadow tests** — many dead ends are documented here.
+
+## How to read this
+
+**Verdict categories:**
+
+- **REJECTED:** The hypothesis is clearly falsified by the data (backtest sweep, soak analysis, or shadow cohort). The "Rules out" section lists what this finding prevents re-investigating.
+- **SUPPORTED:** The hypothesis is confirmed; the finding was promoted to a milestone plan or became active in live/shadow.
+- **INCONCLUSIVE / SEEDING:** The hypothesis is correctly diagnosed but not yet tested with a treatment. Used to seed follow-on investigation.
+
+**"Rules out"** statements are precise and negative: they describe what NOT to try, and why. They are the most valuable output for avoiding re-investigation of proven dead ends.
+
+## Rejected hypotheses (do not re-investigate without new evidence)
+
+| ID | Date | Hypothesis | Method | Key finding | Rules out | Doc |
+|---|---|---|---|---|---|---|
+| EXP-001 | 2026-06-23 | Widening time-stop horizon (15/30/45/60 min) converts time-stop exits to take-profits, improving win rate | Backtest sweep, v3, 2026-06-09 → 2026-06-24 | At 15 vs 30 min (same trade set): widening from 15 to 30 min degrades expectancy (−$324.74 → −$341.80). All horizons show time-stop dominance (79% at 15 min → 50% at 60 min), but stop-losses outnumber take-profits at every horizon. Win rate is the binding constraint (22–31%), not the exit clock. | Do not widen or disable the 15-min live time stop. Any "give it more time" approach to fixing time-stop trades is futile; the problem is entry selectivity (fewer losers-in-waiting), not the exit horizon. | [`timestop-sweep-20260623-1158.md`](timestop-sweep-20260623-1158.md) |
+| EXP-002 | 2026-06-23 | Forcing higher TP:SL ratio (0.5 → 2.0, risk-sized) improves expected value per trade | Backtest sweep, v3, 2026-06-09 → 2026-06-24, risk-size position per new stop | Realized RR rises 0.76 → 1.23; drawdown falls 31% → 28%. But win rate falls in lockstep (22.2% → 19.1%); per-trade expectancy stays negative at every ratio (−1.35 to −1.42). At R:R 1.23, breakeven needs ~45% win rate; the sweep delivers 19%. The gap is enormous. Net-PnL improvement is a confound (trade count shifts 243 → 209), not edge. | Do not re-tune the TP:SL ratio for profitability. Win rate is the binding constraint; adjusting geometry alone cannot fix negative expectancy. Sizer/stop mismatch is separable and worth fixing independently. | [`rr-sweep-20260623-1611.md`](rr-sweep-20260623-1611.md) |
+| EXP-004 | 2026-06-29 | Raising `max_tp_dist_factor` from 5.0 to 7.0 recovers ~4.0 orderly `trend_initiation` signals/day that the 5.0 cap was rejecting, improving win rate and profitability | Backtest comparison: v16 (factor=5.0) vs v19 (factor=7.0), 2026-05-30 → 2026-06-29, ~300 symbols, $1000 capital; plus shadow cohort analysis | Backtest: v19 adds 72 trades (+21%) at identical 23.4% win rate. All extra trades are tier2-dominated (34 trades at 11.1% WR = −$115 incremental loss). Net PnL worsens −$535.69 → −$671.57 (−$136). Root cause: `trend_initiation` momentum initiates correctly but price doesn't sustain to 1.5R within the hold window; 82% close on time_stop in both versions, showing momentum doesn't reach TP. Same structural issue as EXP-001 (time-stop dominance at 79–82%). | Do not raise `max_tp_dist_factor` to recover trade volume. The problem is not the cap width; it is that momentum signals don't sustain. The "extra 4.0 signals/day" all lose money when executed (time-stop dominance persists at 7.0). Any future "raise the cap" proposal must read this backtest and EXP-001 first. | [`max-tp-dist-factor-shadow-20260629.md`](max-tp-dist-factor-shadow-20260629.md) |
+
+## Open / inconclusive (seeding follow-on work)
+
+| ID | Date | Hypothesis | Status | Doc |
+|---|---|---|---|---|
+| EXP-003 | 2026-06-23 | Decomposing live win-rate gap reveals actionable levers (flow_type selectivity, idiosyncrasy gating, signal_score flooring, entry timing) | INCONCLUSIVE — correctly diagnoses that win rate (25–29% live vs 19–22% backtest) is the binding constraint, and identifies signal-quality (flow_type, idiosyncrasy, signal_score) as candidate levers. Synthesis of EXP-001 + EXP-002 + n=188 live decomposition. Tier-A selectivity gains (cut `catalyst_risk`, raise idiosyncrasy gate to ~0.75) and Tier-B core (concentrate on `trend_initiation + idiosyncrasy ≥ 0.75`) appear promising pooled (44% WR at breakeven, 27 trades) but sub-window validation shows core edge is unstable (28.6% WR window 2, 61.5% window 3, small n=13–14 per window). Tier-C entry-timing lever (pullback entry to reduce MAE) is well-motivated but untested. Do not build a milestone assuming the core is profitable; build to cut proven losers and gather more soak on the core. | Seeded M43/M47 signal-quality work; awaiting follow-on backtest per window and entry-timing variant. | [`win-rate-improvement-analysis-20260623-1914.md`](win-rate-improvement-analysis-20260623-1914.md) |
+
+## Supported → promoted to milestone
+
+(None yet; all three active experiments are rejected or seeding.)
+
+## Methodology notes
+
+- **Backtest calibration gaps apply to all runs:** BTC index-shock candle-vs-rolling-window mismatch (live sees more halts), ETH leg dead in single-symbol replay, modelled fills via `tick_aggregates`. The *relative* ranking across parameters is trustworthy; absolute PnL inherits the gaps.
+- **Single-window analyses are hypothesis-generating, not decision-grade.** Require confirmation across 2–3 disjoint sub-windows and ≥30 trades per cohort before acting.
+- **Shadow sizing caveat:** shadow path sizes off virtual equity per version, not the live `PositionSizer`. Use cohort PnL sign, expectancy sign, and win rate as the verdict; treat absolute dollar magnitude as indicative.
+- **Analysis queries read only `shadow_decisions` for counterfactuals, never live `decisions`.** See `packages/analysis/src/query/getPerformance.ts` and `compareVersions.ts` for the canonical performance computation from `simulated_fill` JSONB.
