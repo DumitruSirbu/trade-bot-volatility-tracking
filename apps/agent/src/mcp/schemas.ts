@@ -45,6 +45,7 @@ void _haltStateCheck;
 export const PerformanceByVersionViewSchema = z.object({
     strategyVersionId: z.string(),
     label: z.string(),
+    isLive: z.boolean(),
     status: z.string(),
     windowDays: z.number(),
     tradeCount: z.number(),

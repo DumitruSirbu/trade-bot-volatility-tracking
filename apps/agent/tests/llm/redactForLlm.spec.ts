@@ -101,6 +101,7 @@ describe('redactForLlm — allowlist (ADR 0037 §2.2)', () => {
         const perf = {
             strategyVersionId: '1',
             label: 'v1',
+            isLive: true,
             status: 'active',
             windowDays: 30,
             tradeCount: 42,

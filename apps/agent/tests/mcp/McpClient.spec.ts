@@ -87,6 +87,7 @@ const HALT_FIXTURE = { isHalted: false, haltReason: null, asOf: '2026-05-27T10:0
 const PERFORMANCE_FIXTURE = {
     strategyVersionId: '1',
     label: 'volatility-vwap@v1',
+    isLive: true,
     status: 'active',
     windowDays: 30,
     tradeCount: 42,
@@ -102,7 +103,7 @@ const PERFORMANCE_FIXTURE = {
 
 const COMPARISON_FIXTURE = {
     aPerformance: PERFORMANCE_FIXTURE,
-    bPerformance: { ...PERFORMANCE_FIXTURE, strategyVersionId: '2' },
+    bPerformance: { ...PERFORMANCE_FIXTURE, strategyVersionId: '2', isLive: false },
     pairedDiff: {
         pairedEventCount: 10,
         pairedTradedEventCount: 8,

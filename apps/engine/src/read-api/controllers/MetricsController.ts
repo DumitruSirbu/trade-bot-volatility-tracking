@@ -13,6 +13,7 @@ import { Controller, Get, Query, UseGuards, UseInterceptors } from '@nestjs/comm
 
 import { AuthGuard, RequiredScopes } from '../../auth/AuthGuard';
 import { MS_PER_DAY } from '../../common/const/timeConsts';
+import { AppConfigService } from '../../config/service';
 import { AccountSnapshotRepository } from '../../position/repository/AccountSnapshotRepository';
 import { PositionRepository } from '../../position/repository/PositionRepository';
 import { RiskStateRepository } from '../../risk/repository/RiskStateRepository';
@@ -56,6 +57,7 @@ export class MetricsController {
         private readonly strategyVersions: StrategyVersionRepository,
         private readonly shadowDecisions: ShadowDecisionRepository,
         private readonly cursors: CursorCodec,
+        private readonly appConfig: AppConfigService,
     ) {}
 
     @Get('decisions')
@@ -97,6 +99,7 @@ export class MetricsController {
     async getPerformanceByVersion(@Query('windowDays') rawWindow?: string): Promise<IPerformanceByVersionView[]> {
         const windowDays = clampWindow(rawWindow);
         const since = windowSince(windowDays);
+        const liveStrategyVersionId = this.appConfig.activeStrategyVersionId;
 
         const rows = await this.positions.aggregatePerformanceByVersion(since);
 
@@ -121,7 +124,7 @@ export class MetricsController {
                 continue;
             }
 
-            enriched.push(mapPerformanceByVersion(row, version, windowDays));
+            enriched.push(mapPerformanceByVersion(row, version, windowDays, liveStrategyVersionId));
         }
 
         return enriched;
@@ -131,6 +134,7 @@ export class MetricsController {
     async getDailyPerformanceSeries(@Query('windowDays') rawWindow?: string): Promise<IDailyPerformanceRow[]> {
         const windowDays = clampWindow(rawWindow);
         const since = windowSince(windowDays);
+        const liveStrategyVersionId = this.appConfig.activeStrategyVersionId;
 
         const rows = await this.positions.aggregateDailyByVersion(since);
 
@@ -141,7 +145,7 @@ export class MetricsController {
         const versionIds = rows.map((row) => row.strategyVersionId);
         const versionMap = await this.hydrateVersions(versionIds);
 
-        return mapDailyPerformanceRows(rows, versionMap);
+        return mapDailyPerformanceRows(rows, versionMap, liveStrategyVersionId);
     }
 
     @Get('performance/shadow-summary')

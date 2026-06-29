@@ -153,6 +153,7 @@ function buildHarness() {
         versions as unknown as StrategyVersionRepository,
         null as unknown as ShadowDecisionRepository,
         cursors,
+        { activeStrategyVersionId: 1 } as never,
     );
 
     return { positions, cursors, positionsController, metricsController };

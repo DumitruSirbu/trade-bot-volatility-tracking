@@ -229,6 +229,7 @@ export async function getPerformance(ds: DataSource, params: IGetPerformancePara
     return {
         strategyVersionId: String(params.versionId),
         label,
+        isLive: params.versionId === resolveLiveStrategyVersionId(),
         status,
         windowDays,
         tradeCount,
@@ -278,6 +279,18 @@ async function lookupVersionOrThrow(ds: DataSource, versionId: number): Promise<
     }
 
     return found;
+}
+
+function resolveLiveStrategyVersionId(): number {
+    const raw = process.env.ACTIVE_STRATEGY_VERSION_ID;
+
+    if (raw === undefined || raw.length === 0) {
+        return 0;
+    }
+
+    const parsed = Number.parseInt(raw, 10);
+
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 function validateVersionIdOrThrow(versionId: number): void {

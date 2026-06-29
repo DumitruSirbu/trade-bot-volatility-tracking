@@ -242,7 +242,12 @@ export interface IPerformanceAggregateRow {
     readonly netPnlUsd: string;
 }
 
-export function mapPerformanceByVersion(row: IPerformanceAggregateRow, version: StrategyVersionEntity, windowDays: number): IPerformanceByVersionView {
+export function mapPerformanceByVersion(
+    row: IPerformanceAggregateRow,
+    version: StrategyVersionEntity,
+    windowDays: number,
+    liveStrategyVersionId: number,
+): IPerformanceByVersionView {
     // ADR 0022 §2.3.1: drawdown / sharpe / sortino / expectancyPerUnitRisk
     // require a per-version equity series that the live engine does not
     // compute; the M7 backtest reporter owns those numbers. Surface `null`
@@ -258,6 +263,7 @@ export function mapPerformanceByVersion(row: IPerformanceAggregateRow, version: 
     return {
         strategyVersionId: String(row.strategyVersionId),
         label: `${version.name}@v${version.version}`,
+        isLive: row.strategyVersionId === liveStrategyVersionId,
         status: version.status,
         windowDays,
         tradeCount: row.tradeCount,
@@ -292,6 +298,7 @@ interface IDailyPerformanceAggregateRow {
 export function mapDailyPerformanceRows(
     rows: ReadonlyArray<IDailyPerformanceAggregateRow>,
     versions: ReadonlyMap<number, StrategyVersionEntity>,
+    liveStrategyVersionId: number,
 ): IDailyPerformanceRow[] {
     const cumulativeByVersion = new Map<number, MoneyValue>();
     const mapped: IDailyPerformanceRow[] = [];
@@ -310,6 +317,7 @@ export function mapDailyPerformanceRows(
         mapped.push({
             strategyVersionId: String(row.strategyVersionId),
             label: `${version.name}@v${version.version}`,
+            isLive: row.strategyVersionId === liveStrategyVersionId,
             date: row.date,
             trades: row.trades,
             winCount: row.winCount,
@@ -599,6 +607,7 @@ export const RISK_STATE_VIEW_KEYS: ReadonlyArray<keyof IRiskStateView> = [
 export const PERFORMANCE_BY_VERSION_VIEW_KEYS: ReadonlyArray<keyof IPerformanceByVersionView> = [
     'strategyVersionId',
     'label',
+    'isLive',
     'status',
     'windowDays',
     'tradeCount',
@@ -615,6 +624,7 @@ export const PERFORMANCE_BY_VERSION_VIEW_KEYS: ReadonlyArray<keyof IPerformanceB
 export const DAILY_PERFORMANCE_ROW_KEYS: ReadonlyArray<keyof IDailyPerformanceRow> = [
     'strategyVersionId',
     'label',
+    'isLive',
     'date',
     'trades',
     'winCount',

@@ -133,7 +133,7 @@ describe('mapDailyPerformanceRows', () => {
         const versions = new Map<number, StrategyVersionEntity>();
 
         // OPERATE
-        const result = mapDailyPerformanceRows([], versions);
+        const result = mapDailyPerformanceRows([], versions, 0);
 
         // CHECK
         expect(result).toEqual([]);
@@ -145,7 +145,7 @@ describe('mapDailyPerformanceRows', () => {
         const versions = new Map<number, StrategyVersionEntity>();
 
         // OPERATE
-        const result = mapDailyPerformanceRows(rows, versions);
+        const result = mapDailyPerformanceRows(rows, versions, 0);
 
         // CHECK
         expect(result).toEqual([]);
@@ -163,7 +163,7 @@ describe('mapDailyPerformanceRows', () => {
         ];
 
         // OPERATE
-        const result = mapDailyPerformanceRows(rows, versions);
+        const result = mapDailyPerformanceRows(rows, versions, 0);
 
         // CHECK — sorted by label then date so order is deterministic
         expect(result).toHaveLength(3);
@@ -189,7 +189,7 @@ describe('mapDailyPerformanceRows', () => {
         ];
 
         // OPERATE
-        const result = mapDailyPerformanceRows(rows, versions);
+        const result = mapDailyPerformanceRows(rows, versions, 0);
 
         // CHECK — result is sorted by label then date
         // alpha@v1 sorts before beta@v1 lexicographically
@@ -211,7 +211,7 @@ describe('mapDailyPerformanceRows', () => {
         const rows = [buildDailyRow({ strategyVersionId: 1, date: '2025-01-01', trades: 0, winCount: 0, netPnlUsd: '0' })];
 
         // OPERATE
-        const result = mapDailyPerformanceRows(rows, versions);
+        const result = mapDailyPerformanceRows(rows, versions, 0);
 
         // CHECK
         expect(result).toHaveLength(1);
@@ -225,10 +225,23 @@ describe('mapDailyPerformanceRows', () => {
         const rows = [buildDailyRow({ strategyVersionId: 1, date: '2025-01-01' })];
 
         // OPERATE
-        const result = mapDailyPerformanceRows(rows, versions);
+        const result = mapDailyPerformanceRows(rows, versions, 0);
 
         // CHECK
         expect(result[0].label).toBe('reversion@v3');
+    });
+
+    it('stamps isLive from the configured live strategy version id', () => {
+        // BUILD
+        const version = buildVersion({ id: 16, name: 'volatility-vwap', version: 21 });
+        const versions = new Map([[16, version]]);
+        const rows = [buildDailyRow({ strategyVersionId: 16, date: '2026-06-26' })];
+
+        // OPERATE
+        const result = mapDailyPerformanceRows(rows, versions, 16);
+
+        // CHECK
+        expect(result[0].isLive).toBe(true);
     });
 
     it('sorts output by label ascending then date ascending', () => {
@@ -248,7 +261,7 @@ describe('mapDailyPerformanceRows', () => {
         ];
 
         // OPERATE
-        const result = mapDailyPerformanceRows(rows, versions);
+        const result = mapDailyPerformanceRows(rows, versions, 0);
 
         // CHECK — alpha before beta, then by date within each label
         expect(result[0].label).toBe('alpha@v1');

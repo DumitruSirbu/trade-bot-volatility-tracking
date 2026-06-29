@@ -1,6 +1,8 @@
 export interface IPerformanceByVersionView {
     strategyVersionId: string;
     label: string;
+    /** True when this row matches `ACTIVE_STRATEGY_VERSION_ID` (the live trade path). */
+    isLive: boolean;
     status: string;
     windowDays: number;
     tradeCount: number;
