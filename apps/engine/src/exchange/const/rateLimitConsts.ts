@@ -101,6 +101,9 @@ export const FAPI_OPERATION_WEIGHTS: Readonly<Record<string, number>> = {
     fetchPositions: 5,
     fetchOpenOrders: 40,
     fetchFundingHistory: 30,
+    // M49: ccxt `fetchMyTrades` -> `GET /fapi/v1/userTrades`, Binance weight 5,
+    // debits the same `/fapi` REQUEST_WEIGHT_1M bucket (no new bucket per ADR 0030).
+    fetchMyTrades: 5,
     fetchOrder: 1,
     fetchOrderByClientId: 1,
     createOrder: 1,

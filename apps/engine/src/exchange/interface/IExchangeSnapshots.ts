@@ -159,6 +159,47 @@ export interface IFundingPaymentSnapshot {
     asset: string;
 }
 
+// M49 (ADR 0010 §1b/§1f amendment, ADR 0001 additive note): a single user fill
+// from account trade history (ccxt `fetchMyTrades` → Binance USDT-M
+// `GET /fapi/v1/userTrades`). The reconciliation finalize path fetches these to
+// recover the closing fills of a `RECONCILED_MISSING` position before aggregating
+// realized PnL (the close happened on the exchange but was never recorded locally).
+//
+// One closing ORDER yields N partial-fill rows that all share the same `orderId`
+// (and `clientOrderId`); PositionService aggregates per `orderId` into one ledger
+// row (VWAP price, summed qty/fee) so the ledger's unique constraints never drop a
+// partial. Money/price/qty fields are decimal-as-string at the boundary (the only
+// float touch is the ccxt parse, immediately re-stringified — no float math
+// precedes Decimal upstream).
+//
+// `realizedPnl` is Binance's per-trade realized PnL (raw `info.realizedPnl`, a
+// decimal-as-string): `'0'` on entry fills, non-zero on REDUCING fills. It is the
+// closing-fill discriminator (entry-vs-exit separation) and an integrity probe
+// against the locally computed cashflow — NOT the stored value (ADR 0012 §5 keeps
+// the ledger-derived aggregate authoritative).
+//
+// `reduceOnly` is intentionally ABSENT: `/fapi/v1/userTrades` rows do not carry it,
+// so ccxt cannot populate it from this endpoint (it would always be null). The
+// reducing-fill discriminator is `realizedPnl != 0`, cross-checked by opposite side.
+export interface IMyTradeSnapshot {
+    tradeId: string;
+    // The Binance order id (ccxt unified `trade.order`); all partial fills of one
+    // closing order share it. The per-order aggregation key.
+    orderId: string;
+    // Absent on `/fapi/v1/userTrades` — null unless a future venue surfaces it.
+    clientOrderId: string | null;
+    symbol: string;
+    side: 'buy' | 'sell';
+    price: string;
+    amount: string;
+    cost: string;
+    fee: string;
+    feeCurrency: string | null;
+    // Binance per-trade realized PnL (`info.realizedPnl`). '0' on entry fills.
+    realizedPnl: string;
+    timestampMs: number;
+}
+
 // M6 W4a (ADR 0010 §7): exchange-side open-order snapshot for case (e)
 // PROTECTIVE_ORDER_DRIFT detection. Reconciliation reads `clientOrderId` to
 // match against the `-sl` / `-tp` suffix-bearing orders the protective attacher

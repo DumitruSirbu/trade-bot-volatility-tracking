@@ -76,4 +76,17 @@ export class PaperAccountStateSource implements IAccountStateSource {
         // 'APPLY_FUNDING'.
         return [];
     }
+
+    // M49 (ADR 0010 §1b/§1f amendment). Satisfies the engine-local
+    // `IReconciliationAccountStateSource` extension that `ReconciliationService`
+    // injects under the same `ACCOUNT_STATE_SOURCE` token — without importing any
+    // `exchange/` module (the R2a.5 module-graph sentinel forbids that edge, so the
+    // engine `IMyTradeSnapshot` type is intentionally NOT referenced here; the empty
+    // return is assignable to it). PAPER is inert on the closing-fill recovery path:
+    // the reconciliation tick is a PAPER no-op (`runTickNow` short-circuit), so this
+    // is never reached on the LIVE finalize path. No real money moved and the
+    // simulator already holds the projected fill — `[]` keeps PAPER engine-local.
+    async fetchMyTrades(_symbol: string, _sinceMs: number, _untilMs?: number): Promise<readonly never[]> {
+        return [];
+    }
 }

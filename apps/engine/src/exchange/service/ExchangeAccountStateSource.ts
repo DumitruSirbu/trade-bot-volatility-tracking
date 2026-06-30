@@ -1,8 +1,8 @@
-import { IAccountStateSource, IBalance, IFunding, IOrder, IPosition } from '@bot/shared';
+import { IBalance, IFunding, IOrder, IPosition } from '@bot/shared';
 import { Inject, Injectable } from '@nestjs/common';
 
 import { runWithLiveAccountStateCapability } from '../../paper-mode/security';
-import { EXCHANGE_CLIENT, IExchangeClient } from '../interface';
+import { EXCHANGE_CLIENT, IExchangeClient, IMyTradeSnapshot, IReconciliationAccountStateSource } from '../interface';
 import { balanceSnapshotToBalance, fundingPaymentSnapshotToFunding, openOrderSnapshotToOrder, positionSnapshotToPosition } from '../utils';
 
 // LIVE / TESTNET adapter for the shared `IAccountStateSource` port (ADR 0032 §3 D14).
@@ -26,7 +26,7 @@ import { balanceSnapshotToBalance, fundingPaymentSnapshotToFunding, openOrderSna
 // callers consume.
 
 @Injectable()
-export class ExchangeAccountStateSource implements IAccountStateSource {
+export class ExchangeAccountStateSource implements IReconciliationAccountStateSource {
     constructor(@Inject(EXCHANGE_CLIENT) private readonly exchange: IExchangeClient) {}
 
     async fetchBalance(): Promise<IBalance[]> {
@@ -60,6 +60,17 @@ export class ExchangeAccountStateSource implements IAccountStateSource {
             const snapshots = await this.exchange.fetchFundingHistory(symbol, since);
 
             return snapshots.map(fundingPaymentSnapshotToFunding);
+        });
+    }
+
+    // M49 (ADR 0010 §1b/§1f amendment). Closing-fill recovery for the
+    // RECONCILED_MISSING finalize path. Returns the engine `IMyTradeSnapshot`
+    // directly (decimal-as-string) — no shared-DTO mapping, since realized PnL +
+    // per-order aggregation are engine-internal. Wrapped in the D14 capability frame
+    // like every other account-state read on this adapter.
+    async fetchMyTrades(symbol: string, sinceMs: number, untilMs?: number): Promise<readonly IMyTradeSnapshot[]> {
+        return runWithLiveAccountStateCapability('ExchangeAccountStateSource', async () => {
+            return this.exchange.fetchMyTrades(symbol, sinceMs, untilMs);
         });
     }
 }

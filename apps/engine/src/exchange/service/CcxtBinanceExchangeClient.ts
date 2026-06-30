@@ -35,6 +35,7 @@ import {
     IFundingPaymentSnapshot,
     IFundingRateSnapshot,
     IMarketInfo,
+    IMyTradeSnapshot,
     IOpenInterestSnapshot,
     IOpenOrderSnapshot,
     IOrderBookLevel,
@@ -231,6 +232,26 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
         const orders = await this.callExchange('fetchOpenOrders', () => this.client.fetchOpenOrders());
 
         return orders.map((order) => this.toOpenOrderSnapshot(order));
+    }
+
+    // M49 (ADR 0010 §1b/§1f amendment): account trade-history read used by the
+    // RECONCILED_MISSING finalize path to recover the closing fills the bot never
+    // recorded locally. Wraps ccxt's `fetchMyTrades` which over Binance USDT-M hits
+    // `GET /fapi/v1/userTrades` (weight 5, already in the `/fapi REQUEST_WEIGHT_1M`
+    // bucket — no new rate-limit bucket per ADR 0030). `sinceMs` is the inclusive
+    // lower bound (the caller passes `position.openedAt`; the close is always after
+    // the open). `untilMs` (optional) is the inclusive upper bound, forwarded to
+    // Binance as `endTime` so the read is confined to this position's cycle and a
+    // later cycle's reducing fill on the same symbol cannot be misattributed. Mirrors
+    // `fetchFundingHistory` exactly: same `callExchange` wrapper, same D14 capability
+    // guard. Read-only — never an order path.
+    async fetchMyTrades(symbol: string, sinceMs: number, untilMs?: number): Promise<readonly IMyTradeSnapshot[]> {
+        assertActiveLiveAccountStateCapability('fetchMyTrades');
+
+        const params = untilMs === undefined ? {} : { endTime: untilMs };
+        const trades = await this.callExchange(`fetchMyTrades:${symbol}`, () => this.client.fetchMyTrades(symbol, sinceMs, undefined, params));
+
+        return trades.map((trade) => this.toMyTradeSnapshot(symbol, trade));
     }
 
     // ─── Order-command facade surface (CcxtExecutionClient consumer) ─────
@@ -672,6 +693,51 @@ export class CcxtBinanceExchangeClient implements IExchangeClient, OnModuleDestr
             amount: this.numberToString(row.amount) ?? '0',
             asset: row.code ?? '',
         };
+    }
+
+    // ccxt `Trade` -> engine boundary type for M49 closing-fill recovery. ccxt's
+    // unified trade carries `order` (the Binance orderId), `price`/`amount`/`cost`
+    // as JS numbers, and `fee.cost`/`fee.currency`. Binance's per-trade `realizedPnl`
+    // is NOT a ccxt-unified field — it lives on the raw row under `info.realizedPnl`
+    // (a decimal-as-string the engine reads verbatim; '0' on entry fills). `/fapi/v1/
+    // userTrades` does not return a clientOrderId, so it is null unless a future venue
+    // surfaces one in `info`. Every numeric field is stringified at the boundary so no
+    // float math precedes Decimal upstream.
+    private toMyTradeSnapshot(symbol: string, trade: Trade): IMyTradeSnapshot {
+        const info = (trade.info ?? {}) as Record<string, unknown>;
+
+        return {
+            tradeId: String(trade.id ?? ''),
+            orderId: String(trade.order ?? ''),
+            clientOrderId: typeof info.clientOrderId === 'string' ? info.clientOrderId : null,
+            symbol: trade.symbol ?? symbol,
+            side: trade.side === 'sell' ? 'sell' : 'buy',
+            price: this.numberToString(trade.price) ?? '0',
+            amount: this.numberToString(trade.amount) ?? '0',
+            cost: this.numberToString(trade.cost) ?? '0',
+            fee: this.numberToString(trade.fee?.cost) ?? '0',
+            feeCurrency: trade.fee?.currency ?? null,
+            realizedPnl: this.stringFromInfo(info, 'realizedPnl') ?? '0',
+            timestampMs: trade.timestamp ?? 0,
+        };
+    }
+
+    // Reads a decimal-as-string field off the raw ccxt `info` bag. Binance returns
+    // `realizedPnl` as a string already; a numeric value (other venues) is coerced
+    // to string at the boundary. Anything else collapses to null so the caller
+    // applies its '0' default.
+    private stringFromInfo(info: Record<string, unknown>, key: string): string | null {
+        const value = info[key];
+
+        if (typeof value === 'string') {
+            return value;
+        }
+
+        if (typeof value === 'number' && !Number.isNaN(value)) {
+            return String(value);
+        }
+
+        return null;
     }
 
     private toOrderSnapshot(order: Order): IExchangeOrderSnapshot {
