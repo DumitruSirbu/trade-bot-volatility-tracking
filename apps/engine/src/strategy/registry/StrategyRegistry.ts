@@ -30,6 +30,12 @@ export class StrategyRegistry {
         this.strategiesByKey.set(this.buildKey(v1.name, 11), v1);
         this.strategiesByKey.set(this.buildKey(v2.name, 21), v2);
         this.strategiesByKey.set(this.buildKey(v3.name, 31), v3);
+
+        // M48 shadow probe: version 32 (v3.2) is a data-only partition of v3.1 — same
+        // V3HybridRouterStrategy implementation, params JSONB carries max_tp_dist_factor=7.0
+        // (vs 5.0 on the live row) to evaluate whether the higher TP-distance ceiling recovers
+        // trend_initiation signals M47's geometry check currently blocks. Shadow path only.
+        this.strategiesByKey.set(this.buildKey(v3.name, 32), v3);
     }
 
     resolve(name: string, version: number, params: unknown): IResolvedStrategy {

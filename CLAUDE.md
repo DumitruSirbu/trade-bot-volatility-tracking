@@ -78,6 +78,7 @@ Each agent's ownership is defined in its `.claude/agents/<name>.md` frontmatter.
 - Code conventions (AUTHORITATIVE) → `docs/best-practices/code-conventions.md`
 - Dev + QA cycle rules (AUTHORITATIVE) → `docs/best-practices/dev-qa-cycle.md`
 - Testing → `docs/best-practices/testing.md`
+- Hypothesis registry (all experiments, what was rejected and why) → `docs/analysis/README.md`  *(read before proposing any param change or shadow test)*
 - Tech debt + deferred items → `docs/tech-debt.md` *(HIGH = go-live blockers, MEDIUM = feature gaps, LOW = cosmetic/refactor)*
 - Work log → `docs/work-log.md`
 

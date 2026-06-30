@@ -1,3 +1,5 @@
+> **EXP-001 — REJECTED** | 2026-06-23 | [back to index](README.md)
+
 # Time-stop horizon sweep — 20260623-1158
 
 Backtest sweep of `time_stop_minutes` over the same soak window, holding every other

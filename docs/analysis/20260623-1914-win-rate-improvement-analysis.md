@@ -1,3 +1,5 @@
+> **EXP-003 — INCONCLUSIVE / SEEDING** | 2026-06-23 | [back to index](README.md)
+
 # Win-rate improvement analysis — 20260623-1914
 
 Synthesis of the time-stop sweep, the reward:risk sweep, and a win-rate decomposition of the

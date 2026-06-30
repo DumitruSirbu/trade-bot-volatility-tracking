@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 
+import { AuthModule } from '../auth/AuthModule';
 import { ControlModule } from '../control/ControlModule';
 import { PositionModule } from '../position/PositionModule';
+import { AlertController } from './AlertController';
 import { DailyPnlSummaryScheduler } from './DailyPnlSummaryScheduler';
 import { RiskListeners } from './listeners/RiskListeners';
 import { AlertSinkModule } from './sink/AlertSinkModule';
@@ -35,8 +37,12 @@ import { AlertSinkModule } from './sink/AlertSinkModule';
 // should import directly from `alert/sink/AlertSinkModule`.
 export { ALERT_SINK, IAlertSink, NoopAlertSink } from './sink/AlertSinkModule';
 
+// `AuthModule` is imported so `AlertController`'s `AuthGuard` can resolve its
+// dependencies (AuthTokenService + REVOKED_JTI_REPOSITORY). The edge is
+// one-way (AlertModule → AuthModule); AuthModule never imports AlertModule.
 @Module({
-    imports: [AlertSinkModule, ControlModule, PositionModule],
+    imports: [AlertSinkModule, AuthModule, ControlModule, PositionModule],
+    controllers: [AlertController],
     providers: [DailyPnlSummaryScheduler, RiskListeners],
     exports: [AlertSinkModule],
 })
