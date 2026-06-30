@@ -47,6 +47,21 @@ export const DEFAULT_FOREIGN_POSITION_POLICY: ForeignPositionPolicy = 'adopt_unm
 // needing per-symbol stepSize at classification time.
 export const RECONCILIATION_QTY_TOLERANCE: MoneyValue = new Money('0.000000001');
 
+// M49 (ADR 0010 §1b/§1f amendment, H2). `aggregatePnl` sums `tx.fee` into USDT
+// `realized_pnl` with no currency check; a fee paid in BNB ("Pay fees with BNB")
+// would corrupt USDT PnL by a unit mismatch. Reconciled closing fills therefore only
+// count fees denominated in this asset; any other currency is recorded as zero-for-PnL
+// and WARN-flagged (BNB→USDT normalization is a separate cross-milestone gap).
+export const RECONCILED_FILL_FEE_CURRENCY = 'USDT';
+
+// M49 (M2). Material-divergence thresholds for the realized-PnL integrity probe:
+// the locally computed fill cashflow is compared against Binance's own per-trade
+// `realizedPnl`. A WARN fires above either bound; the stored value stays the
+// ledger-derived aggregate (ADR 0012 §5) — the probe never changes it.
+export const RECONCILED_PNL_DIVERGENCE_ABS_THRESHOLD = '0.10';
+
+export const RECONCILED_PNL_DIVERGENCE_REL_THRESHOLD = '0.01';
+
 // R2.1 clean-code R2.2. ccxt-normalised terminal statuses for case-(f)
 // `fetchOrderByClientId` resolution (ADR-0010 §1f). Set-lookup instead of an
 // open-coded disjunction so the membership check is intention-revealing and a

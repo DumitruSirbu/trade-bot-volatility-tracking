@@ -5,12 +5,12 @@ import {
     ExchangeEnvironmentEnum,
     ExitReasonEnum,
     FlowTypeEnum,
-    IAccountStateSource,
     IFunding,
     IOrder,
     IPosition,
     IPositionAdoptedEvent,
     IPositionAdoptionVanishedEvent,
+    IReconciledMissingUnrecoverableEvent,
     IReconciliationDriftDetectedEvent,
     IReconciliationResolvedEvent,
     OrderIntentActionEnum,
@@ -42,7 +42,7 @@ import {
 } from '../../execution/const';
 import { LocalProtectiveMonitor } from '../../execution/service/LocalProtectiveMonitor';
 import { SharedCloseCoordinator } from '../../execution/service/SharedCloseCoordinator';
-import { ACCOUNT_STATE_SOURCE } from '../../exchange/interface';
+import { ACCOUNT_STATE_SOURCE, IMyTradeSnapshot, IReconciliationAccountStateSource } from '../../exchange/interface';
 import { CcxtExecutionClient } from '../../exchange/service/CcxtExecutionClient';
 import { SubscriptionRetainer } from '../../market-data/service/SubscriptionRetainer';
 import { COOLDOWN_AFTER_LOSS_MS, MAX_OPEN_POSITIONS } from '../../risk/const';
@@ -56,6 +56,7 @@ import {
     MANUAL_ADOPTED_STRATEGY_VERSION,
     POSITION_ADOPTED_EVENT,
     POSITION_ADOPTION_VANISHED_EVENT,
+    RECONCILED_MISSING_UNRECOVERABLE_EVENT,
     RECONCILIATION_DRIFT_DETECTED_EVENT,
     RECONCILIATION_MIN_INTERVAL_MS,
     RECONCILIATION_QTY_TOLERANCE,
@@ -184,7 +185,7 @@ export class ReconciliationService {
         // unknown-intent state can be processed (Item 2). R2c migrates the
         // call to the shared `IExecutionClient` port once the broader M5
         // execution migration lands.
-        @Inject(ACCOUNT_STATE_SOURCE) private readonly accountState: IAccountStateSource,
+        @Inject(ACCOUNT_STATE_SOURCE) private readonly accountState: IReconciliationAccountStateSource,
         private readonly ccxtExecutionClient: CcxtExecutionClient,
         // M11a R2a BLOCKER B2 + HIGH H3 (ADR 0032 §3). Env-gates the entire
         // periodic reconciliation tick under PAPER. R2d wires
@@ -847,6 +848,112 @@ export class ReconciliationService {
         }
     }
 
+    // M49 (ADR 0010 §1b/§1f amendment). Called immediately before
+    // `finalizeRealizedPnl` on both LIVE RECONCILED_MISSING sites. Fetches the
+    // position's own fills from account history and records the closing leg into the
+    // ledger so finalize aggregates real numbers. BEST-EFFORT enrichment, never a
+    // precondition: on an empty result or a fetch failure it emits the structured
+    // RECONCILED_MISSING_UNRECOVERABLE alert and falls through so finalize still runs
+    // (the close must never be blocked by a history read — ADR 0010 §6). `sinceMs`
+    // derives from `position.openedAt` — deterministic, never `Date.now()`.
+    private async backfillClosingFillsFromExchange(position: PositionEntity, nowMs: number): Promise<void> {
+        const sinceMs = position.openedAt.getTime();
+
+        let trades: readonly IMyTradeSnapshot[];
+
+        try {
+            // Upper-bound the window at `nowMs` (forwarded as Binance `endTime`) so an
+            // unrelated reducing fill on the same symbol from a LATER position cycle
+            // cannot be misattributed into this position's ledger. The 1-position-per-
+            // symbol config invariant makes this rare today; the bound is the code guard.
+            trades = await this.accountState.fetchMyTrades(position.symbol, sinceMs, nowMs);
+        } catch (cause) {
+            this.logger.error(
+                `fetchMyTrades:${position.symbol} since=${sinceMs} until=${nowMs} failed: ${this.describe(cause)} - finalizing positionId=${position.id} with null PnL`,
+            );
+            this.emitReconciledMissingUnrecoverable(position, 'fetch_failed', nowMs);
+
+            return;
+        }
+
+        const closingFills = this.selectClosingFills(trades, position.side);
+
+        if (closingFills.length === 0) {
+            this.logger.warn(
+                `backfill found no closing fills positionId=${position.id} symbol=${position.symbol} side=${position.side} ` +
+                    `sinceMs=${sinceMs} untilMs=${nowMs} - finalizing with null PnL`,
+            );
+            this.emitReconciledMissingUnrecoverable(position, 'no_fills_found', nowMs);
+
+            return;
+        }
+
+        this.warnOnClosingFillOverfill(position, closingFills);
+
+        await this.positionService.recordReconciledClosingFills({
+            positionId: position.id,
+            fills: closingFills,
+            entryPrice: position.entryPrice,
+            side: position.side,
+        });
+    }
+
+    // Misattribution detector. Even within the [openedAt, nowMs] window the summed
+    // closing-fill qty should not exceed the position's own qty by more than a small
+    // tolerance (1%). An overshoot signals a foreign reducing fill leaked into the
+    // window — observability-only (the recordReconciledClosingFills dedup still guards
+    // the ledger); the operator investigates.
+    private warnOnClosingFillOverfill(position: PositionEntity, closingFills: readonly IMyTradeSnapshot[]): void {
+        let summedQty = new Money(0);
+        for (const fill of closingFills) {
+            summedQty = summedQty.plus(parseMoney(fill.amount));
+        }
+
+        const overfillThreshold = position.qty.times('1.01');
+
+        if (summedQty.greaterThan(overfillThreshold)) {
+            this.logger.warn(
+                `backfill closing-fill qty exceeds position qty positionId=${position.id} symbol=${position.symbol} ` +
+                    `summedFillQty=${formatMoney(summedQty)} positionQty=${formatMoney(position.qty)} - possible misattribution, operator should verify`,
+            );
+        }
+    }
+
+    // Closing-fill discriminator (H1). Reducing fills are the OPPOSITE side of the
+    // position (a LONG closes by selling, a SHORT by buying) and carry a non-zero
+    // per-trade `realizedPnl`; entry fills report `realizedPnl = 0` and are excluded
+    // by construction. `reduceOnly` is NOT used — it is a phantom field on
+    // `/fapi/v1/userTrades`. Duplicate suppression against any already-recorded fill
+    // is the `exchange_order_id` dedup in `recordReconciledClosingFills`, not a
+    // cross-clock timestamp filter.
+    private selectClosingFills(trades: readonly IMyTradeSnapshot[], positionSide: PositionSideEnum): readonly IMyTradeSnapshot[] {
+        const closingTradeSide = positionSide === PositionSideEnum.LONG ? 'sell' : 'buy';
+
+        return trades.filter((trade) => trade.side === closingTradeSide && !new Money(trade.realizedPnl).isZero());
+    }
+
+    // D3.1 — structured operator alert when a real-money RECONCILED_MISSING close
+    // finalizes with null PnL because recovery was unavailable. Mirrors the
+    // `POSITION_ADOPTION_VANISHED_EVENT` emit pattern. `side` is the position's entry
+    // side mapped to the buy/sell convention of the shared event contract.
+    private emitReconciledMissingUnrecoverable(position: PositionEntity, reason: 'no_fills_found' | 'fetch_failed', nowMs: number): void {
+        const event: IReconciledMissingUnrecoverableEvent = {
+            positionId: String(position.id),
+            symbol: position.symbol,
+            side: position.side === PositionSideEnum.LONG ? 'buy' : 'sell',
+            dbQty: position.qty.toFixed(),
+            reason,
+            detectedAtMs: nowMs,
+        };
+
+        this.events.emit(RECONCILED_MISSING_UNRECOVERABLE_EVENT, event);
+
+        this.logger.error(
+            `RECONCILED_MISSING unrecoverable positionId=${position.id} symbol=${position.symbol} side=${position.side} ` +
+                `reason=${reason} - finalized with null PnL, flagged for manual backfill`,
+        );
+    }
+
     // ────────── case handlers ────────────────────────────────────────────────────
 
     // Case (a) — branches on the runtime foreign-position policy (ADR 0010 §1a).
@@ -1169,6 +1276,21 @@ export class ReconciliationService {
         }
         // sourceState === RECONCILING → no leading transition; finalize closes directly.
 
+        // M49 (ADR 0010 §1b amendment). Recover the closing fills from account history
+        // BEFORE finalize so the aggregate yields real realized_pnl / exit_price / fees
+        // instead of nulls. Best-effort: a fetch failure or empty result degrades to
+        // the existing null-PnL finalize (the close must never be blocked, ADR 0010 §6).
+        //
+        // M49 wave-2 (logic). A PENDING_OPEN row never received an entry fill, so by
+        // construction there are no closing fills to recover. Running the backfill would
+        // fire a false RECONCILED_MISSING_UNRECOVERABLE{no_fills_found} alert implying lost
+        // data — skip it; the null-PnL finalize below is the correct outcome for this case.
+        if (sourceState === PositionStateEnum.PENDING_OPEN) {
+            this.logger.debug(`case-b positionId=${position.id} sourceState=PENDING_OPEN never opened, no closing fills to recover - finalizing with null PnL`);
+        } else {
+            await this.backfillClosingFillsFromExchange(position, nowMs);
+        }
+
         await this.positionService.finalizeRealizedPnl(position.id, ExitReasonEnum.RECONCILED_MISSING, { nowMs, eventClass });
 
         await this.riskGate.reconcileClose(position.id, nowMs);
@@ -1485,6 +1607,12 @@ export class ReconciliationService {
         // case-(b)'s vanish path). RECONCILING → CLOSED is a single arrow in
         // §3 graph; finalize uses CLOSED as toState directly.
         const eventClass = 'reconciliation.f.intent_terminal.closed';
+
+        // M49 (ADR 0010 §1f amendment). Same closing-fill recovery as case-(b): fetch
+        // the real reduce fills and record them before finalize so RECONCILED_MISSING
+        // produces real PnL. Best-effort — degrades to null-PnL finalize on miss/failure.
+        await this.backfillClosingFillsFromExchange(position, nowMs);
+
         await this.positionService.finalizeRealizedPnl(position.id, ExitReasonEnum.RECONCILED_MISSING, { nowMs, eventClass });
 
         // Symmetric with the case-(b) vanish branch: release any monitor arm,

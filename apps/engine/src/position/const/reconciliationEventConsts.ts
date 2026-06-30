@@ -14,3 +14,12 @@ export const POSITION_ADOPTED_EVENT = 'position.adopted';
 // MANUAL_ADOPTED_UNMANAGED → CLOSED is only via operator-issued flatten);
 // instead we alert the operator and leave the row in place.
 export const POSITION_ADOPTION_VANISHED_EVENT = 'position.adoption.vanished';
+
+// M49 (ADR 0010 §1b/§1f amendment, D3.1). Emitted when a RECONCILED_MISSING close
+// finalizes with NULL realized PnL because the closing-fill recovery was
+// unavailable — `fetchMyTrades` returned no matching reducing fills
+// (`no_fills_found`) or the fetch threw (`fetch_failed`). A real-money close with
+// null PnL must not be log-grep-only; this structured event (mirroring
+// `POSITION_ADOPTION_VANISHED_EVENT`) flags the row for deferred manual backfill.
+// The close is NEVER blocked — the event is emitted alongside the null-PnL finalize.
+export const RECONCILED_MISSING_UNRECOVERABLE_EVENT = 'position.reconciled_missing.unrecoverable';

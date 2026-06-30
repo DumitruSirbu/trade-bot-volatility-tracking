@@ -168,7 +168,7 @@ export default [
         },
     },
     {
-        ignores: ['**/dist/**', '**/build/**', '**/node_modules/**', '**/coverage/**', '.agents/**', '.claude/**'],
+        ignores: ['**/dist/**', '**/build/**', '**/node_modules/**', '**/coverage/**', '.agents/**', '.claude/**', '**/research/**'],
     },
     prettierConfig,
 ];

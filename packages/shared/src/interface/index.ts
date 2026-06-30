@@ -6,6 +6,7 @@ export { ITriggerResult } from './ITriggerResult.js';
 export { IPositionStateTransitionedEvent } from './IPositionStateTransitionedEvent.js';
 export { IReconciliationDriftDetectedEvent } from './IReconciliationDriftDetectedEvent.js';
 export { IReconciliationResolvedEvent } from './IReconciliationResolvedEvent.js';
+export { IReconciledMissingUnrecoverableEvent } from './IReconciledMissingUnrecoverableEvent.js';
 export { IPositionAdoptedEvent } from './IPositionAdoptedEvent.js';
 export { IPositionAdoptionVanishedEvent } from './IPositionAdoptionVanishedEvent.js';
 export { IExchangeOverfillDriftEvent } from './IExchangeOverfillDriftEvent.js';

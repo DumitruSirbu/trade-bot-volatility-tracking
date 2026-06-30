@@ -5,6 +5,7 @@ import {
     IFundingPaymentSnapshot,
     IFundingRateSnapshot,
     IMarketInfo,
+    IMyTradeSnapshot,
     IOpenInterestSnapshot,
     IOpenOrderSnapshot,
     IOrderBookSnapshot,
@@ -76,6 +77,19 @@ export interface IExchangeClient {
     // and retry on the next sweep — funding ingestion must NOT cascade into the main
     // strategy loop).
     fetchFundingHistory(symbol: string, sinceMs: number): Promise<readonly IFundingPaymentSnapshot[]>;
+
+    // --- M49 closing-fill recovery surface (ADR 0010 §1b/§1f amendment) ---
+    //
+    // Returns the account's own fills for `symbol` in the window [`sinceMs`, `untilMs`]
+    // (inclusive lower bound; optional inclusive upper bound). The RECONCILED_MISSING
+    // finalize path is the ONLY caller — it recovers the closing fills the bot never
+    // recorded locally before aggregating realized PnL. The upper bound confines the
+    // read to this position's cycle so an unrelated reducing fill on the same symbol
+    // from a later cycle cannot be misattributed (ADR 0010 §1b/§1f amendment).
+    // Read-only account history (ccxt `fetchMyTrades` → `GET /fapi/v1/userTrades`),
+    // never an order path. Failures bubble up as ExchangeRequestException; the caller
+    // degrades to null-PnL finalize so the close is never blocked (ADR 0010 §6).
+    fetchMyTrades(symbol: string, sinceMs: number, untilMs?: number): Promise<readonly IMyTradeSnapshot[]>;
 
     // M11a W1.2 (ADR 0028 §2.2). Capability + IP-allow-list snapshot used by
     // the startup allowlist gate. Implementations merge
