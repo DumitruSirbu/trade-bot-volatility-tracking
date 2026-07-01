@@ -489,3 +489,31 @@ Close-out: `STATUS.md`, `milestone-log.md`, work-log, hypothesis-registry cross-
 - [ ] Tests: core boundaries + orchestrator gate-reject/halt/flatten + determinism + PAPER soak smoke.
 - [ ] Zero blockers, zero highs, majority of mediums resolved across review rounds.
 - [ ] 10-minute live-app PAPER smoke run clean (per the milestone live-app-smoke rule) before scribe.
+
+---
+
+## M50b increment — outcome (ADR 0050)
+
+**Status:** DONE (2026-07-01). Increment on the paper-only xmom path; **M50 milestone remains
+PLANNED** until full soak + promotion gates close.
+
+**Shipped (supersedes as-built `top_n=1` + boot-relative interval for the items below):**
+
+1. **Cascade fallback** — orchestrator walks the full `ranked` list past gate rejects until `top_n`
+   gate-approved fills; closes keyed on post-walk `retained` (no churn on held fallbacks).
+2. **`top_n` default 3** — three-name basket on shared A/B/C slots; under-fill logged when caps bind.
+3. **Fixed 01:07 UTC rebalance** — cron replaces `setInterval`; `rebalance_interval_ms` is
+   time-stop-only (WARN on mismatch).
+
+**Contract change:** `IPortfolioSelection.selected` → `ranked` (full eligible universe, dense
+rank 1..M). Pure core no longer slices to `top_n`.
+
+**Docs:** [ADR 0050](../architecture/adr/0050-xmom-cascade-topn-rebalance-anchor.md),
+[M50b forensics](../milestone-log/archive/M50b.md),
+[investigation archive](../wip/done/2026-07-01-xmom-cascade-topn-rebalance-timing.md).
+
+**Go-live blocker added:** tech-debt **H8** — momentum legs must carry real correlation labeling
+before any non-paper xmom promotion.
+
+**Operator:** reset `strategy_versions` id=20 params to `{}` before soak; confirm same-direction
+exposure cap for 3 concurrent longs.

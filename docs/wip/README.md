@@ -19,6 +19,7 @@ Scratch and investigation docs **before** they become milestone plans or ADRs.
 
 | Doc | Milestone(s) |
 |-----|----------------|
+| [2026-07-01-xmom-cascade-topn-rebalance-timing.md](done/2026-07-01-xmom-cascade-topn-rebalance-timing.md) | **M50b** — cascade fallback, `top_n` 1→3, fixed 01:07 UTC cron (ADR 0050; 2026-07-01) |
 | [2026-06-19-decisions-open-badge-vs-positions-empty.md](done/2026-06-19-decisions-open-badge-vs-positions-empty.md) | **M42** (stale-tick fill) + **M41** (outcome UX + cashflow audit, open) — Decisions OPEN vs empty Positions (2026-06-19) |
 | [m38-momentum-exit-geometry-and-strategy-routing.md](done/m38-momentum-exit-geometry-and-strategy-routing.md) | **M38** — TP geometry stale at fill time, entry staleness gate, V3 hybrid promotion (2026-06-15) |
 | [documentation-structure-reorganization.md](done/documentation-structure-reorganization.md) | **Meta** — docs hub, archive layout, agent routing (2026-06-12; implemented) |

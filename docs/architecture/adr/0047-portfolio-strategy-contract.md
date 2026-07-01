@@ -7,6 +7,8 @@
   ADR 0016 (strategy-version lineage), ADR 0004 (risk gate — unchanged), ADR 0042
   (paper exploration profile), ADR 0029 (shadow pipeline). Companion: ADR 0048
   (rebalance orchestrator — the impure outer loop that drives this pure core).
+- **Amended by:** [ADR 0050](0050-xmom-cascade-topn-rebalance-anchor.md) §2.1 / §2.5 (M50b) —
+  `selected` → `ranked` (full list); core no longer slices to `top_n`; `top_n` is orchestrator-only.
 
 > **ADR numbering note.** The next free number after `0046` is **0047**; this ADR uses it.
 
@@ -38,6 +40,10 @@ gated on a down-regime soak. M50 is therefore **paper + shadow only — no live 
 ## 2. Decision
 
 ### 2.1 `IPortfolioStrategy` — a new, separate extension point (OCP)
+
+> **ADR 0050 amendment (M50b).** `IPortfolioSelection.selected` is renamed `ranked` and returns
+> the **full** eligible universe (dense rank 1..M). The core ranks only; `top_n` is consumed by
+> the orchestrator cascade (ADR 0048 §2.4, amended). Code is authoritative over this snippet.
 
 A new interface, **distinct from and not extending `IStrategy`**. It operates over a
 universe snapshot and returns a ranked, sized-by-rank selection of symbols:

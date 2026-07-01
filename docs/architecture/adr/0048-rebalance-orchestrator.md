@@ -8,6 +8,8 @@
   (execution + idempotency + partial fills + SL/TP — **unchanged**), ADR 0009/0010
   (position state machine + reconciliation per `(symbol, side)` — **unchanged**), ADR 0029
   (shadow), ADR 0042 (paper gate), ADR 0032 (paper mode).
+- **Amended by:** [ADR 0050](0050-xmom-cascade-topn-rebalance-anchor.md) §2.2 / §2.4 / §5 (M50b) —
+  fixed 01:07 UTC cron; cascade close ordering keyed on `retained`; core returns full `ranked` list.
 
 > **ADR numbering note.** The next free number after `0047` is **0048**; this ADR uses it.
 
@@ -50,6 +52,10 @@ keeps the ranking core (ADR 0047) free of any clock dependency: `nowMs` originat
 flows in as data.
 
 ### 2.2 `RebalanceSchedulerService` — interval emitter, deterministic clock
+
+> **ADR 0050 amendment (M50b).** Cadence is a fixed daily cron at **01:07 UTC** (`7 1 * * *`),
+> not `rebalance_interval_ms` from params. `rebalance_interval_ms` remains for time-stop sizing
+> only (must equal 24h; WARN on mismatch). Fast tests use the event seam, not a shortened interval.
 
 A NestJS service whose sole responsibility is to **emit `UNIVERSE_REBALANCE_DUE_EVENT` on the
 `rebalance_interval_ms` cadence**. It does **no ranking**.
@@ -98,6 +104,10 @@ Listens for `UNIVERSE_REBALANCE_DUE_EVENT`. On each event it:
 - Risk-reducing **close** intents pass under a halt (ADR 0046); **open** intents do not.
 
 ### 2.4 Ordering within a rebalance — closes before opens
+
+> **ADR 0050 amendment (M50b).** Three-tier ordering: (1) definite de-rank closes — symbol absent
+> from `ranked`; (2) cascade walk — hold/open until `top_n` gate-approved fills; (3) residual
+> de-rank closes — in `ranked` but not in post-walk `retained`. See ADR 0050 §2.2.
 
 Within one rebalance the orchestrator emits **closes first, then opens**, so a freed slot
 from a de-ranked symbol is available to a newly-selected one in the same cycle. This ordering

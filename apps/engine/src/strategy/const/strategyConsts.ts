@@ -12,9 +12,16 @@ export const ACTIVE_STRATEGY_VERSION_ID_ENV = 'ACTIVE_STRATEGY_VERSION_ID';
 // Number of milliseconds in one minute, for the time-stop target arithmetic.
 export const MS_PER_MINUTE = 60_000;
 
-// Dynamic-interval name registered against the global SchedulerRegistry by the M50 rebalance
-// scheduler (registered only under the paper gate; deleted on module destroy).
-export const MOMENTUM_REBALANCE_INTERVAL_NAME = 'momentum-rebalance';
+// Fixed 24h momentum rebalance period (ADR 0050 §4.3). Cadence is pinned to the cron below;
+// rebalance_interval_ms in strategy_versions must match for time-stop sizing.
+export const MOMENTUM_REBALANCE_PERIOD_MS = 86_400_000;
+
+// Standard 5-field cron: daily at 01:07 UTC (ADR 0050 §4.2 — past funding, before pg_dump).
+export const MOMENTUM_REBALANCE_CRON_EXPRESSION = '7 1 * * *';
+
+// Dynamic cron job name registered against SchedulerRegistry by RebalanceSchedulerService
+// (registered only under the paper gate; deleted on module destroy).
+export const MOMENTUM_REBALANCE_CRON_NAME = 'momentum-rebalance';
 
 // --- v1 mean-reversion exhaustion-confirmation tolerances (ADR 0003 §4, M3 brief) ---
 

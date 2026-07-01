@@ -1,42 +1,43 @@
 /**
- * Unit tests for RebalanceSchedulerService (ADR 0048 §2.2).
+ * Unit tests for RebalanceSchedulerService (ADR 0048 §2.2, amended ADR 0050 §4).
  *
- * All deps are plain jest.fn() mocks — no real DB, no real NestJS DI, no real timers.
- * jest.useFakeTimers() is active for every test so setInterval calls are interceptable.
+ * All deps are plain jest.fn() mocks — no real DB, no real NestJS DI.
+ * CronJob instances are stopped in afterEach so the live timer does not leak.
  *
- * Coverage map (all mandatory adversarial cases from the M50 QA mandate):
- *   Case 1 — non-paper env + version ID set          → WARN, no interval, no emit
- *   Case 2 — paper env + version ID null             → WARN, no interval, no emit
- *   Case 3 — paper env + version ID set, row missing → WARN, no interval, no emit
- *   Case 4 — happy path: paper + version + valid row → interval registered, tick emits event
+ * Coverage map:
+ *   Case 1 — non-paper env + version ID set          → WARN, no cron, no emit
+ *   Case 2 — paper env + version ID null             → WARN, no cron, no emit
+ *   Case 3 — paper env + version ID set, row missing → WARN, no cron, no emit
+ *   Case 4 — happy path: paper + version + valid row → cron registered, tick emits event
  *   Case 5 — ClockPort injection                     → emitted nowMs equals fake clock value
- *   Case 6 — onModuleDestroy cleans up when active   → deleteInterval called
- *             onModuleDestroy is no-op when dormant  → deleteInterval NOT called
+ *   Case 6 — onModuleDestroy cleans up when active   → deleteCronJob called
+ *   Case 7 — rebalance_interval_ms mismatch          → WARN, cron still registered
  */
 
-import { ExchangeEnvironmentEnum, UNIVERSE_REBALANCE_DUE_EVENT } from '@bot/shared';
+import { ExchangeEnvironmentEnum, momentumParamsSchema, UNIVERSE_REBALANCE_DUE_EVENT } from '@bot/shared';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Logger } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 
 import { AppConfigService } from '../../src/config/service/AppConfigService';
+import { MOMENTUM_REBALANCE_CRON_NAME } from '../../src/strategy/const';
 import { StrategyVersionRepository } from '../../src/strategy/repository/StrategyVersionRepository';
 import { RebalanceSchedulerService } from '../../src/strategy/service/RebalanceSchedulerService';
 
 // ─── fixture builders ─────────────────────────────────────────────────────────
 
 const ACTIVE_VERSION_ID = 7;
-const REBALANCE_INTERVAL_MS = 86_400_000;
 const FAKE_NOW_MS = 1_700_000_000_000;
 
-function buildValidRow() {
+function buildValidRow(overrides: { rebalance_interval_ms?: number } = {}) {
     return {
         id: ACTIVE_VERSION_ID,
         name: 'xmom',
         version: 1,
         params: {
-            top_n: 1,
+            top_n: 3,
             lookback_ms: 86_400_000,
-            rebalance_interval_ms: REBALANCE_INTERVAL_MS,
+            rebalance_interval_ms: overrides.rebalance_interval_ms ?? 86_400_000,
             min_universe_size: 20,
             xmom_atr_stop_multiplier: 2.0,
             xmom_min_rr: 1.5,
@@ -47,10 +48,12 @@ function buildValidRow() {
 interface IStubs {
     config: jest.Mocked<Pick<AppConfigService, 'exchangeEnv' | 'activePortfolioStrategyVersionId'>>;
     strategyVersions: { findById: jest.Mock };
-    schedulerRegistry: { addInterval: jest.Mock; deleteInterval: jest.Mock };
+    schedulerRegistry: { addCronJob: jest.Mock; deleteCronJob: jest.Mock };
     events: { emit: jest.Mock };
     clock: { nowMs: jest.Mock };
 }
+
+const startedCronJobs: Array<{ fireOnTick: () => void; stop: () => void }> = [];
 
 function buildStubs(overrides: Partial<IStubs> = {}): IStubs {
     return {
@@ -59,7 +62,12 @@ function buildStubs(overrides: Partial<IStubs> = {}): IStubs {
             activePortfolioStrategyVersionId: ACTIVE_VERSION_ID,
         } as jest.Mocked<Pick<AppConfigService, 'exchangeEnv' | 'activePortfolioStrategyVersionId'>>,
         strategyVersions: { findById: jest.fn().mockResolvedValue(buildValidRow()) },
-        schedulerRegistry: { addInterval: jest.fn(), deleteInterval: jest.fn() },
+        schedulerRegistry: {
+            addCronJob: jest.fn((_name: string, job: { fireOnTick: () => void; stop: () => void }) => {
+                startedCronJobs.push(job);
+            }),
+            deleteCronJob: jest.fn(),
+        },
         events: { emit: jest.fn() },
         clock: { nowMs: jest.fn().mockReturnValue(FAKE_NOW_MS) },
         ...overrides,
@@ -76,14 +84,12 @@ function buildService(stubs: IStubs): RebalanceSchedulerService {
     );
 }
 
-// ─── suite setup/teardown ─────────────────────────────────────────────────────
-
-beforeEach(() => {
-    jest.useFakeTimers();
-});
-
 afterEach(() => {
-    jest.useRealTimers();
+    const jobs = startedCronJobs.splice(0);
+    for (const job of jobs) {
+        job.stop();
+    }
+
     jest.clearAllMocks();
 });
 
@@ -102,7 +108,7 @@ describe('RebalanceSchedulerService — paper gate (dormant paths)', () => {
         await service.onModuleInit();
 
         expect(stubs.strategyVersions.findById).not.toHaveBeenCalled();
-        expect(stubs.schedulerRegistry.addInterval).not.toHaveBeenCalled();
+        expect(stubs.schedulerRegistry.addCronJob).not.toHaveBeenCalled();
         expect(stubs.events.emit).not.toHaveBeenCalled();
     });
 
@@ -117,7 +123,7 @@ describe('RebalanceSchedulerService — paper gate (dormant paths)', () => {
 
         await service.onModuleInit();
 
-        expect(stubs.schedulerRegistry.addInterval).not.toHaveBeenCalled();
+        expect(stubs.schedulerRegistry.addCronJob).not.toHaveBeenCalled();
         expect(stubs.events.emit).not.toHaveBeenCalled();
     });
 
@@ -133,7 +139,7 @@ describe('RebalanceSchedulerService — paper gate (dormant paths)', () => {
         await service.onModuleInit();
 
         expect(stubs.strategyVersions.findById).not.toHaveBeenCalled();
-        expect(stubs.schedulerRegistry.addInterval).not.toHaveBeenCalled();
+        expect(stubs.schedulerRegistry.addCronJob).not.toHaveBeenCalled();
         expect(stubs.events.emit).not.toHaveBeenCalled();
     });
 
@@ -146,7 +152,7 @@ describe('RebalanceSchedulerService — paper gate (dormant paths)', () => {
         await service.onModuleInit();
 
         expect(stubs.strategyVersions.findById).toHaveBeenCalledWith(ACTIVE_VERSION_ID);
-        expect(stubs.schedulerRegistry.addInterval).not.toHaveBeenCalled();
+        expect(stubs.schedulerRegistry.addCronJob).not.toHaveBeenCalled();
         expect(stubs.events.emit).not.toHaveBeenCalled();
     });
 });
@@ -154,38 +160,27 @@ describe('RebalanceSchedulerService — paper gate (dormant paths)', () => {
 // ─── happy path ───────────────────────────────────────────────────────────────
 
 describe('RebalanceSchedulerService — happy path (paper + version + valid row)', () => {
-    it('registers the interval with the correct cadence from params', async () => {
+    it('registers the fixed UTC cron job', async () => {
         const stubs = buildStubs();
         const service = buildService(stubs);
 
         await service.onModuleInit();
 
-        expect(stubs.schedulerRegistry.addInterval).toHaveBeenCalledTimes(1);
-        expect(stubs.schedulerRegistry.addInterval).toHaveBeenCalledWith('momentum-rebalance', expect.anything());
+        expect(stubs.schedulerRegistry.addCronJob).toHaveBeenCalledTimes(1);
+        expect(stubs.schedulerRegistry.addCronJob).toHaveBeenCalledWith(MOMENTUM_REBALANCE_CRON_NAME, expect.anything());
     });
 
-    it('emits UNIVERSE_REBALANCE_DUE_EVENT with nowMs from ClockPort when the interval fires', async () => {
+    it('emits UNIVERSE_REBALANCE_DUE_EVENT with nowMs from ClockPort when the cron fires', async () => {
         const stubs = buildStubs();
         const service = buildService(stubs);
 
         await service.onModuleInit();
 
-        // Advance fake timers by one full cadence to fire the interval callback.
-        jest.advanceTimersByTime(REBALANCE_INTERVAL_MS);
+        expect(startedCronJobs).toHaveLength(1);
+        startedCronJobs[0].fireOnTick();
 
         expect(stubs.events.emit).toHaveBeenCalledTimes(1);
         expect(stubs.events.emit).toHaveBeenCalledWith(UNIVERSE_REBALANCE_DUE_EVENT, { nowMs: FAKE_NOW_MS });
-    });
-
-    it('emits multiple times when the timer fires more than once', async () => {
-        const stubs = buildStubs();
-        const service = buildService(stubs);
-
-        await service.onModuleInit();
-
-        jest.advanceTimersByTime(REBALANCE_INTERVAL_MS * 3);
-
-        expect(stubs.events.emit).toHaveBeenCalledTimes(3);
     });
 
     it('emits nowMs from ClockPort — not Date.now() — so the value is exactly what the fake clock returns', async () => {
@@ -196,28 +191,42 @@ describe('RebalanceSchedulerService — happy path (paper + version + valid row)
         const service = buildService(stubs);
 
         await service.onModuleInit();
-        jest.advanceTimersByTime(REBALANCE_INTERVAL_MS);
+        startedCronJobs[0].fireOnTick();
 
         const emittedPayload = stubs.events.emit.mock.calls[0][1] as { nowMs: number };
         expect(emittedPayload.nowMs).toBe(CONTROLLED_NOW);
+    });
+
+    it('warns but still registers when rebalance_interval_ms does not match the fixed 24h period', async () => {
+        const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+        const stubs = buildStubs({
+            strategyVersions: { findById: jest.fn().mockResolvedValue(buildValidRow({ rebalance_interval_ms: 300_000 })) },
+        });
+        const service = buildService(stubs);
+
+        await service.onModuleInit();
+
+        expect(stubs.schedulerRegistry.addCronJob).toHaveBeenCalledTimes(1);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('rebalance_interval_ms=300000'));
+        warnSpy.mockRestore();
     });
 });
 
 // ─── onModuleDestroy ──────────────────────────────────────────────────────────
 
 describe('RebalanceSchedulerService — onModuleDestroy', () => {
-    it('deletes the registered interval when the service was active', async () => {
+    it('deletes the registered cron job when the service was active', async () => {
         const stubs = buildStubs();
         const service = buildService(stubs);
 
         await service.onModuleInit();
         service.onModuleDestroy();
 
-        expect(stubs.schedulerRegistry.deleteInterval).toHaveBeenCalledTimes(1);
-        expect(stubs.schedulerRegistry.deleteInterval).toHaveBeenCalledWith('momentum-rebalance');
+        expect(stubs.schedulerRegistry.deleteCronJob).toHaveBeenCalledTimes(1);
+        expect(stubs.schedulerRegistry.deleteCronJob).toHaveBeenCalledWith(MOMENTUM_REBALANCE_CRON_NAME);
     });
 
-    it('does NOT call deleteInterval when the service stayed dormant (non-paper env)', async () => {
+    it('does NOT call deleteCronJob when the service stayed dormant (non-paper env)', async () => {
         const stubs = buildStubs({
             config: {
                 exchangeEnv: ExchangeEnvironmentEnum.LIVE,
@@ -229,10 +238,10 @@ describe('RebalanceSchedulerService — onModuleDestroy', () => {
         await service.onModuleInit();
         service.onModuleDestroy();
 
-        expect(stubs.schedulerRegistry.deleteInterval).not.toHaveBeenCalled();
+        expect(stubs.schedulerRegistry.deleteCronJob).not.toHaveBeenCalled();
     });
 
-    it('does NOT call deleteInterval when the service stayed dormant (null version ID)', async () => {
+    it('does NOT call deleteCronJob when the service stayed dormant (null version ID)', async () => {
         const stubs = buildStubs({
             config: {
                 exchangeEnv: ExchangeEnvironmentEnum.PAPER,
@@ -244,10 +253,10 @@ describe('RebalanceSchedulerService — onModuleDestroy', () => {
         await service.onModuleInit();
         service.onModuleDestroy();
 
-        expect(stubs.schedulerRegistry.deleteInterval).not.toHaveBeenCalled();
+        expect(stubs.schedulerRegistry.deleteCronJob).not.toHaveBeenCalled();
     });
 
-    it('does NOT call deleteInterval when dormant due to missing strategy_versions row', async () => {
+    it('does NOT call deleteCronJob when dormant due to missing strategy_versions row', async () => {
         const stubs = buildStubs({
             strategyVersions: { findById: jest.fn().mockResolvedValue(null) },
         });
@@ -256,6 +265,29 @@ describe('RebalanceSchedulerService — onModuleDestroy', () => {
         await service.onModuleInit();
         service.onModuleDestroy();
 
-        expect(stubs.schedulerRegistry.deleteInterval).not.toHaveBeenCalled();
+        expect(stubs.schedulerRegistry.deleteCronJob).not.toHaveBeenCalled();
+    });
+});
+
+describe('RebalanceSchedulerService — invalid params', () => {
+    it('stays dormant when strategy_versions.params fail Zod parse', async () => {
+        const stubs = buildStubs({
+            strategyVersions: {
+                findById: jest.fn().mockResolvedValue({
+                    ...buildValidRow(),
+                    params: { top_n: 0 },
+                }),
+            },
+        });
+        const service = buildService(stubs);
+
+        await service.onModuleInit();
+
+        expect(stubs.schedulerRegistry.addCronJob).not.toHaveBeenCalled();
+        expect(stubs.events.emit).not.toHaveBeenCalled();
+    });
+
+    it('momentumParamsSchema default top_n is 3 (ADR 0050)', () => {
+        expect(momentumParamsSchema.parse({}).top_n).toBe(3);
     });
 });

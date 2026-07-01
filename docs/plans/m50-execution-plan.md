@@ -201,4 +201,26 @@ Cycle review/fix until zero blockers, zero highs, majority of mediums resolved.
 - 10-min live-app smoke: app boots in paper with the path active and in live with it dormant.
 - Scribe updates `docs/STATUS.md`, `docs/plans/README.md` (M50 → DONE), `docs/milestone-log.md`,
   `docs/work-log.md`, and the ADR 0004 deferred note for the M50b momentum cap model.
+
+---
+
+## M50b increment — outcome (ADR 0050, DONE 2026-07-01)
+
+**Not a full M50 close.** Paper-path increment shipped while M50 remains PLANNED pending soak
+promotion gates. Full forensics: [`docs/milestone-log/archive/M50b.md`](../milestone-log/archive/M50b.md).
+
+| Deliverable | Status |
+|-------------|--------|
+| Rank-cascade in orchestrator (`retained`-keyed two-tier closes) | DONE |
+| `IPortfolioSelection.ranked` (full list; core no longer slices `top_n`) | DONE |
+| `top_n` schema default 3 | DONE |
+| Fixed 01:07 UTC cron (`7 1 * * *`); `rebalance_interval_ms` time-stop-only | DONE |
+| ADR 0050 accepted + indexed | DONE |
+| Tech-debt H8 (momentum correlation labeling) | DONE |
+| Tests (65 targeted) + review (zero blockers/highs) | DONE |
+
+**Operator before next soak:** reset `strategy_versions` id=20 `params` to `{}`; verify
+`MAX_SAME_DIRECTION_EXPOSURE_USDT` for 3-leg basket.
+
+**Still deferred:** disjoint slot namespace (D4), per-strategy caps, M50 promotion gates (OQ1).
 </content>
