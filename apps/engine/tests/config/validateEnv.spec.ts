@@ -297,6 +297,50 @@ describe('validateEnv', () => {
         });
     });
 
+    // ─── ADR 0049 — ACTIVE_STRATEGY_VERSION_ID becomes optional ────────────────
+
+    describe('ADR 0049 — ACTIVE_STRATEGY_VERSION_ID optional (legacy path dormancy)', () => {
+        it('passes validation when ACTIVE_STRATEGY_VERSION_ID is absent (legacy path boots dormant)', () => {
+            const env = buildEnv();
+            delete env['ACTIVE_STRATEGY_VERSION_ID'];
+
+            expect(() => validateEnv(env)).not.toThrow();
+        });
+
+        it('resolves ACTIVE_STRATEGY_VERSION_ID to undefined when absent', () => {
+            const env = buildEnv();
+            delete env['ACTIVE_STRATEGY_VERSION_ID'];
+
+            const result = validateEnv(env);
+
+            expect(result.ACTIVE_STRATEGY_VERSION_ID).toBeUndefined();
+        });
+
+        it('still coerces and accepts ACTIVE_STRATEGY_VERSION_ID when present and valid', () => {
+            const result = validateEnv(buildEnv({ ACTIVE_STRATEGY_VERSION_ID: '7' }));
+
+            expect(result.ACTIVE_STRATEGY_VERSION_ID).toBe(7);
+        });
+
+        it('throws when ACTIVE_STRATEGY_VERSION_ID is present but 0 (malformed, must not silently disable)', () => {
+            expect(() => validateEnv(buildEnv({ ACTIVE_STRATEGY_VERSION_ID: '0' }))).toThrow(/ACTIVE_STRATEGY_VERSION_ID/);
+        });
+
+        it('throws when ACTIVE_STRATEGY_VERSION_ID is present but negative', () => {
+            expect(() => validateEnv(buildEnv({ ACTIVE_STRATEGY_VERSION_ID: '-1' }))).toThrow(/ACTIVE_STRATEGY_VERSION_ID/);
+        });
+
+        it('throws when ACTIVE_STRATEGY_VERSION_ID is present but a non-numeric string', () => {
+            expect(() => validateEnv(buildEnv({ ACTIVE_STRATEGY_VERSION_ID: 'abc' }))).toThrow(/ACTIVE_STRATEGY_VERSION_ID/);
+        });
+
+        it('treats an empty-string ACTIVE_STRATEGY_VERSION_ID as absent (dormant), not malformed', () => {
+            const result = validateEnv(buildEnv({ ACTIVE_STRATEGY_VERSION_ID: '' }));
+
+            expect(result.ACTIVE_STRATEGY_VERSION_ID).toBeUndefined();
+        });
+    });
+
     describe('M25 — PAPER_MAX_IDIOSYNCRATIC_SLOTS validation', () => {
         it('accepts value 1 (minimum allowed)', () => {
             const result = validateEnv(buildEnv({ PAPER_MAX_IDIOSYNCRATIC_SLOTS: '1' }));

@@ -12,6 +12,10 @@ export const ACTIVE_STRATEGY_VERSION_ID_ENV = 'ACTIVE_STRATEGY_VERSION_ID';
 // Number of milliseconds in one minute, for the time-stop target arithmetic.
 export const MS_PER_MINUTE = 60_000;
 
+// Dynamic-interval name registered against the global SchedulerRegistry by the M50 rebalance
+// scheduler (registered only under the paper gate; deleted on module destroy).
+export const MOMENTUM_REBALANCE_INTERVAL_NAME = 'momentum-rebalance';
+
 // --- v1 mean-reversion exhaustion-confirmation tolerances (ADR 0003 §4, M3 brief) ---
 
 // Take-profit target is VWAP pulled in by this many sigma for conservatism: TP sits at

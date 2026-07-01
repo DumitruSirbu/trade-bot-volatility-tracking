@@ -13,6 +13,7 @@ import { ExchangeModule } from './exchange/ExchangeModule';
 import { ExecutionModule } from './execution/ExecutionModule';
 import { HealthModule } from './health/HealthModule';
 import { MarketDataModule } from './market-data/MarketDataModule';
+import { PortfolioStrategyModule } from './strategy/PortfolioStrategyModule';
 import { PositionModule } from './position/PositionModule';
 import { PromotionModule } from './promotion/PromotionModule';
 import { ReadApiModule } from './read-api/ReadApiModule';
@@ -41,6 +42,7 @@ import { WsModule } from './ws/WsModule';
         ReadApiModule,
         WsModule,
         BackupModule,
+        PortfolioStrategyModule,
         BootstrapModule,
     ],
 })

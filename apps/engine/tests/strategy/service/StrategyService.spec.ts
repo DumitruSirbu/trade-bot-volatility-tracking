@@ -79,7 +79,7 @@ function buildVersionRow(
 // Build plain mocks for all service dependencies (updated for M4 constructor)
 function buildMocks() {
     const config = {
-        activeStrategyVersionId: 1,
+        activeStrategyVersionId: 1 as number | null,
         accountCapitalUsdt: 1000,
         dailyLossLimitUsdt: DAILY_LOSS_LIMIT_USDT,
         weeklyLossLimitUsdt: WEEKLY_LOSS_LIMIT_USDT,
@@ -237,6 +237,138 @@ describe('StrategyService', () => {
             const service = buildService(mocks);
 
             await expect(service.onModuleInit()).rejects.toThrow(StrategyConfigException);
+        });
+    });
+
+    // ADR 0049 — the legacy single-symbol path becomes dormant (not fatal) when
+    // ACTIVE_STRATEGY_VERSION_ID is unset. onModuleInit must not throw and must not touch
+    // strategyVersions/registry; onVolatilityDetected must then no-op with zero collaborator
+    // interactions.
+    describe('onModuleInit — dormant boot (ADR 0049)', () => {
+        it('does not throw when activeStrategyVersionId is null', async () => {
+            const mocks = buildMocks();
+            mocks.config.activeStrategyVersionId = null;
+            const service = buildService(mocks);
+
+            await expect(service.onModuleInit()).resolves.not.toThrow();
+        });
+
+        it('does not call strategyVersions.findById when activeStrategyVersionId is null', async () => {
+            const mocks = buildMocks();
+            mocks.config.activeStrategyVersionId = null;
+            const service = buildService(mocks);
+
+            await service.onModuleInit();
+
+            expect(mocks.strategyVersions.findById).not.toHaveBeenCalled();
+        });
+
+        it('does not call registry.resolve when activeStrategyVersionId is null', async () => {
+            const mocks = buildMocks();
+            mocks.config.activeStrategyVersionId = null;
+            const service = buildService(mocks);
+
+            await service.onModuleInit();
+
+            expect(mocks.registry.resolve).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('onVolatilityDetected — dormant no-op (ADR 0049)', () => {
+        it('does not throw when the legacy path is dormant', async () => {
+            const mocks = buildMocks();
+            mocks.config.activeStrategyVersionId = null;
+            const service = buildService(mocks);
+            await service.onModuleInit();
+
+            await expect(service.onVolatilityDetected(buildEvent())).resolves.not.toThrow();
+        });
+
+        it('does not record a decision when the legacy path is dormant', async () => {
+            const mocks = buildMocks();
+            mocks.config.activeStrategyVersionId = null;
+            const service = buildService(mocks);
+            await service.onModuleInit();
+
+            await service.onVolatilityDetected(buildEvent());
+
+            expect(mocks.decisions.record).not.toHaveBeenCalled();
+        });
+
+        it('does not invoke the active strategy when the legacy path is dormant', async () => {
+            const mocks = buildMocks();
+            mocks.config.activeStrategyVersionId = null;
+            const service = buildService(mocks);
+            await service.onModuleInit();
+
+            await service.onVolatilityDetected(buildEvent());
+
+            expect(mocks.strategyImpl.evaluate).not.toHaveBeenCalled();
+        });
+
+        it('does not read open positions (no activeParams/activeStrategy access) when dormant', async () => {
+            const mocks = buildMocks();
+            mocks.config.activeStrategyVersionId = null;
+            const service = buildService(mocks);
+            await service.onModuleInit();
+
+            await service.onVolatilityDetected(buildEvent());
+
+            expect(mocks.positions.findOpenBySymbol).not.toHaveBeenCalled();
+        });
+
+        it('does not call the risk gate when dormant', async () => {
+            const mocks = buildMocks();
+            mocks.config.activeStrategyVersionId = null;
+            const service = buildService(mocks);
+            await service.onModuleInit();
+
+            await service.onVolatilityDetected(buildEvent());
+
+            expect(mocks.riskGate.evaluate).not.toHaveBeenCalled();
+        });
+
+        it('does not emit order.intent.approved when dormant', async () => {
+            const mocks = buildMocks();
+            mocks.config.activeStrategyVersionId = null;
+            const service = buildService(mocks);
+            await service.onModuleInit();
+
+            await service.onVolatilityDetected(buildEvent());
+
+            expect(mocks.events.emit).not.toHaveBeenCalled();
+        });
+
+        it('does not fire the shadow orchestrator when dormant', async () => {
+            const mocks = buildMocks();
+            mocks.config.activeStrategyVersionId = null;
+            const service = buildService(mocks);
+            await service.onModuleInit();
+
+            await service.onVolatilityDetected(buildEvent());
+
+            expect(mocks.shadowOrchestrator.runShadows).not.toHaveBeenCalled();
+        });
+
+        it('has zero interactions with every strategy collaborator across a full dormant trigger', async () => {
+            const mocks = buildMocks();
+            mocks.config.activeStrategyVersionId = null;
+            const service = buildService(mocks);
+            await service.onModuleInit();
+
+            await service.onVolatilityDetected(buildEvent());
+
+            expect(mocks.strategyVersions.findById).not.toHaveBeenCalled();
+            expect(mocks.registry.resolve).not.toHaveBeenCalled();
+            expect(mocks.strategyImpl.evaluate).not.toHaveBeenCalled();
+            expect(mocks.positions.findOpenBySymbol).not.toHaveBeenCalled();
+            expect(mocks.decisions.record).not.toHaveBeenCalled();
+            expect(mocks.riskGate.evaluate).not.toHaveBeenCalled();
+            expect(mocks.sizer.size).not.toHaveBeenCalled();
+            expect(mocks.instrumentPort.findConstraints).not.toHaveBeenCalled();
+            expect(mocks.universe.findOpenMembership).not.toHaveBeenCalled();
+            expect(mocks.events.emit).not.toHaveBeenCalled();
+            expect(mocks.shadowOrchestrator.runShadows).not.toHaveBeenCalled();
         });
     });
 

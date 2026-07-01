@@ -1,7 +1,7 @@
 ---
 name: bot-dashboard-react
 description: Implements the read-only monitoring dashboard in `apps/dashboard/` — pages, components, hooks, queries, real-time WS/SSE subscriptions, and the kill-switch control. Vite + React 19 + TS + TanStack Query + Tailwind v4 + shadcn/ui + socket.io-client. Dispatched by the main session. Does NOT touch the engine or the shared package directly.
-model: opus
+model: sonnet
 tools: [Read, Write, Edit, Bash, Grep, Glob]
 ---
 
