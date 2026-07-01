@@ -15,7 +15,12 @@ import { createHash } from 'node:crypto';
 
 import { AppConfigService } from '../../config/service';
 import { ICreateOrderRequest, IEngineExecutionClient, IExchangeOrderSnapshot } from '../../exchange/interface';
-import { PAPER_DEFAULT_COIN_TIER_LABEL, PAPER_EXCHANGE_ORDER_ID_PREFIX } from '../const';
+import {
+    PAPER_ACTIVE_VERSION_NAMESPACE_NONE,
+    PAPER_ACTIVE_VERSION_NAMESPACE_PREFIX,
+    PAPER_DEFAULT_COIN_TIER_LABEL,
+    PAPER_EXCHANGE_ORDER_ID_PREFIX,
+} from '../const';
 import { PaperModeNotImplementedException } from '../exception';
 import { PaperSimulatorIdempotencyRepository } from '../repository/PaperSimulatorIdempotencyRepository';
 import { PaperFillSimulator, IPaperSimulatorContext } from './PaperFillSimulator';
@@ -50,10 +55,12 @@ import { PaperFillSimulator, IPaperSimulatorContext } from './PaperFillSimulator
 //     - `orderIntentId`   → SHA-256 of a stable hash of intent fields so a
 //                            SIGKILL replay of the same intent re-derives the
 //                            same id from the persisted decision row.
-//     - `versionNamespace` → `paper.active.v<ACTIVE_STRATEGY_VERSION_ID>` so
-//                            shadow versions (R2d future) get distinct
-//                            namespaces per D17 without coupling to a
-//                            yet-to-land shadow-evaluator runtime.
+//     - `versionNamespace` → `paper.active.v<ACTIVE_VERSION_ID>` where the id
+//                            is the actually-executing version (legacy single-
+//                            symbol id when set, else the M50 portfolio id;
+//                            ADR 0047/0049), so shadow versions (R2d future)
+//                            get distinct namespaces per D17 without coupling
+//                            to a yet-to-land shadow-evaluator runtime.
 //   This keeps shared/ untouched; if a future wave needs cross-process
 //   `orderIntentId` parity (e.g. for cross-version comparison tooling), the
 //   shared `IOrderIntent` would need an architect-adjudicated extension.
@@ -309,9 +316,25 @@ export class PaperExecutionClient implements IExecutionClient, IEngineExecutionC
 
     // `paper.active.v<id>` namespace per D17 — distinct from any shadow
     // version's namespace so the idempotency-ledger composite key cannot
-    // collide between active and shadow runs.
+    // collide between active and shadow runs, and encodes which strategy
+    // version actually executed the order.
+    //
+    // ADR 0049 made the legacy single-symbol version id nullable (the VWAP
+    // path boots dormant), and M50 (ADR 0047) added the portfolio version id.
+    // We namespace on whichever version is actually active: the legacy id when
+    // set (it is the executing strategy in that case), otherwise the portfolio
+    // id. Only when genuinely neither is set do we fall back to an explicit
+    // sentinel — never the literal `vnull` that would silently defeat the
+    // version-encoding purpose of the namespace.
     private resolveVersionNamespace(): string {
-        return `paper.active.v${this.appConfig.activeStrategyVersionId}`;
+        const activeVersionId = this.resolveActiveVersionId();
+        const versionLabel = activeVersionId ?? PAPER_ACTIVE_VERSION_NAMESPACE_NONE;
+
+        return `${PAPER_ACTIVE_VERSION_NAMESPACE_PREFIX}${versionLabel}`;
+    }
+
+    private resolveActiveVersionId(): number | null {
+        return this.appConfig.activeStrategyVersionId ?? this.appConfig.activePortfolioStrategyVersionId;
     }
 
     private mapFillToOrder(intent: IOrderIntent, context: IPaperSimulatorContext, fill: ISimulatedFillCore, simulatedFillId: string): IOrder {

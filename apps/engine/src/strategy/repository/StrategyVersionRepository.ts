@@ -38,7 +38,7 @@ export class StrategyVersionRepository extends BaseRepository<StrategyVersionEnt
     // The `_excludeVersionId` parameter is retained for API stability but no
     // longer used as a filter — the status discriminator is sufficient to
     // exclude the active version.
-    async findActiveShadows(_excludeVersionId: number): Promise<StrategyVersionEntity[]> {
+    async findActiveShadows(_excludeVersionId: number | null): Promise<StrategyVersionEntity[]> {
         return this.repository.find({
             where: { status: StrategyStatusEnum.SHADOW },
             order: { version: 'ASC' },

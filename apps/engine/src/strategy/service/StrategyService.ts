@@ -86,6 +86,10 @@ export class StrategyService implements OnModuleInit {
     private activeParams!: IStrategyParams;
     private activeStrategyVersionId!: number;
 
+    // ADR 0049 — raised at boot when ACTIVE_STRATEGY_VERSION_ID is unset. When dormant the
+    // legacy single-symbol (VWAP) path never resolves a strategy and every entry point no-ops.
+    private dormant = false;
+
     // Per-bar correlated-open buffer (ADR 0004 §4). In-memory, per-orchestrator state — a
     // restart loses at most one bar's pending correlated entries (the safe outcome).
     private readonly correlatedBuffer = new Map<number, IBufferedCandidate[]>();
@@ -108,6 +112,17 @@ export class StrategyService implements OnModuleInit {
 
     async onModuleInit(): Promise<void> {
         const versionId = this.config.activeStrategyVersionId;
+
+        // ADR 0049 — no id selected: the legacy single-symbol path stays dormant. No strategy is
+        // resolved and no StrategyConfigException is thrown; only a genuine misconfiguration
+        // (a selected id matching no row) below remains fatal.
+        if (versionId === null) {
+            this.dormant = true;
+            this.logger.log('legacy single-symbol strategy path dormant — ACTIVE_STRATEGY_VERSION_ID unset');
+
+            return;
+        }
+
         const row = await this.strategyVersions.findById(versionId);
 
         if (row === null) {
@@ -122,8 +137,20 @@ export class StrategyService implements OnModuleInit {
         this.logger.log(`Active strategy ${row.name}:${row.version} (id=${row.id}, direction=${row.direction}) resolved`);
     }
 
+    // ADR 0049 — true when no legacy strategy is selected. Every legacy entry point checks this
+    // one intention-revealing condition rather than probing an unresolved activeStrategy field.
+    private isDormant(): boolean {
+        return this.dormant;
+    }
+
     @OnEvent(VOLATILITY_DETECTED_EVENT)
     async onVolatilityDetected(event: IVolatilityDetectedEvent): Promise<void> {
+        // ADR 0049 — a retired/unselected legacy path is a silent no-op: return before any
+        // activeParams/activeStrategy access, flushClosedBars, or shadow-orchestrator fire.
+        if (this.isDormant()) {
+            return;
+        }
+
         const nowMs = event.entryCandleOpenTime + CANDLE_INTERVAL_MS;
 
         await this.flushClosedBars(event.entryCandleOpenTime);

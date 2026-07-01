@@ -246,7 +246,7 @@ export function mapPerformanceByVersion(
     row: IPerformanceAggregateRow,
     version: StrategyVersionEntity,
     windowDays: number,
-    liveStrategyVersionId: number,
+    liveStrategyVersionId: number | null,
 ): IPerformanceByVersionView {
     // ADR 0022 §2.3.1: drawdown / sharpe / sortino / expectancyPerUnitRisk
     // require a per-version equity series that the live engine does not
@@ -298,7 +298,7 @@ interface IDailyPerformanceAggregateRow {
 export function mapDailyPerformanceRows(
     rows: ReadonlyArray<IDailyPerformanceAggregateRow>,
     versions: ReadonlyMap<number, StrategyVersionEntity>,
-    liveStrategyVersionId: number,
+    liveStrategyVersionId: number | null,
 ): IDailyPerformanceRow[] {
     const cumulativeByVersion = new Map<number, MoneyValue>();
     const mapped: IDailyPerformanceRow[] = [];

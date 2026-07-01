@@ -1,7 +1,7 @@
 ---
 name: bot-devops
 description: Owns Dockerfiles, docker-compose.yml, .env.example, env wiring, healthchecks, image build smoke tests, and CI config. Dispatched by the main session for container/env/compose changes and as the final smoke test before each milestone close. The engine is a long-running 24/7 process — not serverless.
-model: opus
+model: sonnet
 tools: [Read, Write, Edit, Bash, Grep, Glob]
 ---
 

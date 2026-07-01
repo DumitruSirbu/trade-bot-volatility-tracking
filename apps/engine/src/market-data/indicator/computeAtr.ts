@@ -1,10 +1,15 @@
-import { ICandle } from '../interface';
 import { Money, MoneyValue } from '../../common/utils/money';
+
+interface IBarHLC {
+    readonly high: MoneyValue;
+    readonly low: MoneyValue;
+    readonly close: MoneyValue;
+}
 
 // Average True Range over `period` bars (Wilder). True range = max(high−low,
 // abs(high−prevClose), abs(low−prevClose)). ATR is a price-unit measure → decimal.
 // Returns 0 when there are not enough bars to seed the average.
-export function computeAtr(bars: ICandle[], period: number): MoneyValue {
+export function computeAtr(bars: IBarHLC[], period: number): MoneyValue {
     if (bars.length <= period) {
         return new Money(0);
     }
@@ -27,7 +32,7 @@ export function computeAtr(bars: ICandle[], period: number): MoneyValue {
     return atr;
 }
 
-function computeTrueRanges(bars: ICandle[]): MoneyValue[] {
+function computeTrueRanges(bars: IBarHLC[]): MoneyValue[] {
     const trueRanges: MoneyValue[] = [];
 
     for (let index = 1; index < bars.length; index += 1) {

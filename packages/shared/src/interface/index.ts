@@ -66,3 +66,8 @@ export { IFillSeed } from './IFillSeed.js';
 export { IFillPosition } from './IFillPosition.js';
 export { ISimulatedFillCore } from './ISimulatedFillCore.js';
 export { IIntraBarStopResult } from './IIntraBarStopResult.js';
+export { UniverseEntry } from './UniverseEntry.js';
+export { ISelectedSymbol } from './ISelectedSymbol.js';
+export { IPortfolioSelection } from './IPortfolioSelection.js';
+export { IPortfolioStrategy, IPortfolioStrategyInput } from './IPortfolioStrategy.js';
+export { UNIVERSE_REBALANCE_DUE_EVENT, IUniverseRebalanceDueEvent } from './IUniverseRebalanceDueEvent.js';

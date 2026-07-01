@@ -5,3 +5,4 @@ export { exchangeEnvironmentSchema, type IExchangeEnvironment } from './exchange
 export { liveModeProfileSchema } from './liveModeProfileSchema.js';
 export { simulatedFillSchema } from './simulatedFillSchema.js';
 export { virtualLedgerSnapshotSchema } from './virtualLedgerSnapshotSchema.js';
+export { momentumParamsSchema, type IMomentumParams } from './momentumParamsSchema.js';

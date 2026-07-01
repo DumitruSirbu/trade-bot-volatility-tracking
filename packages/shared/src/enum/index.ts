@@ -36,3 +36,4 @@ export { ExchangeEnvironmentEnum } from './ExchangeEnvironmentEnum.js';
 export { TerminalStateEnum } from './TerminalStateEnum.js';
 export { MissedReasonEnum } from './MissedReasonEnum.js';
 export { DecisionOutcomeEnum } from './DecisionOutcomeEnum.js';
+export { PortfolioSelectionReasonEnum } from './PortfolioSelectionReasonEnum.js';

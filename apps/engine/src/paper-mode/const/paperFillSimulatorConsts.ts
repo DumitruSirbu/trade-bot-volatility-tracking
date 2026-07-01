@@ -30,3 +30,16 @@ export const STREAMING_FILL_STALE_TICK_MS = 5_000;
 // Internal adapter missed-reason when StreamingFillAdapter has no usable tick.
 // ISimulatedFillCore keeps string reasons; public ISimulatedFill maps to MissedReasonEnum separately.
 export const PAPER_MISSED_REASON_NO_TICK_CACHED = 'no_tick_cached';
+
+// D17 — idempotency-ledger version-namespace prefix for the ACTIVE (non-shadow)
+// PAPER run. The composite key (eventId, orderIntentId, namespace) uses this to
+// keep active-run ledger rows from colliding with the separate `paper.shadow.v<id>`
+// namespace, AND to encode which strategy version actually executed the order.
+export const PAPER_ACTIVE_VERSION_NAMESPACE_PREFIX = 'paper.active.v';
+
+// D17 / ADR 0049 — fallback version label used ONLY when neither the legacy
+// single-symbol version id nor the M50 portfolio version id is set. A literal
+// `vnull` (from interpolating a null id) no longer encodes the executing
+// version; this explicit sentinel keeps the namespace intention-revealing and
+// prevents an accidental `paper.active.vnull` in the dormant-legacy state.
+export const PAPER_ACTIVE_VERSION_NAMESPACE_NONE = 'none';

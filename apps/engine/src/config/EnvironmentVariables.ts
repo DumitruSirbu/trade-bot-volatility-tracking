@@ -172,10 +172,23 @@ export class EnvironmentVariables {
 
     // Selects the active strategy_versions.id the engine runs on each trigger (ADR 0003
     // §7). Switching the active version is a config change + restart — no code change.
-    @Transform(({ value }) => Number.parseInt(String(value), 10))
+    // ADR 0049 — optional: absent → the legacy single-symbol (VWAP) path boots dormant.
+    // Present but malformed (0, non-numeric) still fails boot loudly so a typo can't silently
+    // disable an intentionally-selected legacy strategy. Mirrors ACTIVE_PORTFOLIO_STRATEGY_VERSION_ID.
+    @IsOptional()
+    @Transform(({ value }) => (value !== undefined && value !== '' ? Number.parseInt(String(value), 10) : undefined))
     @IsInt()
     @Min(1)
-    ACTIVE_STRATEGY_VERSION_ID!: number;
+    ACTIVE_STRATEGY_VERSION_ID?: number;
+
+    // M50 (ADR 0047 §2.6) — ACTIVE_PORTFOLIO_STRATEGY_VERSION_ID: optional numeric. When set
+    // alongside EXCHANGE_ENV=paper, activates the cross-sectional momentum path. Absent or a
+    // non-paper environment → the portfolio path is fully dormant (no scheduler, no orchestrator).
+    @IsOptional()
+    @Transform(({ value }) => (value !== undefined && value !== '' ? Number.parseInt(String(value), 10) : undefined))
+    @IsInt()
+    @Min(1)
+    ACTIVE_PORTFOLIO_STRATEGY_VERSION_ID?: number;
 
     // M5 execution gate. Defaults to DRY_RUN so the slice never fires real orders without an
     // explicit operator opt-in. Only the exact string 'live' (case-insensitive) selects LIVE

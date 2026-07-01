@@ -274,8 +274,19 @@ export class AppConfigService {
         return this.configService.get('ACCOUNT_CAPITAL_USDT', { infer: true });
     }
 
-    get activeStrategyVersionId(): number {
-        return this.configService.get('ACTIVE_STRATEGY_VERSION_ID', { infer: true });
+    // ADR 0049 — null when unset; the legacy single-symbol (VWAP) path then boots dormant.
+    get activeStrategyVersionId(): number | null {
+        const raw = this.configService.get('ACTIVE_STRATEGY_VERSION_ID', { infer: true });
+
+        return raw ?? null;
+    }
+
+    // M50 (ADR 0047 §2.6) — the active portfolio (momentum) strategy version. Null when unset;
+    // the momentum path additionally requires EXCHANGE_ENV=paper, enforced by its scheduler/orchestrator.
+    get activePortfolioStrategyVersionId(): number | null {
+        const raw = this.configService.get('ACTIVE_PORTFOLIO_STRATEGY_VERSION_ID', { infer: true });
+
+        return raw ?? null;
     }
 
     get executionMode(): ExecutionModeEnum {
