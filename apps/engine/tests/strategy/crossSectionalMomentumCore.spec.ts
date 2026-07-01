@@ -53,7 +53,7 @@ describe('crossSectionalMomentumCore — empty / all-null / non-finite guards', 
         const result = crossSectionalMomentumCore([], buildParams(), NOW_MS);
 
         expect(result.reason).toBe(PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS);
-        expect(result.selected).toHaveLength(0);
+        expect(result.ranked).toHaveLength(0);
     });
 
     it('returns NO_ELIGIBLE_SYMBOLS when all entries have null trailingReturnPct', () => {
@@ -62,7 +62,7 @@ describe('crossSectionalMomentumCore — empty / all-null / non-finite guards', 
         const result = crossSectionalMomentumCore(universe, buildParams(), NOW_MS);
 
         expect(result.reason).toBe(PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS);
-        expect(result.selected).toHaveLength(0);
+        expect(result.ranked).toHaveLength(0);
     });
 
     it('returns NO_ELIGIBLE_SYMBOLS when all entries have NaN trailingReturnPct', () => {
@@ -71,7 +71,7 @@ describe('crossSectionalMomentumCore — empty / all-null / non-finite guards', 
         const result = crossSectionalMomentumCore(universe, buildParams({ min_universe_size: 1 }), NOW_MS);
 
         expect(result.reason).toBe(PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS);
-        expect(result.selected).toHaveLength(0);
+        expect(result.ranked).toHaveLength(0);
     });
 
     it('returns NO_ELIGIBLE_SYMBOLS when all entries have Infinity trailingReturnPct', () => {
@@ -80,7 +80,7 @@ describe('crossSectionalMomentumCore — empty / all-null / non-finite guards', 
         const result = crossSectionalMomentumCore(universe, buildParams({ min_universe_size: 1 }), NOW_MS);
 
         expect(result.reason).toBe(PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS);
-        expect(result.selected).toHaveLength(0);
+        expect(result.ranked).toHaveLength(0);
     });
 
     it('returns NO_ELIGIBLE_SYMBOLS (not UNIVERSE_TOO_SMALL) when a mix of null and non-finite entries produces zero eligible', () => {
@@ -104,7 +104,7 @@ describe('crossSectionalMomentumCore — min_universe_size boundary', () => {
         const result = crossSectionalMomentumCore(universe, params, NOW_MS);
 
         expect(result.reason).toBe(PortfolioSelectionReasonEnum.UNIVERSE_TOO_SMALL);
-        expect(result.selected).toHaveLength(0);
+        expect(result.ranked).toHaveLength(0);
     });
 
     it('returns RANKED when valid count equals min_universe_size exactly (boundary)', () => {
@@ -115,7 +115,7 @@ describe('crossSectionalMomentumCore — min_universe_size boundary', () => {
         const result = crossSectionalMomentumCore(universe, params, NOW_MS);
 
         expect(result.reason).toBe(PortfolioSelectionReasonEnum.RANKED);
-        expect(result.selected).toHaveLength(3);
+        expect(result.ranked).toHaveLength(3);
     });
 
     it('returns UNIVERSE_TOO_SMALL when valid count is one below min_universe_size (boundary)', () => {
@@ -126,7 +126,7 @@ describe('crossSectionalMomentumCore — min_universe_size boundary', () => {
         const result = crossSectionalMomentumCore(universe, params, NOW_MS);
 
         expect(result.reason).toBe(PortfolioSelectionReasonEnum.UNIVERSE_TOO_SMALL);
-        expect(result.selected).toHaveLength(0);
+        expect(result.ranked).toHaveLength(0);
     });
 
     it('returns RANKED when valid count is greater than min_universe_size (mixed null + valid)', () => {
@@ -144,7 +144,7 @@ describe('crossSectionalMomentumCore — min_universe_size boundary', () => {
         const result = crossSectionalMomentumCore(universe, params, NOW_MS);
 
         expect(result.reason).toBe(PortfolioSelectionReasonEnum.RANKED);
-        expect(result.selected.every((entry: ISelectedSymbol) => entry.trailingReturnPct !== null)).toBe(true);
+        expect(result.ranked.every((entry: ISelectedSymbol) => entry.trailingReturnPct !== null)).toBe(true);
     });
 
     it('returns RANKED with 1 entry when min_universe_size is 1 and only 1 eligible symbol exists', () => {
@@ -154,32 +154,45 @@ describe('crossSectionalMomentumCore — min_universe_size boundary', () => {
         const result = crossSectionalMomentumCore(universe, params, NOW_MS);
 
         expect(result.reason).toBe(PortfolioSelectionReasonEnum.RANKED);
-        expect(result.selected).toHaveLength(1);
-        expect(result.selected[0].symbol).toBe('SOLOUSDT');
+        expect(result.ranked).toHaveLength(1);
+        expect(result.ranked[0].symbol).toBe('SOLOUSDT');
     });
 
-    it('returns UNIVERSE_TOO_SMALL when only 1 eligible symbol exists and min_universe_size is 2', () => {
+    it('ignores top_n=1 and still returns every eligible symbol when min_universe_size is met', () => {
+        const universe = Array.from({ length: 10 }, (_, index) => buildEntry(`SYM${index}USDT`, 10 - index));
+        const params = buildParams({ min_universe_size: 5, top_n: 1 });
+
+        const result = crossSectionalMomentumCore(universe, params, NOW_MS);
+
+        expect(result.reason).toBe(PortfolioSelectionReasonEnum.RANKED);
+        expect(result.ranked).toHaveLength(10);
+        expect(result.ranked[0].rank).toBe(1);
+        expect(result.ranked[9].rank).toBe(10);
+    });
+
+    it('returns empty ranked with UNIVERSE_TOO_SMALL reason (not RANKED)', () => {
         const universe = [buildEntry('SOLOUSDT', 7.5), buildEntry('BTCUSDT', null)];
         const params = buildParams({ min_universe_size: 2, top_n: 1 });
 
         const result = crossSectionalMomentumCore(universe, params, NOW_MS);
 
         expect(result.reason).toBe(PortfolioSelectionReasonEnum.UNIVERSE_TOO_SMALL);
+        expect(result.ranked).toHaveLength(0);
     });
 });
 
 // ─── top_n and ranking correctness ───────────────────────────────────────────
 
 describe('crossSectionalMomentumCore — ranking and selection', () => {
-    it('returns all eligible entries when top_n exceeds eligible count (no crash)', () => {
-        // 3 eligible, top_n = 10 → returns all 3
+    it('returns all eligible entries regardless of top_n (core ranks, orchestrator selects)', () => {
+        // 3 eligible, top_n = 10 → core still returns all 3
         const universe = [buildEntry('AAAUSDT', 5.0), buildEntry('BBBUSDT', 3.0), buildEntry('CCCUSDT', 1.0)];
         const params = buildParams({ min_universe_size: 1, top_n: 10 });
 
         const result = crossSectionalMomentumCore(universe, params, NOW_MS);
 
         expect(result.reason).toBe(PortfolioSelectionReasonEnum.RANKED);
-        expect(result.selected).toHaveLength(3);
+        expect(result.ranked).toHaveLength(3);
     });
 
     it('breaks ties on trailingReturnPct by symbol ascending (deterministic)', () => {
@@ -189,12 +202,12 @@ describe('crossSectionalMomentumCore — ranking and selection', () => {
 
         const result = crossSectionalMomentumCore(universe, params, NOW_MS);
 
-        expect(result.selected[0].symbol).toBe('AAAUSDT');
-        expect(result.selected[0].rank).toBe(1);
-        expect(result.selected[1].symbol).toBe('CCCUSDT');
-        expect(result.selected[1].rank).toBe(2);
-        expect(result.selected[2].symbol).toBe('BBBUSDT');
-        expect(result.selected[2].rank).toBe(3);
+        expect(result.ranked[0].symbol).toBe('AAAUSDT');
+        expect(result.ranked[0].rank).toBe(1);
+        expect(result.ranked[1].symbol).toBe('CCCUSDT');
+        expect(result.ranked[1].rank).toBe(2);
+        expect(result.ranked[2].symbol).toBe('BBBUSDT');
+        expect(result.ranked[2].rank).toBe(3);
     });
 
     it('ranks negative-only returns correctly — least negative is strongest (rank=1)', () => {
@@ -204,33 +217,31 @@ describe('crossSectionalMomentumCore — ranking and selection', () => {
 
         const result = crossSectionalMomentumCore(universe, params, NOW_MS);
 
-        expect(result.selected[0].symbol).toBe('BBBUSDT');
-        expect(result.selected[0].trailingReturnPct).toBe(-1.0);
-        expect(result.selected[2].symbol).toBe('AAAUSDT');
-        expect(result.selected[2].trailingReturnPct).toBe(-5.0);
+        expect(result.ranked[0].symbol).toBe('BBBUSDT');
+        expect(result.ranked[0].trailingReturnPct).toBe(-1.0);
+        expect(result.ranked[2].symbol).toBe('AAAUSDT');
+        expect(result.ranked[2].trailingReturnPct).toBe(-5.0);
     });
 
-    it('returns exactly top_n entries for a large universe and assigns rank 1..top_n in descending return order', () => {
-        const TOP_N = 5;
+    it('returns the full ranked eligible universe (ignores top_n) and assigns dense rank 1..M in descending return order', () => {
         const UNIVERSE_SIZE = 100;
 
         // Build 100 entries with distinct returns: symbol-i has return = i (so i=99 is strongest)
         const universe: UniverseEntry[] = Array.from({ length: UNIVERSE_SIZE }, (_, i) => buildEntry(`SYM${String(i).padStart(3, '0')}USDT`, i));
-        const params = buildParams({ min_universe_size: 10, top_n: TOP_N });
+        const params = buildParams({ min_universe_size: 10, top_n: 5 });
 
         const result = crossSectionalMomentumCore(universe, params, NOW_MS);
 
         expect(result.reason).toBe(PortfolioSelectionReasonEnum.RANKED);
-        expect(result.selected).toHaveLength(TOP_N);
+        expect(result.ranked).toHaveLength(UNIVERSE_SIZE);
 
         // Rank 1 should have the highest return (99)
-        expect(result.selected[0].rank).toBe(1);
-        expect(result.selected[0].trailingReturnPct).toBe(99);
+        expect(result.ranked[0].rank).toBe(1);
+        expect(result.ranked[0].trailingReturnPct).toBe(99);
 
-        // Each subsequent rank is one lower in return
-        for (let i = 0; i < TOP_N; i++) {
-            expect(result.selected[i].rank).toBe(i + 1);
-            expect(result.selected[i].trailingReturnPct).toBe(99 - i);
+        for (let i = 0; i < UNIVERSE_SIZE; i++) {
+            expect(result.ranked[i].rank).toBe(i + 1);
+            expect(result.ranked[i].trailingReturnPct).toBe(99 - i);
         }
     });
 });
@@ -244,8 +255,8 @@ describe('crossSectionalMomentumCore — rank values are dense 1..N with no gaps
 
         const result = crossSectionalMomentumCore(universe, params, NOW_MS);
 
-        expect(result.selected[0].rank).toBe(1);
-        const ranks = result.selected.map((entry: ISelectedSymbol) => entry.rank);
+        expect(result.ranked[0].rank).toBe(1);
+        const ranks = result.ranked.map((entry: ISelectedSymbol) => entry.rank);
         expect(ranks).toEqual([1, 2, 3, 4]);
     });
 
@@ -255,10 +266,10 @@ describe('crossSectionalMomentumCore — rank values are dense 1..N with no gaps
 
         const result = crossSectionalMomentumCore(universe, params, NOW_MS);
 
-        expect(result.selected[0].symbol).toBe('SOLOUSDT');
-        expect(result.selected[0].trailingReturnPct).toBe(12.5);
-        expect(result.selected[1].symbol).toBe('ETHUSDT');
-        expect(result.selected[1].trailingReturnPct).toBe(9.0);
+        expect(result.ranked[0].symbol).toBe('SOLOUSDT');
+        expect(result.ranked[0].trailingReturnPct).toBe(12.5);
+        expect(result.ranked[1].symbol).toBe('ETHUSDT');
+        expect(result.ranked[1].trailingReturnPct).toBe(9.0);
     });
 });
 
@@ -273,7 +284,7 @@ describe('crossSectionalMomentumCore — determinism and no input mutation', () 
         const second = crossSectionalMomentumCore(universe, params, NOW_MS);
 
         expect(second.reason).toBe(first.reason);
-        expect(second.selected).toEqual(first.selected);
+        expect(second.ranked).toEqual(first.ranked);
     });
 
     it('does not mutate the input universe array order', () => {
@@ -295,6 +306,6 @@ describe('crossSectionalMomentumCore — determinism and no input mutation', () 
         const result1 = crossSectionalMomentumCore(permutation1, params, NOW_MS);
         const result2 = crossSectionalMomentumCore(permutation2, params, NOW_MS);
 
-        expect(result1.selected.map((e: ISelectedSymbol) => e.symbol)).toEqual(result2.selected.map((e: ISelectedSymbol) => e.symbol));
+        expect(result1.ranked.map((e: ISelectedSymbol) => e.symbol)).toEqual(result2.ranked.map((e: ISelectedSymbol) => e.symbol));
     });
 });

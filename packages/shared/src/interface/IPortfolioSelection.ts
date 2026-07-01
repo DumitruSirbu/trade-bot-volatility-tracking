@@ -2,6 +2,7 @@ import { PortfolioSelectionReasonEnum } from '../enum/PortfolioSelectionReasonEn
 import { ISelectedSymbol } from './ISelectedSymbol.js';
 
 export interface IPortfolioSelection {
-    readonly selected: ReadonlyArray<ISelectedSymbol>;
+    /** Full eligible universe ranked best-first (dense rank 1..M). Not sliced to top_n — ADR 0050. */
+    readonly ranked: ReadonlyArray<ISelectedSymbol>;
     readonly reason: PortfolioSelectionReasonEnum;
 }

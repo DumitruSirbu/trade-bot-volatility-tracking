@@ -2,24 +2,24 @@ import { ExchangeEnvironmentEnum, IMomentumParams, IUniverseRebalanceDueEvent, m
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SchedulerRegistry } from '@nestjs/schedule';
+import { CronJob } from 'cron';
 
 import { AppConfigService } from '../../config/service';
-import { MOMENTUM_REBALANCE_INTERVAL_NAME } from '../const';
+import { MOMENTUM_REBALANCE_CRON_EXPRESSION, MOMENTUM_REBALANCE_CRON_NAME, MOMENTUM_REBALANCE_PERIOD_MS } from '../const';
 import { CLOCK_PORT, IClockPort } from '../interface/IClockPort';
 import { StrategyVersionRepository } from '../repository/StrategyVersionRepository';
 
-// The M50 rebalance scheduler (ADR 0048 §2.2). Its SOLE job is to emit UNIVERSE_REBALANCE_DUE_EVENT
-// on the active momentum version's `rebalance_interval_ms` cadence — it does NO ranking. The
-// interval is registered dynamically (via SchedulerRegistry.addInterval) because the cadence is a
-// runtime param value, not a compile-time @Interval constant. The clock is injected (CLOCK_PORT)
-// so the emitted nowMs is deterministically controllable in tests. Registers/emits ONLY when
-// EXCHANGE_ENV=paper AND ACTIVE_PORTFOLIO_STRATEGY_VERSION_ID is set (ADR 0047 §2.6); any other
-// env logs a WARN and stays fully dormant — no live/testnet capital can reach the momentum path.
+// The M50 rebalance scheduler (ADR 0048 §2.2, amended ADR 0050 §4). Its SOLE job is to emit
+// UNIVERSE_REBALANCE_DUE_EVENT on a fixed daily UTC cadence — it does NO ranking. The cron is
+// registered dynamically (via SchedulerRegistry.addCronJob) so the paper gate still governs
+// registration. The clock is injected (CLOCK_PORT) so the emitted nowMs is deterministically
+// controllable in tests. Registers/emits ONLY when EXCHANGE_ENV=paper AND
+// ACTIVE_PORTFOLIO_STRATEGY_VERSION_ID is set (ADR 0047 §2.6).
 @Injectable()
 export class RebalanceSchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly logger = new Logger(RebalanceSchedulerService.name);
 
-    private intervalRegistered = false;
+    private cronRegistered = false;
 
     constructor(
         private readonly config: AppConfigService,
@@ -62,25 +62,32 @@ export class RebalanceSchedulerService implements OnModuleInit, OnModuleDestroy 
             return;
         }
 
-        this.registerInterval(params);
+        this.registerCronJob(params);
     }
 
     onModuleDestroy(): void {
-        if (!this.intervalRegistered) {
+        if (!this.cronRegistered) {
             return;
         }
 
-        this.schedulerRegistry.deleteInterval(MOMENTUM_REBALANCE_INTERVAL_NAME);
-        this.intervalRegistered = false;
+        this.schedulerRegistry.deleteCronJob(MOMENTUM_REBALANCE_CRON_NAME);
+        this.cronRegistered = false;
     }
 
-    private registerInterval(params: IMomentumParams): void {
-        const handle = setInterval(() => this.emitRebalanceDue(), params.rebalance_interval_ms);
+    private registerCronJob(params: IMomentumParams): void {
+        if (params.rebalance_interval_ms !== MOMENTUM_REBALANCE_PERIOD_MS) {
+            this.logger.warn(
+                `rebalance_interval_ms=${params.rebalance_interval_ms} != fixed 24h cadence — ` +
+                    'the cron period is fixed; this param now only sizes the time-stop net',
+            );
+        }
 
-        this.schedulerRegistry.addInterval(MOMENTUM_REBALANCE_INTERVAL_NAME, handle);
-        this.intervalRegistered = true;
+        const job = new CronJob(MOMENTUM_REBALANCE_CRON_EXPRESSION, () => this.emitRebalanceDue(), null, true, 'UTC');
 
-        this.logger.log(`momentum rebalance scheduler registered (intervalMs=${params.rebalance_interval_ms})`);
+        this.schedulerRegistry.addCronJob(MOMENTUM_REBALANCE_CRON_NAME, job);
+        this.cronRegistered = true;
+
+        this.logger.log(`momentum rebalance cron registered (expression='${MOMENTUM_REBALANCE_CRON_EXPRESSION}' UTC)`);
     }
 
     private emitRebalanceDue(): void {

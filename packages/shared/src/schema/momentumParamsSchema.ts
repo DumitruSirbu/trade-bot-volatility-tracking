@@ -6,7 +6,7 @@ import { z } from 'zod';
 // Will be tightened to .strict() once the param set settles (M50b follow-up).
 // All params have defaults, so parsing an empty object yields a valid record.
 const momentumParamsBaseSchema = z.object({
-    top_n: z.number().int().min(1).default(1),
+    top_n: z.number().int().min(1).default(3),
     lookback_ms: z.number().int().min(1).default(86_400_000),
     rebalance_interval_ms: z.number().int().min(1).default(86_400_000),
     min_universe_size: z.number().int().min(1).default(20),

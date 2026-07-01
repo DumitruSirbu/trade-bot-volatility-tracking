@@ -235,7 +235,7 @@ function buildDefaultMocks(): IMockSet {
         universeMembership: { findOpenMembership: jest.fn().mockResolvedValue({}) },
         decisions: { record: jest.fn().mockResolvedValue({}) },
         strategy: {
-            selectUniverse: jest.fn().mockReturnValue({ selected: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS }),
+            selectUniverse: jest.fn().mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS }),
         },
         events: { emit: jest.fn() },
     };
@@ -331,7 +331,7 @@ describe('MomentumOrchestratorService — overlap guard', () => {
 describe('MomentumOrchestratorService — empty / thin universe selection', () => {
     it('processes no intents when strategy returns NO_ELIGIBLE_SYMBOLS', async () => {
         const rawMocks = buildDefaultMocks();
-        rawMocks.strategy.selectUniverse.mockReturnValue({ selected: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
+        rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
         const { service, mocks } = await buildTestModule(rawMocks);
 
         await service.onRebalanceDue({ nowMs: NOW_MS });
@@ -342,7 +342,7 @@ describe('MomentumOrchestratorService — empty / thin universe selection', () =
 
     it('processes no intents when strategy returns UNIVERSE_TOO_SMALL', async () => {
         const rawMocks = buildDefaultMocks();
-        rawMocks.strategy.selectUniverse.mockReturnValue({ selected: [], reason: PortfolioSelectionReasonEnum.UNIVERSE_TOO_SMALL });
+        rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.UNIVERSE_TOO_SMALL });
         const { service, mocks } = await buildTestModule(rawMocks);
 
         await service.onRebalanceDue({ nowMs: NOW_MS });
@@ -360,7 +360,7 @@ describe('MomentumOrchestratorService — hold: symbol still in top-N and alread
         // One open position for BTCUSDT; selection also includes BTCUSDT → hold.
         rawMocks.positions.findOpen.mockResolvedValue([buildOpenPosition({ symbol: 'BTCUSDT', strategyVersionId: ACTIVE_VERSION_ID })]);
         rawMocks.strategy.selectUniverse.mockReturnValue({
-            selected: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+            ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
             reason: PortfolioSelectionReasonEnum.RANKED,
         });
         const { service, mocks } = await buildTestModule(rawMocks);
@@ -380,7 +380,7 @@ describe('MomentumOrchestratorService — open: symbol in top-N but not open', (
         // ATR computation uses candles.findRange (BLOCKER 3 fix) — must supply ≥2 bars.
         rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
         rawMocks.strategy.selectUniverse.mockReturnValue({
-            selected: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+            ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
             reason: PortfolioSelectionReasonEnum.RANKED,
         });
         rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
@@ -401,7 +401,7 @@ describe('MomentumOrchestratorService — close: symbol open but not in top-N', 
         rawMocks.positions.findOpen.mockResolvedValue([buildOpenPosition({ symbol: 'ETHUSDT', strategyVersionId: ACTIVE_VERSION_ID })]);
         // Selection has BTCUSDT (not ETHUSDT) → ETHUSDT should be closed.
         rawMocks.strategy.selectUniverse.mockReturnValue({
-            selected: [],
+            ranked: [],
             reason: PortfolioSelectionReasonEnum.RANKED,
         });
         rawMocks.symbolStates.get.mockReturnValue(buildSymbolState());
@@ -418,7 +418,7 @@ describe('MomentumOrchestratorService — close: symbol open but not in top-N', 
     it('close intent has intentAction === CLOSE (risk-reducing, auto-approved under halt)', async () => {
         const rawMocks = buildDefaultMocks();
         rawMocks.positions.findOpen.mockResolvedValue([buildOpenPosition({ symbol: 'SOLUSDT', strategyVersionId: ACTIVE_VERSION_ID })]);
-        rawMocks.strategy.selectUniverse.mockReturnValue({ selected: [], reason: PortfolioSelectionReasonEnum.RANKED });
+        rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.RANKED });
         rawMocks.symbolStates.get.mockReturnValue(buildSymbolState());
         const { service, mocks } = await buildTestModule(rawMocks);
 
@@ -440,7 +440,7 @@ describe('MomentumOrchestratorService — closes precede opens within one rebala
         rawMocks.symbolStates.get.mockImplementation((symbol: string) => (symbol === 'BTCUSDT' || symbol === 'ETHUSDT' ? buildSymbolState() : null));
         rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
         rawMocks.strategy.selectUniverse.mockReturnValue({
-            selected: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+            ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
             reason: PortfolioSelectionReasonEnum.RANKED,
         });
         // ATR computation for the BTCUSDT open uses candles.findRange (BLOCKER 3 fix).
@@ -474,7 +474,7 @@ describe('MomentumOrchestratorService — gate rejection for open intent', () =>
         // intent is built and reaches the gate (where the rejection under test can be observed).
         rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
         rawMocks.strategy.selectUniverse.mockReturnValue({
-            selected: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+            ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
             reason: PortfolioSelectionReasonEnum.RANKED,
         });
         rawMocks.riskGate.evaluate.mockResolvedValue(buildRejectedDecision());
@@ -494,7 +494,7 @@ describe('MomentumOrchestratorService — gate rejection for open intent', () =>
         rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
         rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
         rawMocks.strategy.selectUniverse.mockReturnValue({
-            selected: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+            ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
             reason: PortfolioSelectionReasonEnum.RANKED,
         });
         rawMocks.riskGate.evaluate.mockResolvedValue(buildRejectedDecision());
@@ -533,7 +533,7 @@ describe('MomentumOrchestratorService — cold-boot trailing return fallback', (
                 isClosed: true,
             },
         ]);
-        rawMocks.strategy.selectUniverse.mockReturnValue({ selected: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
+        rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
         const { service, mocks } = await buildTestModule(rawMocks);
 
         await service.onRebalanceDue({ nowMs: NOW_MS });
@@ -568,7 +568,7 @@ describe('MomentumOrchestratorService — cold-boot trailing return fallback', (
                 isClosed: true,
             },
         ]);
-        rawMocks.strategy.selectUniverse.mockReturnValue({ selected: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
+        rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
         const { service, mocks } = await buildTestModule(rawMocks);
 
         await service.onRebalanceDue({ nowMs: NOW_MS });
@@ -583,7 +583,7 @@ describe('MomentumOrchestratorService — cold-boot trailing return fallback', (
         rawMocks.universe.getEntries.mockReturnValue([buildMembershipEntry('BTCUSDT')]);
         rawMocks.symbolStates.get.mockReturnValue(null);
         rawMocks.candles.findRange.mockResolvedValue([]); // no candles
-        rawMocks.strategy.selectUniverse.mockReturnValue({ selected: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
+        rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
         const { service, mocks } = await buildTestModule(rawMocks);
 
         await service.onRebalanceDue({ nowMs: NOW_MS });
@@ -603,7 +603,7 @@ describe('MomentumOrchestratorService — open skipped when InstrumentPortAdapte
         rawMocks.symbolStates.get.mockReturnValue(buildSymbolState());
         rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
         rawMocks.strategy.selectUniverse.mockReturnValue({
-            selected: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+            ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
             reason: PortfolioSelectionReasonEnum.RANKED,
         });
         rawMocks.instrumentPort.findConstraints.mockResolvedValue(null);
@@ -622,7 +622,7 @@ describe('MomentumOrchestratorService — open skipped when PositionSizer return
         rawMocks.symbolStates.get.mockReturnValue(buildSymbolState());
         rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
         rawMocks.strategy.selectUniverse.mockReturnValue({
-            selected: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+            ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
             reason: PortfolioSelectionReasonEnum.RANKED,
         });
         rawMocks.sizer.size.mockReturnValue({ kind: 'skipped', reason: 'min_notional_not_met' });
@@ -665,7 +665,7 @@ describe('MomentumOrchestratorService — tape-path guard: 24h lookback bypasses
                 isClosed: true,
             },
         ]);
-        rawMocks.strategy.selectUniverse.mockReturnValue({ selected: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
+        rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
         const { service, mocks } = await buildTestModule(rawMocks);
 
         await service.onRebalanceDue({ nowMs: NOW_MS });
@@ -690,7 +690,7 @@ describe('MomentumOrchestratorService — time-stop at 2× rebalance interval on
         rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
         rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
         rawMocks.strategy.selectUniverse.mockReturnValue({
-            selected: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+            ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
             reason: PortfolioSelectionReasonEnum.RANKED,
         });
         const { service, mocks } = await buildTestModule(rawMocks);
@@ -718,7 +718,7 @@ describe('MomentumOrchestratorService — ATR sourced from CandleRepository, not
         // 20 candles, each with high=110 / low=90 / close=100 → true range=20 → ATR≈20.
         rawMocks.candles.findRange.mockResolvedValue(buildMockBars(20));
         rawMocks.strategy.selectUniverse.mockReturnValue({
-            selected: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+            ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
             reason: PortfolioSelectionReasonEnum.RANKED,
         });
         const { service, mocks } = await buildTestModule(rawMocks);
@@ -732,6 +732,237 @@ describe('MomentumOrchestratorService — ATR sourced from CandleRepository, not
         const atrDistance = approvedEmit![1].intent.proposedExit.atrDistance;
         expect(atrDistance).not.toBeNull();
         expect(atrDistance.toNumber()).toBeGreaterThan(0);
+    });
+});
+
+// ADR 0050 §2.2 — cascade fallback and churn-safe close ordering
+
+describe('MomentumOrchestratorService — cascade: gate rejection falls through to next ranked symbol', () => {
+    it('opens rank #2 when rank #1 is gate-rejected (top_n=1)', async () => {
+        const rawMocks = buildDefaultMocks();
+        rawMocks.positions.findOpen.mockResolvedValue([]);
+        rawMocks.universe.getEntries.mockReturnValue([buildMembershipEntry('BTCUSDT'), buildMembershipEntry('ETHUSDT')]);
+        rawMocks.symbolStates.get.mockImplementation((symbol: string) => (symbol === 'BTCUSDT' || symbol === 'ETHUSDT' ? buildSymbolState() : null));
+        rawMocks.universe.getEntry.mockImplementation((symbol: string) => buildMembershipEntry(symbol));
+        rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
+        rawMocks.strategyVersions.findById.mockResolvedValue({
+            ...buildVersionRow(),
+            params: { ...buildVersionRow().params, top_n: 1 },
+        });
+        rawMocks.strategy.selectUniverse.mockReturnValue({
+            ranked: [
+                { symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 10.0 },
+                { symbol: 'ETHUSDT', rank: 2, trailingReturnPct: 8.0 },
+            ],
+            reason: PortfolioSelectionReasonEnum.RANKED,
+        });
+        rawMocks.riskGate.evaluate.mockImplementation(async (intent: { symbol: string }) =>
+            intent.symbol === 'BTCUSDT' ? buildRejectedDecision() : buildApprovedDecision(),
+        );
+        const { service, mocks } = await buildTestModule(rawMocks);
+
+        await service.onRebalanceDue({ nowMs: NOW_MS });
+
+        expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(2);
+        expect(mocks.riskGate.evaluate.mock.calls[0][0].symbol).toBe('BTCUSDT');
+        expect(mocks.riskGate.evaluate.mock.calls[1][0].symbol).toBe('ETHUSDT');
+        expect(mocks.events.emit).toHaveBeenCalledWith(
+            ORDER_INTENT_APPROVED_EVENT,
+            expect.objectContaining({ intent: expect.objectContaining({ symbol: 'ETHUSDT' }) }),
+        );
+    });
+});
+
+describe('MomentumOrchestratorService — churn-safe closes: retained set keys residual de-ranks', () => {
+    it('does not close a held position that cascade retained even when outside naive top-N slice', async () => {
+        const rawMocks = buildDefaultMocks();
+        // SOL held at rank 4; ranks 1-3 rejected → cascade retains SOL; must not close then reopen.
+        rawMocks.positions.findOpen.mockResolvedValue([buildOpenPosition({ symbol: 'SOLUSDT', strategyVersionId: ACTIVE_VERSION_ID })]);
+        rawMocks.strategyVersions.findById.mockResolvedValue({
+            ...buildVersionRow(),
+            params: { ...buildVersionRow().params, top_n: 1 },
+        });
+        rawMocks.strategy.selectUniverse.mockReturnValue({
+            ranked: [
+                { symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 10.0 },
+                { symbol: 'ETHUSDT', rank: 2, trailingReturnPct: 9.0 },
+                { symbol: 'ADAUSDT', rank: 3, trailingReturnPct: 8.0 },
+                { symbol: 'SOLUSDT', rank: 4, trailingReturnPct: 7.0 },
+            ],
+            reason: PortfolioSelectionReasonEnum.RANKED,
+        });
+        rawMocks.symbolStates.get.mockReturnValue(buildSymbolState());
+        rawMocks.universe.getEntries.mockReturnValue([buildMembershipEntry('BTCUSDT')]);
+        rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
+        rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
+        rawMocks.riskGate.evaluate.mockImplementation(async (intent: { intentAction: string; symbol: string }) => {
+            if (intent.intentAction === OrderIntentActionEnum.CLOSE) {
+                throw new Error(`unexpected close for ${intent.symbol}`);
+            }
+
+            return buildRejectedDecision();
+        });
+        const { service, mocks } = await buildTestModule(rawMocks);
+
+        await service.onRebalanceDue({ nowMs: NOW_MS });
+
+        // Only rejected opens for ranks 1-3 — no close intent for SOL.
+        expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(3);
+        expect(mocks.riskGate.evaluate.mock.calls.every(([intent]) => intent.intentAction === OrderIntentActionEnum.OPEN)).toBe(true);
+        expect(mocks.events.emit).not.toHaveBeenCalledWith(ORDER_INTENT_APPROVED_EVENT, expect.anything());
+    });
+});
+
+describe('MomentumOrchestratorService — ADR 0050 residual close: ranked but displaced below fill line', () => {
+    it('closes an open position at rank 5 after rank 1 fills top_n=1', async () => {
+        const rawMocks = buildDefaultMocks();
+        rawMocks.positions.findOpen.mockResolvedValue([buildOpenPosition({ symbol: 'LINKUSDT', strategyVersionId: ACTIVE_VERSION_ID })]);
+        rawMocks.strategyVersions.findById.mockResolvedValue({
+            ...buildVersionRow(),
+            params: { ...buildVersionRow().params, top_n: 1 },
+        });
+        rawMocks.strategy.selectUniverse.mockReturnValue({
+            ranked: [
+                { symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 10.0 },
+                { symbol: 'ETHUSDT', rank: 2, trailingReturnPct: 9.0 },
+                { symbol: 'ADAUSDT', rank: 3, trailingReturnPct: 8.0 },
+                { symbol: 'SOLUSDT', rank: 4, trailingReturnPct: 7.0 },
+                { symbol: 'LINKUSDT', rank: 5, trailingReturnPct: 6.0 },
+            ],
+            reason: PortfolioSelectionReasonEnum.RANKED,
+        });
+        rawMocks.universe.getEntries.mockReturnValue([buildMembershipEntry('BTCUSDT')]);
+        rawMocks.symbolStates.get.mockImplementation((symbol: string) => (symbol === 'BTCUSDT' || symbol === 'LINKUSDT' ? buildSymbolState() : null));
+        rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
+        rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
+        const callOrder: string[] = [];
+        rawMocks.riskGate.evaluate.mockImplementation(async (intent: { intentAction: string; symbol: string }) => {
+            callOrder.push(`${intent.intentAction}:${intent.symbol}`);
+            return intent.intentAction === OrderIntentActionEnum.OPEN ? buildApprovedDecision() : buildApprovedDecision();
+        });
+        const { service, mocks } = await buildTestModule(rawMocks);
+
+        await service.onRebalanceDue({ nowMs: NOW_MS });
+
+        expect(callOrder).toEqual([`${OrderIntentActionEnum.OPEN}:BTCUSDT`, `${OrderIntentActionEnum.CLOSE}:LINKUSDT`]);
+        expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe('MomentumOrchestratorService — ADR 0050 definite close when ranked is empty', () => {
+    it('closes all open momentum positions when strategy returns NO_ELIGIBLE_SYMBOLS', async () => {
+        const rawMocks = buildDefaultMocks();
+        rawMocks.positions.findOpen.mockResolvedValue([
+            buildOpenPosition({ symbol: 'BTCUSDT', strategyVersionId: ACTIVE_VERSION_ID }),
+            buildOpenPosition({ symbol: 'ETHUSDT', id: 2, strategyVersionId: ACTIVE_VERSION_ID }),
+        ]);
+        rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
+        rawMocks.symbolStates.get.mockReturnValue(buildSymbolState());
+        const { service, mocks } = await buildTestModule(rawMocks);
+
+        await service.onRebalanceDue({ nowMs: NOW_MS });
+
+        expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(2);
+        expect(mocks.riskGate.evaluate.mock.calls.map(([intent]) => intent.intentAction)).toEqual([OrderIntentActionEnum.CLOSE, OrderIntentActionEnum.CLOSE]);
+        expect(mocks.riskGate.evaluate.mock.calls.map(([intent]) => intent.symbol).sort()).toEqual(['BTCUSDT', 'ETHUSDT']);
+    });
+});
+
+describe('MomentumOrchestratorService — ADR 0050 cascade stops at top_n', () => {
+    it('does not attempt opens beyond top_n=3 even when more ranked symbols remain', async () => {
+        const rawMocks = buildDefaultMocks();
+        rawMocks.positions.findOpen.mockResolvedValue([]);
+        rawMocks.strategyVersions.findById.mockResolvedValue({
+            ...buildVersionRow(),
+            params: { ...buildVersionRow().params, top_n: 3 },
+        });
+        rawMocks.strategy.selectUniverse.mockReturnValue({
+            ranked: [
+                { symbol: 'AAAUSDT', rank: 1, trailingReturnPct: 10.0 },
+                { symbol: 'BBBUSDT', rank: 2, trailingReturnPct: 9.0 },
+                { symbol: 'CCCUSDT', rank: 3, trailingReturnPct: 8.0 },
+                { symbol: 'DDDUSDT', rank: 4, trailingReturnPct: 7.0 },
+                { symbol: 'EEEUSDT', rank: 5, trailingReturnPct: 6.0 },
+            ],
+            reason: PortfolioSelectionReasonEnum.RANKED,
+        });
+        rawMocks.universe.getEntries.mockReturnValue([buildMembershipEntry('AAAUSDT'), buildMembershipEntry('BBBUSDT'), buildMembershipEntry('CCCUSDT')]);
+        rawMocks.symbolStates.get.mockImplementation(() => buildSymbolState());
+        rawMocks.universe.getEntry.mockImplementation((symbol: string) => buildMembershipEntry(symbol));
+        rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
+        const { service, mocks } = await buildTestModule(rawMocks);
+
+        await service.onRebalanceDue({ nowMs: NOW_MS });
+
+        const openSymbols = mocks.riskGate.evaluate.mock.calls
+            .filter(([intent]) => intent.intentAction === OrderIntentActionEnum.OPEN)
+            .map(([intent]) => intent.symbol);
+        expect(openSymbols).toEqual(['AAAUSDT', 'BBBUSDT', 'CCCUSDT']);
+        expect(openSymbols).not.toContain('DDDUSDT');
+    });
+
+    it('with top_n=2 fills via cascade when ranks 1-2 reject and 3-4 approve', async () => {
+        const rawMocks = buildDefaultMocks();
+        rawMocks.positions.findOpen.mockResolvedValue([]);
+        rawMocks.strategyVersions.findById.mockResolvedValue({
+            ...buildVersionRow(),
+            params: { ...buildVersionRow().params, top_n: 2 },
+        });
+        rawMocks.strategy.selectUniverse.mockReturnValue({
+            ranked: [
+                { symbol: 'AAAUSDT', rank: 1, trailingReturnPct: 10.0 },
+                { symbol: 'BBBUSDT', rank: 2, trailingReturnPct: 9.0 },
+                { symbol: 'CCCUSDT', rank: 3, trailingReturnPct: 8.0 },
+                { symbol: 'DDDUSDT', rank: 4, trailingReturnPct: 7.0 },
+            ],
+            reason: PortfolioSelectionReasonEnum.RANKED,
+        });
+        rawMocks.universe.getEntries.mockReturnValue([buildMembershipEntry('CCCUSDT'), buildMembershipEntry('DDDUSDT')]);
+        rawMocks.symbolStates.get.mockImplementation(() => buildSymbolState());
+        rawMocks.universe.getEntry.mockImplementation((symbol: string) => buildMembershipEntry(symbol));
+        rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
+        rawMocks.riskGate.evaluate.mockImplementation(async (intent: { symbol: string }) =>
+            intent.symbol === 'AAAUSDT' || intent.symbol === 'BBBUSDT' ? buildRejectedDecision() : buildApprovedDecision(),
+        );
+        const { service, mocks } = await buildTestModule(rawMocks);
+
+        await service.onRebalanceDue({ nowMs: NOW_MS });
+
+        expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(4);
+        expect(mocks.events.emit).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe('MomentumOrchestratorService — ADR 0050 hold counts toward top_n without gate call', () => {
+    it('with two held symbols and top_n=3 opens only one new leg', async () => {
+        const rawMocks = buildDefaultMocks();
+        rawMocks.positions.findOpen.mockResolvedValue([
+            buildOpenPosition({ symbol: 'BTCUSDT', strategyVersionId: ACTIVE_VERSION_ID }),
+            buildOpenPosition({ symbol: 'ETHUSDT', id: 2, strategyVersionId: ACTIVE_VERSION_ID }),
+        ]);
+        rawMocks.strategyVersions.findById.mockResolvedValue({
+            ...buildVersionRow(),
+            params: { ...buildVersionRow().params, top_n: 3 },
+        });
+        rawMocks.strategy.selectUniverse.mockReturnValue({
+            ranked: [
+                { symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 10.0 },
+                { symbol: 'ETHUSDT', rank: 2, trailingReturnPct: 9.0 },
+                { symbol: 'SOLUSDT', rank: 3, trailingReturnPct: 8.0 },
+            ],
+            reason: PortfolioSelectionReasonEnum.RANKED,
+        });
+        rawMocks.universe.getEntries.mockReturnValue([buildMembershipEntry('SOLUSDT')]);
+        rawMocks.symbolStates.get.mockImplementation((symbol: string) => (symbol === 'SOLUSDT' ? buildSymbolState() : buildSymbolState()));
+        rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('SOLUSDT'));
+        rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
+        const { service, mocks } = await buildTestModule(rawMocks);
+
+        await service.onRebalanceDue({ nowMs: NOW_MS });
+
+        expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(1);
+        expect(mocks.riskGate.evaluate.mock.calls[0][0].symbol).toBe('SOLUSDT');
+        expect(mocks.riskGate.evaluate.mock.calls[0][0].intentAction).toBe(OrderIntentActionEnum.OPEN);
     });
 });
 

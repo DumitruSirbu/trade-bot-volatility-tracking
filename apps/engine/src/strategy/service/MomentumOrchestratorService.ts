@@ -153,23 +153,57 @@ export class MomentumOrchestratorService {
         const params = this.activeParams;
         const universe = await this.buildUniverse(params, nowMs);
         const selection = this.strategy.selectUniverse({ universe, params, nowMs });
-        const selectedSymbols = new Set(selection.selected.map((entry) => entry.symbol));
+        const ranked = selection.ranked;
+        const rankedSymbols = new Set(ranked.map((entry) => entry.symbol));
 
         const openPositions = (await this.positions.findOpen()).filter((position) => position.strategyVersionId === this.activeVersionId);
         const openSymbols = new Set(openPositions.map((position) => position.symbol));
 
-        this.logger.log(`rebalance reason=${selection.reason} selected=${[...selectedSymbols].join(',') || '-'} open=${[...openSymbols].join(',') || '-'}`);
+        this.logger.log(
+            `rebalance reason=${selection.reason} ranked=${ranked.length} retained_target=${params.top_n} open=${[...openSymbols].join(',') || '-'}`,
+        );
 
-        const closes = openPositions.filter((position) => !selectedSymbols.has(position.symbol)).sort((left, right) => left.symbol.localeCompare(right.symbol));
+        // ADR 0050 §2.2 step 1 — definite de-rank closes (symbol absent from ranked entirely).
+        const definiteCloses = openPositions
+            .filter((position) => !rankedSymbols.has(position.symbol))
+            .sort((left, right) => left.symbol.localeCompare(right.symbol));
 
-        for (const position of closes) {
+        for (const position of definiteCloses) {
             await this.processClose(position, nowMs, params);
         }
 
-        const opens = selection.selected.filter((entry) => !openSymbols.has(entry.symbol));
+        const survivingOpenSymbols = new Set(openPositions.filter((position) => rankedSymbols.has(position.symbol)).map((position) => position.symbol));
+        const retained = new Set<string>();
+        let filled = 0;
 
-        for (const selected of opens) {
-            await this.processOpen(selected.symbol, selected.rank, params, nowMs);
+        // ADR 0050 §2.2 step 2 — cascade walk: hold-or-open in rank order until top_n fills.
+        for (const entry of ranked) {
+            if (filled >= params.top_n) {
+                break;
+            }
+
+            if (survivingOpenSymbols.has(entry.symbol)) {
+                retained.add(entry.symbol);
+                filled++;
+
+                continue;
+            }
+
+            const approved = await this.processOpen(entry.symbol, entry.rank, params, nowMs);
+
+            if (approved) {
+                retained.add(entry.symbol);
+                filled++;
+            }
+        }
+
+        // ADR 0050 §2.2 step 3 — residual de-rank closes (ranked but not retained after the walk).
+        const residualCloses = openPositions
+            .filter((position) => rankedSymbols.has(position.symbol) && !retained.has(position.symbol))
+            .sort((left, right) => left.symbol.localeCompare(right.symbol));
+
+        for (const position of residualCloses) {
+            await this.processClose(position, nowMs, params);
         }
     }
 
@@ -239,19 +273,19 @@ export class MomentumOrchestratorService {
         await this.evaluateAndEmit(intent, snapshot, position.positionSlot ?? null, nowMs, params);
     }
 
-    private async processOpen(symbol: string, rank: number, params: IMomentumParams, nowMs: number): Promise<void> {
+    private async processOpen(symbol: string, rank: number, params: IMomentumParams, nowMs: number): Promise<boolean> {
         const intent = await this.buildMomentumOpenIntent(symbol, rank, params, nowMs);
 
         if (intent === null) {
             this.logger.log(`momentum open skipped ${symbol} — no price/ATR/instrument/sizing`);
 
-            return;
+            return false;
         }
 
         const atr14 = intent.proposedExit.atrDistance ?? new Money(0);
         const snapshot = this.buildMomentumSnapshot(symbol, intent.entryPrice, atr14, intent.coinTier, intent.signalScore, nowMs);
 
-        await this.evaluateAndEmit(intent, snapshot, null, nowMs, params);
+        return this.evaluateAndEmit(intent, snapshot, null, nowMs, params);
     }
 
     // Long-only momentum open (ADR 0048 §3). Returns null (a logged skip) on any missing input —
@@ -387,7 +421,7 @@ export class MomentumOrchestratorService {
         positionSlotFallback: PositionSlotEnum | null,
         nowMs: number,
         params: IMomentumParams,
-    ): Promise<void> {
+    ): Promise<boolean> {
         const gateStrategyParams = this.buildGateStrategyParams(params);
         const context = await this.buildGateContext(intent.symbol, snapshot, nowMs, gateStrategyParams);
         const decision = await this.riskGate.evaluate(intent, context);
@@ -397,10 +431,12 @@ export class MomentumOrchestratorService {
         if (decision.outcome !== RiskOutcomeEnum.APPROVED) {
             this.logger.log(`momentum ${intent.intentAction} ${intent.symbol} not approved reason=${decision.rejectReason ?? 'unknown'}`);
 
-            return;
+            return false;
         }
 
         this.emitApproval(intent, snapshot, decision, positionSlotFallback, gateStrategyParams);
+
+        return true;
     }
 
     private emitApproval(

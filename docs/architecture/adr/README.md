@@ -30,6 +30,7 @@ Also see [live-vs-backtest-contract.md](../live-vs-backtest-contract.md) for the
 | [0047](0047-portfolio-strategy-contract.md) | Portfolio-strategy contract — `IPortfolioStrategy` + `momentumParamsSchema` (M50) |
 | [0048](0048-rebalance-orchestrator.md) | Rebalance orchestrator — scheduler + momentum orchestrator routing through the unchanged risk gate (M50) |
 | [0049](0049-legacy-single-symbol-path-optional-dormant.md) | Legacy single-symbol (VWAP) path optional + dormant — `ACTIVE_STRATEGY_VERSION_ID` optional after VWAP retirement (M50) |
+| [0050](0050-xmom-cascade-topn-rebalance-anchor.md) | xmom rank-cascade selection, `top_n` basket (default 3), fixed 01:07 UTC rebalance cron (M50b) |
 
 ## Risk, halts, paper profile
 
