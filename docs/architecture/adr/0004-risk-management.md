@@ -485,6 +485,15 @@ until M19.
 > single value or read the param inside the breadth halt. The halt reads the const; flow
 > classification reads the param; neither sees the other.
 
+> **[M51 pointer note — 2026-07-02]:** The **live** tier1/tier2/tier3 floors above
+> (`COIN_DEPTH_FLOOR_10BPS_USDT`) and the tier spread ceilings (`TIER_SPREAD_CEILING_PCT`) are
+> **unchanged** — byte-for-byte. M51 adds a **paper-only, env-gated** relaxed per-coin floor
+> (`PAPER_RELAX_PER_COIN_LIQUIDITY`: relaxed depth `> $2,500`, spread `≤ 0.30%`) applied **only**
+> under `EXCHANGE_ENV=paper` + flag-on, owned by **ADR 0042 §9**. It is a separate paper-only
+> constant selected at gate-context build time; it never mutates the live floors here and is
+> unreachable in any non-`paper` env. If you are reading §6a to confirm the live floor, it did not
+> move — see ADR 0042 §9 for the paper relax.
+
 Both §6a and §6b are **code-only** — the floors and the breadth distance are `riskConsts`,
 not `strategy_versions.params`. M19 writes nothing to the DB (no migration, no params
 re-seed).

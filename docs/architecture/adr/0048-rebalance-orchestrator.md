@@ -415,4 +415,90 @@ enhancement, not part of closing this finding.
 - **Join `positions → decisions` on `event_id` at query time to recover the suffix.** Rejected.
   `PositionEntity` has no `event_id` FK; adding one plus a runtime join is far more surface than
   a single denormalised column, and re-introduces the fragile suffix parse.
+
+---
+
+## Amendment — M51 (2026-07-02): the time-stop gate ceiling MUST derive from the same 2× margin constant as the intent
+
+### Context
+
+The momentum open intent proposes a **failsafe** time-stop `timeStopAtMs` set **2×** the
+rebalance interval into the future — `MomentumOrchestratorService` (`:384`) computed
+`timeStopAtMs = nowMs + rebalance_interval_ms × 2`. The 2× margin is intentional: the time-stop
+enforcer is a **backstop** for "the rebalance mechanism itself failed to run", not the primary
+exit. The primary exit is the next scheduled 01:07 UTC re-rank (§2.2, ADR 0050). On a normally
+running scheduler the time-stop never fires; it only matters if the cron does not run, so it must
+sit **beyond** the next rebalance instant — hence 2× the interval, not 1×.
+
+The **defect (P0):** the gate ceiling was derived from a straight **1×**.
+`buildGateStrategyParams` (`MomentumOrchestratorService:539`) set the gate's `time_stop_minutes`
+ceiling from `ceil(rebalance_interval_ms / MS_PER_MINUTE)` — a **24h** ceiling on the default
+interval — while the intent proposed a **48h** `timeStopAtMs`. `RiskGateService.checkTimeStop`
+(`:1303-1306`) rejects `TIME_STOP_MISSING_OR_INVALID` when
+`timeStopAtMs > nowMs + time_stop_minutes × MS_PER_MINUTE`, so **every** symbol that cleared the
+earlier spread/depth checks was rejected on time-stop. At the 2026-07-02 01:07 cron this was **84
+of 100** attempts — all deep-book symbols (depth p50 ≈ $73,326) that were otherwise tradeable. The
+two sides of a single hold geometry had **drifted**: the intent used 2×, the ceiling used 1×.
+
+Full analysis: [`docs/wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md`](../../wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md);
+milestone plan: [`docs/plans/M51-xmom-paper-gate-unblock.md`](../../plans/M51-xmom-paper-gate-unblock.md) (D1).
+
+### Decision
+
+**1. One source of truth for the 2× margin (locked).** The margin multiplier is a single named
+constant `MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER = 2` in `strategy/const/strategyConsts.ts`,
+replacing the inline `* 2` literal at `MomentumOrchestratorService:384`. **Both** the intent and
+the gate ceiling MUST derive from it — they can never again drift apart:
+
+- **Intent (behaviour unchanged, de-magic-numbered):**
+  `timeStopAtMs = nowMs + rebalance_interval_ms × MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER`.
+- **Ceiling (the fix):** `buildGateStrategyParams` derives
+  `time_stop_minutes = ceil(rebalance_interval_ms × MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER / MS_PER_MINUTE)`
+  instead of `ceil(rebalance_interval_ms / MS_PER_MINUTE)`.
+
+Net: on the default 24h interval the ceiling becomes **48h** and the 48h intent passes. Changing
+the interval keeps intent and ceiling in lockstep because both read the one constant.
+
+**2. This is a ceiling-value fix, NOT a gate loophole (locked, logic-reviewer verified).**
+
+- The ceiling is still **server-derived**: `buildGateStrategyParams` computes it from
+  `context.params` (built from the `strategy_versions` row), **never** from the incoming intent. A
+  malformed or malicious intent **cannot inflate its own ceiling** — it can only propose a
+  `timeStopAtMs`, which the server-derived ceiling then bounds. This trust boundary is **unchanged**;
+  only the numeric ceiling widens from 1× to 2×.
+- The **lower-bound guard is unchanged**: `checkTimeStop` still rejects `timeStopAtMs <= nowMs`
+  (`TIME_STOP_MISSING_OR_INVALID`).
+- **No xmom-specific waiver, no upper-bound skip.** Skipping the upper bound would permit unbounded
+  holds — the opposite of a failsafe. The upper bound stays; it is only derived from the correct
+  multiplier. `RiskGateService.checkTimeStop` is **not modified** — only the ceiling value fed to it
+  via `context.params` changes.
+
+**3. Quant sign-off on the resulting hold.** A 48h max hold on a 24h cadence is an acceptable
+failsafe backstop: the SL still protects intra-hold, and the 2× time-stop is insurance for "the
+scheduler failed to run", not the primary exit. If the scheduler runs normally the time-stop never
+fires.
+
+### Consequences
+
+- Deep-book momentum symbols stop rejecting on `time_stop_missing_or_invalid`; the dominant P0
+  blocker (84% of the 01:07 cron attempts) is removed.
+- Intent and ceiling can never drift again — a single constant governs both, enforced by a
+  no-drift boundary test at a non-default interval.
+- LIVE behaviour is unaffected: no live momentum path is enabled, and the change is a pure
+  ceiling-derivation alignment (reversible by reverting the constant derivation).
+- Thin momentum leaders at ranks 1–7 remain blocked by the per-coin liquidity floor after this fix
+  — that is the separate P1 blocker addressed by the ADR 0042 M51 amendment (paper-only liquidity
+  relax). D1 alone unblocks only deep-book symbols at ranks 8+.
+
+### Alternatives considered
+
+- **Add an xmom-specific waiver that skips the time-stop upper bound.** Rejected — it permits
+  unbounded holds, defeating the failsafe. The bound must stay; only its value was wrong.
+- **Lower the intent margin to 1× to match the old ceiling.** Rejected — the intent would then
+  time-stop **before** the next scheduled rebalance, converting a backstop into a premature primary
+  exit and defeating the D7 hold geometry (a still-ranked winner would be force-closed at the
+  interval boundary).
+- **Two independent constants (one for the intent, one for the ceiling).** Rejected — that is
+  exactly the drift that caused the defect. A single shared constant is the only design that makes
+  the two sides structurally incapable of disagreeing.
 </content>
