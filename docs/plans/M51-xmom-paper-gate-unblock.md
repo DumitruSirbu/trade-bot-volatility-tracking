@@ -175,12 +175,27 @@ A new **default-off** env flag `PAPER_RELAX_PER_COIN_LIQUIDITY` (boolean) that, 
 `EXCHANGE_ENV=paper` AND the flag is on**, applies a relaxed per-coin liquidity floor to the gate's
 spread/depth checks:
 
-- **Relaxed depth floor: > $2,500** (10bps one-sided). Rationale (quant-verified, PAPER-specific): a
-  $500 max-per-coin order is **20%** of a $2,500 one-sided 10bps book → ~2 bps linear market-impact
-  estimate, a defensible order/book-impact ratio for paper pipeline validation. **Do not go below
-  $2,500** — the source doc's book-consumption table shows $2,000 = 25% and $1,500 = 33% are too
-  aggressive.
-- **Relaxed spread ceiling: ≤ 0.30%.**
+- **Relaxed depth floor candidate: $2,500** (10bps one-sided). Rationale (quant-verified,
+  PAPER-specific): a $500 max-per-coin order is **20%** of a $2,500 one-sided 10bps book → ~2 bps linear
+  market-impact estimate, a defensible order/book-impact ratio for paper pipeline validation. **Do not
+  go below $2,500** — the source doc's book-consumption table shows $2,000 = 25% and $1,500 = 33% are
+  too aggressive.
+- **Relaxed spread ceiling candidate: 0.30%.**
+
+**Combine per-tier so the relax is never stricter than live (M51 QA-D2b, 2026-07-02).** The relaxed
+candidate is NOT applied as a flat unconditional override. A flat $2,500 / 0.30% is looser than live for
+tier1 (the intended unblock) and equal for tier2, but **stricter than live for tier3** (live depth floor
+$2,000 < $2,500; live spread ceiling 0.50% > 0.30%) — a tier3 symbol that clears the live gate today
+would be newly rejected once the flag is turned on, contradicting the design intent ("relaxed rule must
+be strictly looser, never accidentally stricter"). The gate instead applies the per-tier combination:
+
+- `effectiveDepthFloor = min(PAPER_RELAX_COIN_DEPTH_FLOOR_10BPS_USDT, COIN_DEPTH_FLOOR_10BPS_USDT[tier])`
+- `effectiveSpreadCeiling = max(PAPER_RELAX_SPREAD_CEILING_PCT, TIER_SPREAD_CEILING_PCT[tier])`
+
+For tier1/tier2 (the momentum leaders `xmom` actually targets) this yields the same $2,500 / 0.30% as the
+flat value, so the soak-enablement goal is byte-identical; only tier3 is corrected back to its live floor.
+Fail-closed on an unknown tier is preserved: the live tier lookup runs first and rejects (too-thin) if it
+returns `undefined`, in every env including paper relax. See ADR 0042 §9 item 3 for the blessed contract.
 
 Hard constraints on the design:
 
