@@ -37,6 +37,7 @@ import { PositionEntity } from '../../position/entity';
 import { PositionRepository } from '../../position/repository/PositionRepository';
 import { IOrderIntent, IOrderIntentApprovedEvent, IRiskDecision, IRiskGateContext, IRiskLimits } from '../../risk/interface';
 import { InstrumentPortAdapter, OpenPositionsPortAdapter, PositionSizer, RiskGateService, RiskStatePortAdapter } from '../../risk/service';
+import { MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER } from '../const';
 import { DecisionRepository } from '../repository/DecisionRepository';
 import { StrategyVersionRepository } from '../repository/StrategyVersionRepository';
 import { XMomPortfolioStrategy } from '../strategies/XMomPortfolioStrategy';
@@ -378,10 +379,11 @@ export class MomentumOrchestratorService {
                 takeProfitPrice,
                 stopLossPrice,
                 stopType: StopTypeEnum.ATR,
-                // Momentum hold is time-driven at the rebalance cadence, not bar-driven. The 2×
-                // margin is a safety net: the time-stop enforcer must never fire before the next
-                // rebalance boundary, else a still-ranked winner is closed then reopened (double fees).
-                timeStopAtMs: nowMs + params.rebalance_interval_ms * 2,
+                // Momentum hold is time-driven at the rebalance cadence, not bar-driven. The margin
+                // is a safety net: the time-stop enforcer must never fire before the next rebalance
+                // boundary, else a still-ranked winner is closed then reopened (double fees). Derives
+                // from the same constant as the gate ceiling (ADR 0048 §M51) so the two never drift.
+                timeStopAtMs: nowMs + params.rebalance_interval_ms * MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER,
                 tpRebaseEligible: false,
                 atrDistance: atr24h,
             },
@@ -536,7 +538,9 @@ export class MomentumOrchestratorService {
             volume_ratio_min: 1,
             atr_period: ATR_PERIOD,
             atr_stop_multiplier: params.xmom_atr_stop_multiplier,
-            time_stop_minutes: Math.ceil(params.rebalance_interval_ms / MS_PER_MINUTE),
+            // Ceiling MUST derive from the SAME 2× margin as the intent's timeStopAtMs (ADR 0048
+            // §M51) — a 1× ceiling rejected every deep-book symbol on time_stop_missing_or_invalid.
+            time_stop_minutes: Math.ceil((params.rebalance_interval_ms * MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER) / MS_PER_MINUTE),
             idiosyncrasy_min_score: 0,
             btc_correlated_move_threshold_pct: 1,
             max_open_positions: this.config.maxOpenPositions,
