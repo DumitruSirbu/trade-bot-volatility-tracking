@@ -17,11 +17,12 @@
  *              together in one gate.evaluate() call, not just each in isolation.
  *   QA-D2a — sanity: depth exactly at the OLD live tier1 floor ($10,000) with the relax on still
  *            passes (the relaxed floor is strictly looser for tier1).
- *   QA-D2b — FINDING: the relax's single flat floor ($2,500) is looser than live tier1 ($10k) and
- *            byte-identical to live tier2 ($2,500), but STRICTER than live tier3 ($2,000) — a
- *            tier3 coin that would clear the LIVE floor can be REJECTED once the relax is turned
- *            on. This contradicts the design intent ("relaxed rule must be strictly looser, never
- *            accidentally stricter") for tier3 specifically.
+ *   QA-D2b — REGRESSION GUARD: the relax is never stricter than live for tier3 (per-tier min/max).
+ *            The effective floor/ceiling is min(paperCandidate, liveTierFloor) for depth and
+ *            max(paperCandidate, liveTierCeiling) for spread, so a tier3 coin that clears the LIVE
+ *            floor/ceiling is never newly rejected once the relax is turned on — honoring the design
+ *            intent ("relaxed rule must be strictly looser, never accidentally stricter") for every
+ *            tier, depth AND spread. Tier1/tier2 unblock stays byte-identical to the flat candidate.
  */
 
 import {
@@ -354,10 +355,10 @@ describe('RiskGateService M51 QA-D2a — sanity: relax admits depth exactly at t
     });
 });
 
-// ─── QA-D2b: FINDING — relax regresses tier3 (flat floor $2,500 > live tier3 floor $2,000) ──
+// ─── QA-D2b: REGRESSION GUARD — relax is never stricter than live for tier3 (per-tier min/max) ──
 
-describe('RiskGateService M51 QA-D2b — FINDING: relax is STRICTER than live for tier3, not strictly looser', () => {
-    it('tier3 depth $2,200 clears the LIVE tier3 floor ($2,000) but rejects once the paper relax is enabled', async () => {
+describe('RiskGateService M51 QA-D2b — relax is never stricter than live for tier3 (per-tier min/max)', () => {
+    it('tier3 depth $2,200 clears the LIVE tier3 floor ($2,000) and STILL clears once the paper relax is enabled', async () => {
         const timeStopMinutes = 60;
         const timeStopAtMs = NOW_MS + 30 * 60_000;
 
@@ -370,11 +371,32 @@ describe('RiskGateService M51 QA-D2b — FINDING: relax is STRICTER than live fo
         const relaxOnGate = buildGate(buildAppConfig(ExchangeEnvironmentEnum.PAPER, true));
         const relaxOnResult = await relaxOnGate.evaluate(buildIntent(timeStopAtMs, CoinTierEnum.TIER_3), buildContext('2200', timeStopMinutes));
 
-        // EXPECTED per the design intent ("relaxed rule must be strictly looser, never
-        // accidentally stricter"): turning the relax ON should never newly reject a symbol that
-        // passed under the live floor. ACTUAL: the relax's flat $2,500 floor is HIGHER than the
-        // live tier3 floor ($2,000), so this symbol flips from admitted to COIN_BOOK_TOO_THIN.
+        // Per the design intent ("relaxed rule must be strictly looser, never accidentally
+        // stricter"): turning the relax ON must never newly reject a symbol that passed under the
+        // live floor. The per-tier min — min($2,500 candidate, $2,000 live tier3 floor) = $2,000 —
+        // keeps the effective floor at the (looser) live value, so $2,200 still clears.
         expect(relaxOnResult.rejectReason).not.toBe(RejectReasonEnum.COIN_BOOK_TOO_THIN);
+    });
+
+    it('tier3 spread 0.40% clears the LIVE tier3 ceiling (0.50%) and STILL clears once the paper relax is enabled', async () => {
+        // Spread analogue of the depth regression: a flat $0.30% relaxed ceiling would be STRICTER
+        // than the live tier3 ceiling (0.50%) and newly reject a 0.40% spread. The per-tier max —
+        // max(0.30% candidate, 0.50% live tier3 ceiling) = 0.50% — keeps the effective ceiling at
+        // the (looser) live value, so 0.40% still passes. Deep book so depth never rejects first.
+        const timeStopMinutes = 60;
+        const timeStopAtMs = NOW_MS + 30 * 60_000;
+        const tier3Spread = 0.4;
+
+        const liveOffGate = buildGate(buildAppConfig(ExchangeEnvironmentEnum.PAPER, false));
+        const liveOffResult = await liveOffGate.evaluate(buildIntent(timeStopAtMs, CoinTierEnum.TIER_3), buildContext('999999', timeStopMinutes, tier3Spread));
+
+        // Baseline: 0.40% clears the LIVE tier3 ceiling (0.50%) — not too wide.
+        expect(liveOffResult.rejectReason).not.toBe(RejectReasonEnum.SPREAD_TOO_WIDE);
+
+        const relaxOnGate = buildGate(buildAppConfig(ExchangeEnvironmentEnum.PAPER, true));
+        const relaxOnResult = await relaxOnGate.evaluate(buildIntent(timeStopAtMs, CoinTierEnum.TIER_3), buildContext('999999', timeStopMinutes, tier3Spread));
+
+        expect(relaxOnResult.rejectReason).not.toBe(RejectReasonEnum.SPREAD_TOO_WIDE);
     });
 
     it('tier2 depth is unaffected by the relax (relaxed $2,500 floor is byte-identical to the live tier2 floor)', async () => {
