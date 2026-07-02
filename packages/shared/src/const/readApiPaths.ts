@@ -11,6 +11,7 @@ export const READ_API_PATHS = {
     controlHalt: `${READ_API_BASE}/control/halt`,
     controlHaltHistory: `${READ_API_BASE}/control/halt/history`,
     controlResume: `${READ_API_BASE}/control/resume`,
+    controlTriggerRebalance: `${READ_API_BASE}/control/trigger-rebalance`,
     positionsOpen: `${READ_API_BASE}/positions/open`,
     positionsClosed: `${READ_API_BASE}/positions/closed`,
     positionById: (id: string) => `${READ_API_BASE}/positions/${id}`,

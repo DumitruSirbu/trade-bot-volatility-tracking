@@ -45,6 +45,7 @@
 import { Decimal } from 'decimal.js';
 import { DataSource } from 'typeorm';
 import type { IPerformanceByVersionView } from '@bot/shared';
+import { RebalanceTriggerSourceEnum } from '@bot/shared';
 
 import { MS_PER_DAY, STRATEGY_STATUS_ACTIVE } from '../const/index.js';
 import { AnalysisValidationError, validateDateRangeOrThrow } from '../util/analysisValidation.js';
@@ -85,6 +86,11 @@ const PERFORMANCE_SQL = `
       AND p.state = 'closed'
       AND p.closed_at >= $2
       AND p.closed_at <  $3
+      -- M50c (ADR 0048 amendment): fence manual (operator smoke-test / ad-hoc) rebalances out
+      -- of the primary calibration aggregation. NULL rows (VWAP + pre-existing) are legitimate
+      -- scheduled/organic history and are retained. 'manual' is a fixed enum literal, not user
+      -- input, so a plain SQL literal comparison is safe (no interpolation of a bound value).
+      AND (p.trigger_source IS NULL OR p.trigger_source <> '${RebalanceTriggerSourceEnum.MANUAL}')
 `;
 
 // M37 W1 (D1.1/D1.2) — shadow-version aggregation. A shadow version has no

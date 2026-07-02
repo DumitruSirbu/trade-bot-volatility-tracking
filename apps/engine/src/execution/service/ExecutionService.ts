@@ -1393,6 +1393,7 @@ export class ExecutionService {
             coinTier: event.intent.coinTier,
             positionSlot: event.approvedSlot,
             correlationMode: event.intent.correlationMode,
+            triggerSource: event.intent.triggerSource ?? null,
             timeStopAt: new Date(event.clampedExit.timeStopAtMs),
             // M33 Task 5 (GBT H3): persist the clamped SL/TP at INSERT time — not only at
             // applyProtectiveAttachResult. The local monitor's arm is in-memory; a crash between

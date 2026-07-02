@@ -12,6 +12,7 @@ import {
     OrderIntentActionEnum,
     PositionSideEnum,
     PositionSlotEnum,
+    RebalanceTriggerSourceEnum,
     RegimeLabelEnum,
     RiskOutcomeEnum,
     StopTypeEnum,
@@ -55,6 +56,16 @@ const MOMENTUM_NEUTRAL_RSI = 50;
 
 // ATR period for momentum stop sizing: 24h of 5m bars (12 bars/h × 24h).
 const MOMENTUM_ATR_PERIOD = 288;
+
+// Per-rebalance leg context threaded through the open/close leg builders (ADR 0048 M50c). Groups
+// the three values every leg of a single rebalance shares — the rebalance instant, its trigger
+// provenance, and the resolved momentum params — so the leg methods take one cohesive object
+// instead of 2-3 loose scalars. `symbol`/`rank`/`position` stay separate: they vary per leg.
+interface IRebalanceLegContext {
+    readonly nowMs: number;
+    readonly triggerSource: RebalanceTriggerSourceEnum;
+    readonly params: IMomentumParams;
+}
 
 // The M50 rebalance orchestrator (ADR 0048 §2.3). On each UNIVERSE_REBALANCE_DUE_EVENT it builds
 // the universe snapshot, calls the pure ranking core (via XMomPortfolioStrategy), diffs the
@@ -113,7 +124,7 @@ export class MomentumOrchestratorService {
                 return;
             }
 
-            await this.rebalance(event.nowMs);
+            await this.rebalance(event.nowMs, event.triggerSource);
         } catch (cause) {
             this.logger.error(`rebalance failed: ${formatErrorCause(cause)}`);
         } finally {
@@ -149,8 +160,9 @@ export class MomentumOrchestratorService {
         return true;
     }
 
-    private async rebalance(nowMs: number): Promise<void> {
+    private async rebalance(nowMs: number, triggerSource: RebalanceTriggerSourceEnum): Promise<void> {
         const params = this.activeParams;
+        const context: IRebalanceLegContext = { nowMs, triggerSource, params };
         const universe = await this.buildUniverse(params, nowMs);
         const selection = this.strategy.selectUniverse({ universe, params, nowMs });
         const ranked = selection.ranked;
@@ -169,7 +181,7 @@ export class MomentumOrchestratorService {
             .sort((left, right) => left.symbol.localeCompare(right.symbol));
 
         for (const position of definiteCloses) {
-            await this.processClose(position, nowMs, params);
+            await this.processClose(position, context);
         }
 
         const survivingOpenSymbols = new Set(openPositions.filter((position) => rankedSymbols.has(position.symbol)).map((position) => position.symbol));
@@ -189,7 +201,7 @@ export class MomentumOrchestratorService {
                 continue;
             }
 
-            const approved = await this.processOpen(entry.symbol, entry.rank, params, nowMs);
+            const approved = await this.processOpen(entry.symbol, entry.rank, context);
 
             if (approved) {
                 retained.add(entry.symbol);
@@ -203,7 +215,7 @@ export class MomentumOrchestratorService {
             .sort((left, right) => left.symbol.localeCompare(right.symbol));
 
         for (const position of residualCloses) {
-            await this.processClose(position, nowMs, params);
+            await this.processClose(position, context);
         }
     }
 
@@ -264,17 +276,19 @@ export class MomentumOrchestratorService {
         return last.minus(first).dividedBy(first).times(100).toNumber();
     }
 
-    private async processClose(position: PositionEntity, nowMs: number, params: IMomentumParams): Promise<void> {
+    private async processClose(position: PositionEntity, context: IRebalanceLegContext): Promise<void> {
+        const { nowMs, params } = context;
         const state = this.symbolStates.get(position.symbol);
         const midAtTrigger = state?.candles5m.getLatestClosedBar()?.close ?? position.entryPrice;
-        const intent = this.buildMomentumCloseIntent(position, midAtTrigger, nowMs);
+        const intent = this.buildMomentumCloseIntent(position, midAtTrigger, context);
         const snapshot = this.buildMomentumSnapshot(position.symbol, position.entryPrice, new Money(0), position.coinTier ?? CoinTierEnum.TIER_2, 0, nowMs);
 
         await this.evaluateAndEmit(intent, snapshot, position.positionSlot ?? null, nowMs, params);
     }
 
-    private async processOpen(symbol: string, rank: number, params: IMomentumParams, nowMs: number): Promise<boolean> {
-        const intent = await this.buildMomentumOpenIntent(symbol, rank, params, nowMs);
+    private async processOpen(symbol: string, rank: number, context: IRebalanceLegContext): Promise<boolean> {
+        const { nowMs, params } = context;
+        const intent = await this.buildMomentumOpenIntent(symbol, rank, context);
 
         if (intent === null) {
             this.logger.log(`momentum open skipped ${symbol} — no price/ATR/instrument/sizing`);
@@ -290,7 +304,8 @@ export class MomentumOrchestratorService {
 
     // Long-only momentum open (ADR 0048 §3). Returns null (a logged skip) on any missing input —
     // no price bar, insufficient bars for ATR, unknown instrument, or a non-sized order.
-    private async buildMomentumOpenIntent(symbol: string, rank: number, params: IMomentumParams, nowMs: number): Promise<IOrderIntent | null> {
+    private async buildMomentumOpenIntent(symbol: string, rank: number, context: IRebalanceLegContext): Promise<IOrderIntent | null> {
+        const { nowMs, params, triggerSource } = context;
         const state = this.symbolStates.get(symbol);
         const latestBar = state?.candles5m.getLatestClosedBar() ?? null;
 
@@ -346,7 +361,9 @@ export class MomentumOrchestratorService {
         return {
             intentAction: OrderIntentActionEnum.OPEN,
             symbol,
-            eventId: `xmom-open-${symbol}-${nowMs}`,
+            // triggerSource is appended so the decision row is queryable by manual-vs-scheduled
+            // without a schema change (eventId is a free-text, indexed column) — ADR 0048 §10.
+            eventId: `xmom-open-${symbol}-${nowMs}-${triggerSource}`,
             tradeSide: PositionSideEnum.LONG,
             // rank 1 → 100, rank 2 → 50, … — deterministic, monotonic in rank (ADR 0048 §3).
             signalScore: Math.round(100 / rank),
@@ -371,18 +388,23 @@ export class MomentumOrchestratorService {
             openPosition: null,
             sizing: sizingResult.sizing,
             flowType: FlowTypeEnum.TREND_INITIATION,
+            // ADR 0048 M50c: rides the intent → executor → positions.trigger_source so the analysis
+            // surfaces can fence manual rebalances out of the primary calibration aggregation.
+            triggerSource,
         };
     }
 
     // De-rank close intent — the exact ReconciliationService.buildCloseIntent blueprint. Risk-
     // reducing, so the gate auto-approves it and it passes under a halt (ADR 0048 §2.3 / ADR 0046).
-    private buildMomentumCloseIntent(position: PositionEntity, midAtTrigger: MoneyValue, nowMs: number): IOrderIntent {
+    private buildMomentumCloseIntent(position: PositionEntity, midAtTrigger: MoneyValue, context: IRebalanceLegContext): IOrderIntent {
+        const { nowMs, triggerSource } = context;
         const closeSide = position.side === PositionSideEnum.LONG ? PositionSideEnum.SHORT : PositionSideEnum.LONG;
 
         return {
             intentAction: OrderIntentActionEnum.CLOSE,
             symbol: position.symbol,
-            eventId: `xmom-close-${position.id}-${nowMs}`,
+            // triggerSource appended for manual-vs-scheduled queryability without a schema change.
+            eventId: `xmom-close-${position.id}-${nowMs}-${triggerSource}`,
             tradeSide: closeSide,
             signalScore: 0,
             correlationMode: position.correlationMode ?? CorrelationModeEnum.IDIOSYNCRATIC,

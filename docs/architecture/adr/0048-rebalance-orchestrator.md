@@ -307,4 +307,112 @@ across strategies need **no schema change**. Decisions reuse the existing `decis
 - **A new `momentum_positions` table.** Rejected. The existing `positions` +
   `strategy_version_id` + per-`(symbol,side)` reconciliation already supports multi-position;
   a new table is needless schema and migration risk.
+
+---
+
+## Amendment — M50c (2026-07-02): trigger-source persisted to `positions.trigger_source`
+
+### Context
+
+M50b added `RebalanceTriggerSourceEnum` (`scheduled` / `manual`) threaded from the
+`IUniverseRebalanceDueEvent` through `MomentumOrchestratorService.rebalance` into the
+intent builders, where it was used **only to suffix the decision `event_id` string**
+(e.g. `xmom-open-BTCUSDT-1234-manual`). A quant review found this does not close the real
+gap: the calibration and cross-version comparison surfaces
+(`packages/analysis/src/query/getPerformance.ts`,
+`packages/analysis/src/query/compareVersions.ts`) aggregate the **`positions`** table keyed
+on `strategy_version_id`, and `PositionEntity` has no link back to `decisions.event_id` and
+no trigger-source field. So a manually-triggered trade is indistinguishable from a scheduled
+one in every performance metric — manual triggers (operator smoke tests, ad-hoc rebalances)
+silently contaminate the paper-soak calibration sample. This amendment persists the
+trigger-source onto the position row itself so the analysis surfaces can fence manual trades
+out of the primary aggregation.
+
+### Decision
+
+**1. Column.** Add `positions.trigger_source` — nullable `varchar` carrying the
+`RebalanceTriggerSourceEnum` string value (`scheduled` | `manual`). `NULL` is the correct and
+permanent value for: all pre-existing rows (no backfill), and every VWAP / legacy single-symbol
+open, which has no rebalance-trigger concept. The property on `PositionEntity` is
+`triggerSource?: RebalanceTriggerSourceEnum | null`. Named `trigger_source` (not
+`opened_via`) to match the `triggerSource` term already threaded through the event and
+orchestrator, and the enum name. It is a provenance/attribution field, not a market-feature
+snapshot, so it deliberately does **not** take the `_at_entry` suffix used by the frozen
+entry-analysis columns.
+
+**2. Propagation path (typed field on the intent — no shared-contract change).** The value
+rides the same intent → position path the existing entry-time fields use
+(`flowTypeAtEntry ← intent.flowType`, `coinTier ← intent.coinTier`,
+`correlationMode ← intent.correlationMode`). Concretely:
+
+- Add `readonly triggerSource?: RebalanceTriggerSourceEnum;` to the **engine-internal**
+  `IOrderIntent` (`apps/engine/src/risk/interface/IOrderIntent.ts`). This is **not** a
+  `packages/shared` change — that interface is engine-local, and `RebalanceTriggerSourceEnum`
+  already lives in `@bot/shared`. Optional because the VWAP path (`StrategyService`) never
+  sets it. **`bot-shared-maintainer` is not required.**
+- `MomentumOrchestratorService.buildMomentumOpenIntent` (already receives `triggerSource`)
+  sets `triggerSource` on the returned intent object. (The close intent may set it too for
+  symmetry, but close intents create no position row, so it is not load-bearing there.)
+- `IOrderIntentApprovedEvent` needs **no change** — it already carries the full `intent`, so
+  the value reaches the executor as `event.intent.triggerSource` for free.
+- `ExecutionService.createPositionFromFill` adds one line to the `positions.createOpen({…})`
+  call: `triggerSource: event.intent.triggerSource ?? null`. `createOpen` already takes
+  `DeepPartial<PositionEntity>`, so no repository DTO changes.
+
+The **eventId-suffix-parsing alternative** (have the position-creation step re-parse the
+`-manual` suffix back out of `intent.eventId`) is **rejected**: it is fragile string-parsing
+(Law-of-Demeter / stringly-typed), breaks silently if the `event_id` format ever changes,
+has no clean value for the suffix-less VWAP eventIds, and contradicts the established typed
+intent-field precedent. The eventId suffix from M50b becomes redundant for analysis once the
+column exists; it may remain as a human-readable log/debug aid.
+
+**3. Migration.** One additive migration under `apps/engine/src/database/migrations/`,
+matching the `AddPositionCorrelationMode` precedent exactly (TypeORM `MigrationInterface`,
+`ClassNameNNNN` with the timestamp echoed into the `name` field). Timestamp must sort after
+the current max (`20260709000100`); use `20260710000000-AddPositionTriggerSource.ts`. Nullable,
+no backfill (`NULL` = unknown/pre-existing/VWAP — not a data-loss concern):
+
+```
+up():   ALTER TABLE "positions" ADD COLUMN "trigger_source" varchar
+down(): ALTER TABLE "positions" DROP COLUMN IF EXISTS "trigger_source"
+```
+
+A full `pg_dump` (`backups/backup_20260702_1022.sql.gz`) was taken before this migration per
+the DB-safety rule.
+
+**4. Analysis surfaces — exclude manual from the primary aggregation.** Manual-triggered
+positions are fenced out of calibration by default (this is what closes the HIGH finding).
+Add `AND (p.trigger_source IS NULL OR p.trigger_source <> 'manual')` to:
+
+- `PERFORMANCE_SQL` in `getPerformance.ts` (alongside the existing `p.state = 'closed'` /
+  window predicates). `NULL` rows (VWAP + pre-existing) are retained — they are legitimate
+  scheduled/organic history.
+- the active-side CTE in `compareVersions.ts` (`buildActiveSideCte`), so paired-diff events
+  anchored to a manual position are excluded symmetrically. The shadow-side CTE is unaffected
+  (`shadow_decisions` has no manual triggers).
+
+The value is bound as a positional parameter, not string-interpolated, to honour the
+boundary-lint SQL-injection rule. Surfacing manual trades as a separate breakdown is deferred
+— the calibration surfaces only need the exclusion; a manual-vs-scheduled report is a future
+enhancement, not part of closing this finding.
+
+### Consequences
+
+- Manual smoke-test / ad-hoc rebalances no longer contaminate paper-soak calibration or A/B
+  comparison metrics.
+- Zero `packages/shared` churn; single engine-agent pass (entity + intent field + one
+  executor line + one migration + two SQL predicates).
+- `NULL` semantics stay honest: absence means "scheduled/organic/unknown", never "manual".
+
+### Alternatives considered
+
+- **Parse the trigger-source back out of `intent.eventId`.** Rejected — see §2.
+- **New `positions.opened_via` name.** Rejected — `trigger_source` matches the enum and the
+  already-threaded `triggerSource` term; consistency over novelty.
+- **`NOT NULL DEFAULT 'scheduled'` with backfill.** Rejected. It would assert that every
+  pre-existing and every VWAP row was "scheduled", which is false for the VWAP path (no such
+  concept) and unverifiable for legacy rows. `NULL` = unknown is the truthful state.
+- **Join `positions → decisions` on `event_id` at query time to recover the suffix.** Rejected.
+  `PositionEntity` has no `event_id` FK; adding one plus a runtime join is far more surface than
+  a single denormalised column, and re-introduces the fragile suffix parse.
 </content>

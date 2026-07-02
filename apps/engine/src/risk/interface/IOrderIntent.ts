@@ -1,4 +1,12 @@
-import { CoinTierEnum, CorrelationModeEnum, ExitReasonEnum, FlowTypeEnum, OrderIntentActionEnum, PositionSideEnum } from '@bot/shared';
+import {
+    CoinTierEnum,
+    CorrelationModeEnum,
+    ExitReasonEnum,
+    FlowTypeEnum,
+    OrderIntentActionEnum,
+    PositionSideEnum,
+    RebalanceTriggerSourceEnum,
+} from '@bot/shared';
 
 import { IProposedExit, IOpenPositionState } from '../../strategy/interface';
 import { DecimalValue, MoneyValue } from '../../common/utils/money';
@@ -47,4 +55,10 @@ export interface IOrderIntent {
     // this undefined; the executor falls back to the action-driven mapping. Engine-internal
     // field — no shared-contract change.
     readonly exitReason?: ExitReasonEnum;
+    // Rebalance provenance for a momentum open (ADR 0048 M50c). Set by the momentum orchestrator
+    // to 'scheduled' or 'manual'; the executor persists it to positions.trigger_source so the
+    // analysis surfaces can fence manual (operator smoke-test / ad-hoc) trades out of the primary
+    // calibration aggregation. Left undefined by the VWAP path (StrategyService), which has no
+    // rebalance-trigger concept — that absence persists as NULL. Engine-internal — no shared change.
+    readonly triggerSource?: RebalanceTriggerSourceEnum;
 }

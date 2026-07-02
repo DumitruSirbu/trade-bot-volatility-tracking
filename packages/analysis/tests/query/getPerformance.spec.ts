@@ -288,6 +288,73 @@ describe('getPerformance', () => {
         expect(view.netPnlUsd).toBe('50');
     });
 
+    // ── M50c (ADR 0048 amendment) — manual-trigger exclusion ─────────────────
+
+    it('active-version SQL fences manual-triggered positions out of the aggregation (M50c)', async () => {
+        // why: a manually-triggered rebalance (operator smoke-test / ad-hoc) writes
+        // positions.trigger_source='manual'. Those must not contaminate the paper-soak
+        // calibration sample, so the active-version aggregation carries an explicit
+        // manual-exclusion predicate. NULL rows (VWAP + pre-existing) are RETAINED — they
+        // are legitimate scheduled/organic history — so the predicate is NULL-permissive.
+        let capturedSql = '';
+        const ds = stubDataSource(async (sql) => {
+            if (isVersionLookupSql(sql)) {
+                return [{ label: 'momentum@v3', status: 'active' }];
+            }
+
+            capturedSql = sql;
+
+            // 3 closed scheduled/NULL rows survive the manual fence; a 4th manual row is excluded.
+            return [{ trade_count: '3', win_count: '2', net_pnl_usd: '30', label: 'momentum@v3', status: 'active' }];
+        });
+
+        const view = await getPerformance(ds as never, { versionId, from, to });
+
+        expect(capturedSql).toContain("p.trigger_source IS NULL OR p.trigger_source <> 'manual'");
+        expect(view.tradeCount).toBe(3);
+    });
+
+    it('shadow-version SQL does NOT carry the manual-fence predicate (shadow_decisions has no trigger_source column)', async () => {
+        // why: the manual fence is a positions-table-only column. If the predicate ever leaked
+        // into the shadow SQL fragment it would be a hard SQL error (no such column on
+        // shadow_decisions) at query time — assert the shadow branch stays clean of it.
+        let aggregationSql = '';
+        const ds = stubDataSource(async (sql) => {
+            if (isVersionLookupSql(sql)) {
+                return [{ label: 'fade@v1', status: 'shadow' }];
+            }
+
+            aggregationSql = sql;
+
+            return [{ trade_count: '2', win_count: '1', net_pnl_usd: '5', label: 'fade@v1', status: 'shadow' }];
+        });
+
+        await getPerformance(ds as never, { versionId, from, to });
+
+        expect(aggregationSql).not.toContain('trigger_source');
+    });
+
+    it('active-version SQL retains NULL trigger_source rows (VWAP + pre-existing) — predicate is NULL-permissive, not NULL-excluding', async () => {
+        // why: a naive `p.trigger_source <> 'manual'` (without the NULL-permissive OR) would
+        // silently drop every NULL row from the aggregation under SQL's three-valued NULL
+        // comparison semantics (NULL <> 'manual' evaluates to NULL, not TRUE) — this would zero
+        // out the entire pre-M50c paper-soak history. Assert the exact NULL-permissive form.
+        let capturedSql = '';
+        const ds = stubDataSource(async (sql) => {
+            if (isVersionLookupSql(sql)) {
+                return [{ label: 'momentum@v3', status: 'active' }];
+            }
+
+            capturedSql = sql;
+
+            return [{ trade_count: '5', win_count: '3', net_pnl_usd: '40', label: 'momentum@v3', status: 'active' }];
+        });
+
+        await getPerformance(ds as never, { versionId, from, to });
+
+        expect(capturedSql).toMatch(/AND\s*\(\s*p\.trigger_source IS NULL OR p\.trigger_source <> 'manual'\s*\)/u);
+    });
+
     it('shadow aggregation uses created_at (not closed_at) as the window key', async () => {
         // why: shadow rows have no closed_at column; the simulated close lives inside
         // JSONB. Using closed_at would always miss shadow rows and yield tradeCount=0.

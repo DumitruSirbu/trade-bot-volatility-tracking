@@ -127,7 +127,7 @@ function extractSignalScore(snapshot: unknown): string | null {
         return null;
     }
 
-    const raw = (snapshot as Record<string, unknown>)['signalScore'];
+    const raw = (snapshot as Record<string, unknown>)['signal_score'] ?? (snapshot as Record<string, unknown>)['signalScore'];
 
     if (typeof raw === 'string' && raw.length > 0) {
         return raw;

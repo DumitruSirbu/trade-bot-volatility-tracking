@@ -6,6 +6,7 @@ import {
     PositionSlotEnum,
     PositionStateEnum,
     ProtectiveOrderTypeEnum,
+    RebalanceTriggerSourceEnum,
     VwapAnchorTypeEnum,
 } from '@bot/shared';
 import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
@@ -105,6 +106,13 @@ export class PositionEntity {
     // gate's slot model reads this directly; nullable for legacy/pre-M5 rows (none exist yet).
     @Column({ name: 'correlation_mode', type: 'varchar', nullable: true })
     correlationMode?: CorrelationModeEnum | null;
+
+    // Rebalance provenance at open (ADR 0048 M50c). 'scheduled' | 'manual' for momentum-portfolio
+    // opens; NULL for VWAP / legacy single-symbol opens (no rebalance-trigger concept) and every
+    // pre-existing row. The analysis calibration surfaces fence 'manual' rows out of the primary
+    // aggregation so operator smoke-tests / ad-hoc rebalances do not contaminate the paper-soak sample.
+    @Column({ name: 'trigger_source', type: 'varchar', nullable: true })
+    triggerSource?: RebalanceTriggerSourceEnum | null;
 
     @Column({ name: 'time_stop_at', type: 'timestamptz', nullable: true })
     timeStopAt?: Date | null;

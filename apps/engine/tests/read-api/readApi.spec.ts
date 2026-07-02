@@ -326,6 +326,22 @@ describe('ReadApi DTO key snapshots (ADR 0022 §2.3 — anti-leakage)', () => {
         expect(byId['13'].outcome).toBe(DecisionOutcomeEnum.SKIPPED);
     });
 
+    it('DECISION view maps signal_score from market_snapshot.signal_score (IMarketSnapshot snake_case)', async () => {
+        const harness = buildHarness();
+
+        harness.decisions.rows.push(
+            buildDecision({
+                id: 20,
+                marketSnapshot: { signal_score: 100 } as never,
+            }),
+        );
+
+        const result = await harness.metricsController.listDecisions({});
+        const view = result.items.find((item) => item.id === '20');
+
+        expect(view?.signalScore).toBe('100.000000');
+    });
+
     it('ACCOUNT EQUITY view exposes EXACTLY the IAccountEquityView keys (even from null snapshot)', async () => {
         const harness = buildHarness();
         const view = await harness.metricsController.getAccountEquity();

@@ -39,7 +39,7 @@
 import { Decimal } from 'decimal.js';
 import { DataSource } from 'typeorm';
 import type { IVersionComparisonResult } from '@bot/shared';
-import { MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN, MAX_FORCE_CLOSE_FRACTION } from '@bot/shared';
+import { MIN_PAIRED_EVENTS_FOR_RELIABLE_MEAN, MAX_FORCE_CLOSE_FRACTION, RebalanceTriggerSourceEnum } from '@bot/shared';
 
 import { STRATEGY_STATUS_ACTIVE } from '../const/index.js';
 import { AnalysisValidationError, validateDateRangeOrThrow } from '../util/analysisValidation.js';
@@ -89,7 +89,15 @@ function buildActiveSideCte(name: string, versionParam: string): string {
               AND d.position_id IS NOT NULL
             ORDER BY d.event_id, d.ts ASC
         ) d
-        LEFT JOIN positions pos ON pos.positions_id = d.position_id AND pos.state = 'closed' AND pos.closed_at < $4
+        LEFT JOIN positions pos
+            ON pos.positions_id = d.position_id
+           AND pos.state = 'closed'
+           AND pos.closed_at < $4
+           -- M50c (ADR 0048 amendment): drop pairings anchored to a manual (operator smoke-test /
+           -- ad-hoc) position so the paired-diff mirrors getPerformance's manual exclusion. A
+           -- manual position yields NULL realized_pnl here, so it is not counted as traded. NULL
+           -- trigger_source (VWAP + pre-existing) is retained. 'manual' is a fixed enum literal.
+           AND (pos.trigger_source IS NULL OR pos.trigger_source <> '${RebalanceTriggerSourceEnum.MANUAL}')
     )`;
 }
 
