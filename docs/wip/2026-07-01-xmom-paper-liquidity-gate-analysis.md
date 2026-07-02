@@ -1,7 +1,7 @@
 # xmom paper soak: gate blockage analysis (liquidity + time-stop)
 
 **Date:** 2026-07-01 (updated 2026-07-02)  
-**Status:** OPEN — analysis complete; fixes **not yet implemented**  
+**Status:** OPEN — implementation tracked in **M51** ([plans/M51-xmom-paper-gate-unblock.md](../plans/M51-xmom-paper-gate-unblock.md)); analysis complete, fixes not yet landed  
 **Context:** [2026-07-01-xmom-cascade-topn-rebalance-timing.md](done/2026-07-01-xmom-cascade-topn-rebalance-timing.md) (M50b / ADR 0050)  
 **Companion:** [main-architector-paper-soak-fill-and-gate-analysis.md](done/main-architector-paper-soak-fill-and-gate-analysis.md) (M24–M27 gate/fill arc)
 
