@@ -117,6 +117,13 @@ rejects with the flag on** — that is correct behaviour, not a P2 failure. Per-
 remains protected even in the paper exploration profile, because a thin-coin fill produces
 *unrepresentative* slippage data, which corrupts rather than enriches the soak.
 
+> **[M51 UPDATE — 2026-07-02]:** A **second, distinct** paper-only flag —
+> `PAPER_RELAX_PER_COIN_LIQUIDITY` (§9 below) — now *can* relax the per-coin spread/depth floors,
+> but **only** for the cross-sectional-momentum soak and **only** under `EXCHANGE_ENV=paper` +
+> that flag. `PAPER_RELAX_MARKET_STRESS` is unchanged and still never touches per-coin liquidity;
+> the two flags are independent. The "unrepresentative slippage" caveat above is precisely why the
+> M51 relax carries a mandatory fill-simulator-fidelity annotation (§9) and a hard `> $2,500` floor.
+
 ### 3. P3a — The 3-slot ceiling stays in ALL envs (A1)
 
 **The physical concurrency ceiling is 3 (slots A, B, C) in every environment, including paper.
@@ -333,8 +340,136 @@ copy them in by accident.
   Rejected: skipping multiple stress legs is a sharper loosening than the breadth auto-resume;
   it should require an explicit opt-in even in paper, default-off in code.
 
+## 9. M51 amendment (2026-07-02) — paper-only per-coin liquidity relax (`PAPER_RELAX_PER_COIN_LIQUIDITY`)
+
+**Status:** Accepted · **Milestone:** M51 (D2) · **Amends:** this ADR §2 (adds a second, independent
+paper-only relaxation) · **Cross-references:** ADR 0004 §6a (per-coin depth floor — live floors
+unchanged, pointer note added there).
+
+### Context
+
+The cross-sectional-momentum (`xmom`) PAPER soak approved **0 positions in 185 gate attempts**
+across two eras. After the D1 time-stop ceiling fix (ADR 0048 M51 amendment) unblocks deep-book
+symbols, the **thin momentum leaders at ranks 1–7** — the actual signal targets — still fail the
+per-coin liquidity checks **before** time-stop is even evaluated (`firstFailingCheck` order: halts →
+spread → depth → stateful/time-stop). In the smoke era **0 of 85** rows carried depth above $9k;
+the momentum leaders NFP/TAIKO sat at depth p50 ≈ $1,581–$2,557, well under the tier1 floor
+($10,000). `PAPER_RELAX_MARKET_STRESS` (§2) does **not** relax per-coin spread/depth, so no existing
+flag addresses this. Analysis:
+[`docs/wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md`](../../wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md);
+plan: [`docs/plans/M51-xmom-paper-gate-unblock.md`](../../plans/M51-xmom-paper-gate-unblock.md) (D2).
+
+### Decision
+
+**1. A new default-off env flag `PAPER_RELAX_PER_COIN_LIQUIDITY` (boolean).** Structurally mirrors
+`PAPER_RELAX_MARKET_STRESS` (§2, §6): typed through `EnvironmentVariables` (class-validator,
+strict-`true`-only parse — only the exact case-insensitive trimmed string `'true'` is true; any
+other value, including `"false"`, is off) + `AppConfigService`; **no risk service reads
+`process.env` directly** (§6, A3). Default-off in code.
+
+**2. Two-condition gate — paper-only by construction (locked, security-critical).** The relaxed
+floor is applied **only when both** `EXCHANGE_ENV=paper` **AND** `PAPER_RELAX_PER_COIN_LIQUIDITY`
+is on. Every other configuration — any non-`paper` env regardless of flag state, or `paper` with
+the flag off — reads the **existing tier-keyed live floors unchanged**. The relax path MUST be
+**unreachable** when `EXCHANGE_ENV != paper`; the security reviewer greps for any path that lets it
+reach a LIVE gate. This is the same two-condition contract §1 defines and the same defining
+invariant of this ADR: **live / testnet / backtest behaviour is byte-identical to pre-M51.**
+
+**3. The relaxed floors — combined PER-TIER with the live floor so the relax is NEVER stricter
+than live (paper-only constants — live constants NEVER mutated).**
+
+The relax defines a single paper-only relaxed **candidate** per check, but the effective floor/ceiling
+applied at the gate is combined with that coin's live tier floor so the result is **always looser than
+or equal to live for every tier** — the relax can only ever loosen, never tighten:
+
+- **Depth:** `effectiveFloor = min(PAPER_RELAX_COIN_DEPTH_FLOOR_10BPS_USDT, COIN_DEPTH_FLOOR_10BPS_USDT[tier])`
+  — a lower floor is looser (`depth <= floor` rejects), so `min` guarantees the paper floor never sits
+  above the live tier floor.
+- **Spread:** `effectiveCeiling = max(PAPER_RELAX_SPREAD_CEILING_PCT, TIER_SPREAD_CEILING_PCT[tier])`
+  — a higher ceiling is looser (`spread > ceiling` rejects), so `max` guarantees the paper ceiling never
+  sits below the live tier ceiling.
+
+| Check | Relaxed candidate (paper-only const) | Effective floor/ceiling by tier (relax on + paper) | Boundary convention (preserved from ADR 0004 §6a) |
+|-------|--------------------------------------|----------------------------------------------------|----------------------------------------------------|
+| Book depth (10bps one-sided) | `$2,500` | tier1 `min(2500,10000)=$2,500` · tier2 `min(2500,2500)=$2,500` · tier3 `min(2500,2000)=$2,000` | `depth <= floor` rejects |
+| Spread ceiling | `0.30%` | tier1 `max(0.30,0.15)=0.30%` · tier2 `max(0.30,0.30)=0.30%` · tier3 `max(0.30,0.50)=0.50%` | strict `>` ceiling rejects |
+
+- **Why per-tier, not a flat override (M51 QA finding QA-D2b, 2026-07-02).** A single flat scalar
+  ($2,500 / 0.30%) applied unconditionally is looser than live for tier1 (the intended unblock) and
+  equal for tier2, but **stricter than live for tier3** ($2,500 > live $2,000; 0.30% < live 0.50%): a
+  tier3 symbol that clears the live floor today would be newly REJECTED once an operator turns the flag
+  on. That contradicts this amendment's own stated intent — *the relaxed rule must be strictly looser,
+  never accidentally stricter.* The per-tier `min`/`max` combination eliminates the regression while
+  leaving the tier1/tier2 unblock byte-identical to the flat value (the momentum leaders `xmom` targets
+  are tier1/tier2, so the soak-enablement goal is fully preserved). The relax can now only ever loosen.
+- The relaxed candidates are **separate, new paper-only constants** in `risk/const/riskConsts.ts`,
+  **combined at the check site** (`isBookTooThin` / `isSpreadTooWide`) with the live tier floor only
+  when the two-condition gate is satisfied — exactly the `PAPER_RELAX_MARKET_STRESS` precedent of
+  choosing a relaxed input rather than editing the live const. `COIN_DEPTH_FLOOR_10BPS_USDT` and
+  `TIER_SPREAD_CEILING_PCT` stay **byte-for-byte unchanged**; a test asserts their values are not mutated.
+- **Fail-closed on an unknown tier is preserved in EVERY env, including paper relax.** The live tier
+  lookup is performed first; if it yields `undefined` (unmapped/unknown tier) the depth check rejects
+  (too-thin) exactly as before — the relax candidate must never rescue an unknown tier by supplying a
+  finite floor where the live table has none.
+- **Rationale for the `$2,500` depth candidate (quant-verified, PAPER-specific).** A $500 max-per-coin
+  order is 20% of a $2,500 one-sided 10bps book → ~2 bps linear market-impact estimate, a defensible
+  order/book-impact ratio for pipeline validation. **Do not go below $2,500** — the source doc's
+  book-consumption table shows $2,000 = 25% and $1,500 = 33% are too aggressive. (For tier1 the effective
+  floor equals $2,500, letting a paper tier1 momentum leader clear the gate as if it were tier2, without
+  touching the tier1 constant.)
+
+**4. Default off — current soak behaviour is unchanged.** With the flag unset the gate behaves
+exactly as today: the thin leader still rejects `coin_book_too_thin`. Turning M51 on is an explicit
+operator action in the paper `.env`; `.env.example` documents the flag with the paper-only caveat so
+a live operator cannot copy it in by accident.
+
+**5. Fill-simulator-fidelity caveat (open — verification requirement for the engine/QA wave, NOT
+resolved here).** It is **not yet determined** whether the paper fill simulator (`StreamingFillAdapter`)
+charges book-impact slippage on these relaxed (tier2-thin) fills, or fills flat at mid/best. This
+MUST be verified during D2 implementation/QA. **If it fills flat, the PnL from relaxed thin-book
+fills is pipeline-validation only, not edge** — it understates the real slippage a thin-book
+momentum leader incurs, and must be annotated as such wherever early M51-era PnL is surfaced
+(dashboard / soak report) so nobody reads a flat-fill number as realized edge. A slippage model, if
+needed, is a **separate follow-up**, not part of M51.
+
+### Consequences
+
+- **Positive.** Thin momentum leaders can clear the gate in PAPER, enabling the first real
+  end-to-end `xmom` trade lifecycle (open → reconcile → time-stop / next-rebalance flatten →
+  realized PnL) to be observed — the outcome the whole milestone exists to produce.
+- **Auditable + reversible.** One flag, default-off, two-condition-gated, live consts untouched.
+  Reversible by unsetting the flag with no redeploy. It can never affect LIVE (reviewer-verified).
+- **Monotonic loosening (guaranteed per-tier).** Because the effective floor/ceiling is the per-tier
+  `min`/`max` of the relaxed candidate and the live tier value, turning the flag on can only ever admit
+  MORE symbols than live, never fewer, for every tier — there is no tier (including tier3) where the
+  relax is accidentally stricter than the live gate. This is an explicit, tested invariant.
+- **Negative (accepted).** Paper soak liquidity is now looser than live for `xmom`; fills under it
+  are exploration/pipeline-validation data, not a live-edge proof — reinforced by the §9.5 fidelity
+  caveat. No promotion gate is unlocked; the relax is PAPER-only by construction.
+
+### Alternatives considered
+
+- **Lower the live tier1 floor (P2 in the source doc).** Rejected — max observed thin-book depth was
+  $7,818, so dropping tier1 to ~$8k buys almost nothing yet permanently weakens the live guard. The
+  live floor stays byte-for-byte unchanged.
+- **Extend `PAPER_RELAX_MARKET_STRESS` to also relax per-coin liquidity.** Rejected — it would
+  overload a single flag with two orthogonal loosenings and muddy the §2 lock ("per-coin liquidity is
+  never relaxed by P2"). A distinct flag keeps each relaxation independently auditable and toggleable.
+- **Relax to below $2,500 (e.g. $2,000 / $1,500) to admit more leaders.** Rejected — 25–33% book
+  consumption produces unrepresentative fills that corrupt rather than enrich the soak (§2 rationale).
+- **A momentum-specific bespoke gate that skips per-coin liquidity in paper.** Rejected — no order
+  path bypasses the risk gate (the ADR's defining invariant, §1); the gate still runs, only the floor
+  input is relaxed under the two-condition gate.
+- **Flat unconditional override ($2,500 / 0.30% for all tiers), accepting the tier3 regression as a
+  documented tradeoff.** Rejected (M51 QA-D2b). It would knowingly make the paper gate stricter than
+  live for tier3, contradicting this amendment's stated "strictly looser, never stricter" intent, for
+  no benefit — the per-tier `min`/`max` fixes it at a trivial cost with the tier1/tier2 unblock left
+  byte-identical. Documenting a self-inflicted regression when a clean fix costs nothing is the wrong
+  call under the conservative-survival philosophy.
+
 ## See also
 
+- `docs/plans/M51-xmom-paper-gate-unblock.md` (M51 — the milestone this §9 amendment implements)
 - `docs/plans/archive/M25-paper-exploration-enablement.md` (milestone plan, amendments A1–A6)
 - `docs/architecture/adr/0004-risk-management.md` (§4 slot model, §6/§6a–§6d stress halt + M23
   auto-resume, §8 sizing — the surfaces this ADR amends for paper)

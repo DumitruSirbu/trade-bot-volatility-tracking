@@ -32,6 +32,8 @@ import {
     MARKET_STRESS_RESUME_ELIGIBLE_LEGS,
     MAX_LEVERAGE,
     MIN_RR_GATE_FLOOR,
+    PAPER_RELAX_COIN_DEPTH_FLOOR_10BPS_USDT,
+    PAPER_RELAX_SPREAD_CEILING_PCT,
     RESERVATION_TTL_MS,
     RISK_TAKER_FEE_RATE,
     SAME_BAR_RESUME_CLEAR_TICKS,
@@ -865,7 +867,13 @@ export class RiskGateService {
             return true;
         }
 
-        const ceiling = TIER_SPREAD_CEILING_PCT[intent.coinTier];
+        // M51 (ADR 0042 §9): under the paper relax, the effective ceiling is the per-tier MAX of
+        // the relaxed paper-only candidate and this coin's live tier ceiling (max = never stricter
+        // than live; unknown tier stays fail-closed since `spread > NaN` is false). Full
+        // never-stricter-than-live rationale in riskConsts.ts header / ADR 0042 §9.
+        const ceiling = this.appConfig.paperRelaxPerCoinLiquidity
+            ? Math.max(PAPER_RELAX_SPREAD_CEILING_PCT, TIER_SPREAD_CEILING_PCT[intent.coinTier])
+            : TIER_SPREAD_CEILING_PCT[intent.coinTier];
 
         return spread > ceiling;
     }
@@ -881,11 +889,19 @@ export class RiskGateService {
     // can NEVER throw out of the gate. Boundary is <= (depth exactly at the floor rejects),
     // opposite the spread's strict >.
     private isBookTooThin(intent: IOrderIntent, context: IRiskGateContext): boolean {
-        const floor = COIN_DEPTH_FLOOR_10BPS_USDT[intent.coinTier];
+        // M51 (ADR 0042 §9): the live tier floor is looked up FIRST so fail-closed on an unknown
+        // tier is preserved in every env, including the paper relax — the relax candidate must
+        // never rescue an unmapped tier by supplying a finite floor where the live table has none.
+        const liveFloor = COIN_DEPTH_FLOOR_10BPS_USDT[intent.coinTier];
 
-        if (floor === undefined) {
-            return true;
+        if (liveFloor === undefined) {
+            return true; // fail-closed on unknown tier in every env, incl. paper relax
         }
+
+        // M51 (ADR 0042 §9): under the paper relax, the effective floor is the per-tier MIN of the
+        // relaxed paper-only candidate and this coin's live tier floor (min = never stricter than
+        // live). Full never-stricter-than-live rationale in riskConsts.ts header / ADR 0042 §9.
+        const floor = this.appConfig.paperRelaxPerCoinLiquidity ? Math.min(PAPER_RELAX_COIN_DEPTH_FLOOR_10BPS_USDT, liveFloor) : liveFloor;
 
         const depthRaw = context.snapshot.book_depth_10bps_usdt;
 

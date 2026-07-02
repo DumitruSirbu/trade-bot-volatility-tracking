@@ -297,6 +297,45 @@ describe('validateEnv', () => {
         });
     });
 
+    // ─── M51 env vars ──────────────────────────────────────────────────────────
+
+    describe('M51 — PAPER_RELAX_PER_COIN_LIQUIDITY parsing (ADR 0042 §9)', () => {
+        it('coerces "true" string to boolean true', () => {
+            const result = validateEnv(buildEnv({ PAPER_RELAX_PER_COIN_LIQUIDITY: 'true' }));
+
+            expect(result.PAPER_RELAX_PER_COIN_LIQUIDITY).toBe(true);
+        });
+
+        it('coerces "TRUE" (case-insensitive, trimmed) to boolean true', () => {
+            const result = validateEnv(buildEnv({ PAPER_RELAX_PER_COIN_LIQUIDITY: '  TRUE  ' }));
+
+            expect(result.PAPER_RELAX_PER_COIN_LIQUIDITY).toBe(true);
+        });
+
+        it('coerces "false" string to boolean false (strict parse: not truthy)', () => {
+            // The @Transform accepts only exact 'true'; the string 'false' is NOT truthy
+            // and collapses to false — fail-safe to off (ADR 0042 §6/§9).
+            const result = validateEnv(buildEnv({ PAPER_RELAX_PER_COIN_LIQUIDITY: 'false' }));
+
+            expect(result.PAPER_RELAX_PER_COIN_LIQUIDITY).toBe(false);
+        });
+
+        it('defaults to false when absent (field default — never opt-in without explicit set)', () => {
+            const env = buildEnv();
+            delete env['PAPER_RELAX_PER_COIN_LIQUIDITY'];
+
+            const result = validateEnv(env);
+
+            expect(result.PAPER_RELAX_PER_COIN_LIQUIDITY).toBe(false);
+        });
+
+        it('collapses a typo ("treu") to false — fail-safe to off', () => {
+            const result = validateEnv(buildEnv({ PAPER_RELAX_PER_COIN_LIQUIDITY: 'treu' }));
+
+            expect(result.PAPER_RELAX_PER_COIN_LIQUIDITY).toBe(false);
+        });
+    });
+
     // ─── ADR 0049 — ACTIVE_STRATEGY_VERSION_ID becomes optional ────────────────
 
     describe('ADR 0049 — ACTIVE_STRATEGY_VERSION_ID optional (legacy path dormancy)', () => {

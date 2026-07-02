@@ -38,7 +38,8 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
-import { ORDER_INTENT_APPROVED_EVENT } from '../../src/common/const';
+import { MS_PER_MINUTE, ORDER_INTENT_APPROVED_EVENT } from '../../src/common/const';
+import { MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER } from '../../src/strategy/const';
 import { AppConfigService } from '../../src/config/service';
 import { ICandle } from '../../src/market-data/interface/ICandle';
 import { CandleRepository } from '../../src/market-data/repository/CandleRepository';
@@ -743,6 +744,69 @@ describe('MomentumOrchestratorService — time-stop at 2× rebalance interval on
         const approvedPayload = approvedEmit![1];
         const rebalanceIntervalMs = buildVersionRow().params.rebalance_interval_ms;
         expect(approvedPayload.intent.proposedExit.timeStopAtMs).toBe(NOW_MS + rebalanceIntervalMs * 2);
+    });
+});
+
+// ─── M51 D1: gate ceiling derives from the same 2× margin as the intent ──────
+//
+// Root cause of the 0-fills paper soak (ADR 0048 §M51): buildGateStrategyParams derived the
+// gate's time_stop_minutes ceiling from a straight 1× rebalance_interval_ms while the intent
+// proposed a 2× timeStopAtMs, so every deep-book symbol was rejected TIME_STOP_MISSING_OR_INVALID.
+// The fix couples both sides to MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER. These tests capture the
+// (intent, context) pair handed to the gate and assert the ceiling now admits the 2× intent.
+
+/** Wires a single ranked open through onRebalanceDue and returns the [intent, context] gate call. */
+async function captureOpenGateCall(rebalanceIntervalMs: number): Promise<{ intent: any; context: any; nowMs: number }> {
+    const rawMocks = buildDefaultMocks();
+    rawMocks.positions.findOpen.mockResolvedValue([]);
+    rawMocks.universe.getEntries.mockReturnValue([buildMembershipEntry('BTCUSDT')]);
+    rawMocks.symbolStates.get.mockReturnValue(buildSymbolState(5.0));
+    rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
+    rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
+    rawMocks.strategyVersions.findById.mockResolvedValue({
+        ...buildVersionRow(),
+        params: { ...buildVersionRow().params, rebalance_interval_ms: rebalanceIntervalMs },
+    });
+    rawMocks.strategy.selectUniverse.mockReturnValue({
+        ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+        reason: PortfolioSelectionReasonEnum.RANKED,
+    });
+    const { service, mocks } = await buildTestModule(rawMocks);
+
+    await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
+
+    const [intent, context] = mocks.riskGate.evaluate.mock.calls[0];
+
+    return { intent, context, nowMs: NOW_MS };
+}
+
+describe('MomentumOrchestratorService — M51 D1: gate ceiling admits the 2× time-stop intent', () => {
+    const DEFAULT_INTERVAL_MS = buildVersionRow().params.rebalance_interval_ms; // 24h
+
+    it('derives context.params.time_stop_minutes from the 2× margin so the 48h intent fits (fails under the old 1× ceiling)', async () => {
+        const { intent, context, nowMs } = await captureOpenGateCall(DEFAULT_INTERVAL_MS);
+
+        const expectedCeilingMinutes = Math.ceil((DEFAULT_INTERVAL_MS * MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER) / MS_PER_MINUTE);
+        expect(context.params.time_stop_minutes).toBe(expectedCeilingMinutes);
+
+        // Replicates RiskGateService.checkTimeStop's upper bound: the intent must fit under the ceiling.
+        // Under the old 1× ceiling (ceil(interval / MS_PER_MINUTE)) this comparison was false → reject.
+        const maxAllowedMs = nowMs + context.params.time_stop_minutes * MS_PER_MINUTE;
+        expect(intent.proposedExit.timeStopAtMs).toBe(nowMs + DEFAULT_INTERVAL_MS * MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER);
+        expect(intent.proposedExit.timeStopAtMs).toBeLessThanOrEqual(maxAllowedMs);
+    });
+
+    it('keeps intent and ceiling in lockstep at a non-default interval — no drift (both read the one constant)', async () => {
+        const TWELVE_HOURS_MS = 43_200_000;
+        const { intent, context, nowMs } = await captureOpenGateCall(TWELVE_HOURS_MS);
+
+        const expectedCeilingMinutes = Math.ceil((TWELVE_HOURS_MS * MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER) / MS_PER_MINUTE);
+        expect(context.params.time_stop_minutes).toBe(expectedCeilingMinutes);
+        expect(intent.proposedExit.timeStopAtMs).toBe(nowMs + TWELVE_HOURS_MS * MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER);
+
+        // Exact-boundary lockstep: a clean-minute interval makes the intent land precisely on the ceiling.
+        const maxAllowedMs = nowMs + context.params.time_stop_minutes * MS_PER_MINUTE;
+        expect(intent.proposedExit.timeStopAtMs).toBe(maxAllowedMs);
     });
 });
 

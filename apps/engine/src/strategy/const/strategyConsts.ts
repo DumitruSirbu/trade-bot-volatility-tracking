@@ -16,6 +16,15 @@ export const MS_PER_MINUTE = 60_000;
 // rebalance_interval_ms in strategy_versions must match for time-stop sizing.
 export const MOMENTUM_REBALANCE_PERIOD_MS = 86_400_000;
 
+// Failsafe margin the momentum time-stop sits beyond the rebalance interval (ADR 0048 §M51).
+// SINGLE SOURCE OF TRUTH: both the open intent's timeStopAtMs AND the gate ceiling
+// (buildGateStrategyParams.time_stop_minutes) MUST derive from this one constant so the two can
+// never drift apart. The time-stop is a backstop for "the rebalance mechanism failed to run",
+// not the primary exit (the primary exit is the next scheduled re-rank), so it must sit BEYOND
+// the next rebalance instant — hence 2×, not 1×. The prior 1× ceiling was the P0 defect that
+// rejected every deep-book symbol on time_stop_missing_or_invalid.
+export const MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER = 2;
+
 // Standard 5-field cron: daily at 01:07 UTC (ADR 0050 §4.2 — past funding, before pg_dump).
 export const MOMENTUM_REBALANCE_CRON_EXPRESSION = '7 1 * * *';
 

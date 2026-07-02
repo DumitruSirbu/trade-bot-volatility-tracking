@@ -39,6 +39,7 @@ import { ReservationLedger } from '../../../src/risk/service/ReservationLedger';
 import { RiskGateService } from '../../../src/risk/service/RiskGateService';
 import { SlotManager } from '../../../src/risk/service/SlotManager';
 import { StressHaltEvaluator } from '../../../src/risk/service/StressHaltEvaluator';
+import { MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER } from '../../../src/strategy/const';
 import {
     buildGateContext,
     buildOpenPositionView,
@@ -1236,6 +1237,69 @@ describe('RiskGateService', () => {
             const result = await gate.evaluate(intent, buildPassingContext({ nowMs: NOW_MS }));
 
             expect(result.outcome).toBe(RiskOutcomeEnum.APPROVED);
+        });
+    });
+
+    // ─── M51 D1: momentum 2× time-stop ceiling (ADR 0048 §M51) ──────────────────
+    //
+    // The momentum orchestrator derives BOTH the intent's timeStopAtMs and the gate's
+    // time_stop_minutes ceiling from MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER (2×). These tests exercise
+    // the REAL gate to prove: (a) a 48h intent under a 48h server-derived ceiling is now approved
+    // (previously rejected on the 24h ceiling); (b) the ceiling still bounds an inflated intent —
+    // it comes from context.params, never from the intent; (c) the lower-bound guard is intact.
+
+    describe('time-stop — M51 momentum 2× ceiling', () => {
+        const REBALANCE_INTERVAL_MS = 86_400_000; // 24h default xmom interval
+        const CEILING_MINUTES = Math.ceil((REBALANCE_INTERVAL_MS * MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER) / 60_000); // 2880
+
+        it('approves a 48h (2×) momentum time-stop under the 2×-derived ceiling — the deep-book unblock', async () => {
+            const { gate } = makeGate();
+            const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
+            const intent = buildPassingIntent({
+                proposedExit: buildProposedExit({ timeStopAtMs: NOW_MS + REBALANCE_INTERVAL_MS * MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER }),
+            });
+            const context = buildPassingContext({
+                nowMs: NOW_MS,
+                params: { ...buildPassingContext().params, time_stop_minutes: CEILING_MINUTES },
+            });
+
+            const result = await gate.evaluate(intent, context);
+
+            // Under the pre-fix 1× ceiling (1440 min) this same intent rejected TIME_STOP_MISSING_OR_INVALID.
+            expect(result.outcome).toBe(RiskOutcomeEnum.APPROVED);
+        });
+
+        it('still rejects an intent proposing far beyond 2× — the ceiling comes from context.params, not the intent', async () => {
+            const { gate } = makeGate();
+            const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
+            // Malicious/malformed intent asks for a 100-day hold; the server-derived 48h ceiling bounds it.
+            const intent = buildPassingIntent({
+                proposedExit: buildProposedExit({ timeStopAtMs: NOW_MS + 100 * 24 * 60 * 60_000 }),
+            });
+            const context = buildPassingContext({
+                nowMs: NOW_MS,
+                params: { ...buildPassingContext().params, time_stop_minutes: CEILING_MINUTES },
+            });
+
+            const result = await gate.evaluate(intent, context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.TIME_STOP_MISSING_OR_INVALID);
+        });
+
+        it('still rejects a past time-stop (timeStopAtMs <= nowMs) even under the widened 2× ceiling', async () => {
+            const { gate } = makeGate();
+            const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
+            const intent = buildPassingIntent({
+                proposedExit: buildProposedExit({ timeStopAtMs: NOW_MS - 1 }),
+            });
+            const context = buildPassingContext({
+                nowMs: NOW_MS,
+                params: { ...buildPassingContext().params, time_stop_minutes: CEILING_MINUTES },
+            });
+
+            const result = await gate.evaluate(intent, context);
+
+            expect(result.rejectReason).toBe(RejectReasonEnum.TIME_STOP_MISSING_OR_INVALID);
         });
     });
 
