@@ -245,6 +245,24 @@ describe('getIdiosyncraticEdgeReport — idiosyncratic-only SQL filter', () => {
 
         expect(capturedSql).toContain("'idiosyncratic'");
     });
+
+    it('the SQL fences manual-triggered positions out of the expectancy sample (M50c)', async () => {
+        // why: momentum opens are hard-coded idiosyncratic and always carry a stop-loss, so a
+        // manually-triggered (operator smoke-test / ad-hoc) trade would otherwise leak into the
+        // report and bias the exact expectancy the fence protects. Assert the exact NULL-permissive
+        // predicate mirrored from getPerformance/compareVersions. NULL rows are RETAINED.
+        let capturedSql = '';
+        const mockDs = {
+            query: async (sql: string) => {
+                capturedSql = sql;
+                return [];
+            },
+        };
+
+        await getIdiosyncraticEdgeReport(mockDs as never, DEFAULT_PARAMS);
+
+        expect(capturedSql).toMatch(/AND\s*\(\s*p\.trigger_source IS NULL OR p\.trigger_source <> 'manual'\s*\)/u);
+    });
 });
 
 // ─── rMultipleStdError semantics ─────────────────────────────────────────────

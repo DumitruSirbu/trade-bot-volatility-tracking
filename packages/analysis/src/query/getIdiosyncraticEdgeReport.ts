@@ -38,6 +38,7 @@
 
 import { Decimal } from 'decimal.js';
 import { DataSource } from 'typeorm';
+import { RebalanceTriggerSourceEnum } from '@bot/shared';
 
 import { BTC_REGIME_PARTITION_PCT, MIN_CLOSED_TRADES_FOR_EDGE_VERDICT, MIN_TRADING_DAYS_FOR_EDGE_VERDICT, REGIME_BUCKET_MIN_N } from '../const/index.js';
 import { AnalysisValidationError, validateDateOrderOrThrow, validateUtcDateOrThrow } from '../util/analysisValidation.js';
@@ -112,6 +113,14 @@ const EDGE_REPORT_SQL = `
     ) latest_open_decision ON true
     WHERE p.correlation_mode = 'idiosyncratic'
       AND p.state = 'closed'
+      -- M50c (ADR 0048 amendment): fence manual (operator smoke-test / ad-hoc) rebalances out
+      -- of the idiosyncratic-edge expectancy sample, mirroring getPerformance/compareVersions.
+      -- Momentum opens are hard-coded idiosyncratic and always carry a stop-loss, so a manual
+      -- trade would otherwise leak into this report and bias the exact expectancy the fence
+      -- protects. NULL rows (VWAP + pre-existing) are legitimate history and are retained. The
+      -- literal derives from RebalanceTriggerSourceEnum.MANUAL (a fixed enum member, not user
+      -- input), so interpolation carries no bound value into the SQL.
+      AND (p.trigger_source IS NULL OR p.trigger_source <> '${RebalanceTriggerSourceEnum.MANUAL}')
       AND (p.opened_at AT TIME ZONE 'UTC') >= ($1)::date
       AND (p.opened_at AT TIME ZONE 'UTC') <  (($2)::date + INTERVAL '1 day')
     ORDER BY p.opened_at ASC

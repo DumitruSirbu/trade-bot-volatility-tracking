@@ -284,6 +284,50 @@ describe('compareVersions', () => {
         expect(closedAtClauses).toBe(2);
     });
 
+    it('active-side CTE fences manual-triggered positions out of the pairing (M50c)', async () => {
+        // why: ADR 0048 M50c — a paired event anchored to a manual (operator smoke-test / ad-hoc)
+        // position must be excluded symmetrically to getPerformance, so the active-side LEFT JOIN
+        // carries the same NULL-permissive manual fence. Both active sides of an active-vs-active
+        // pair must carry it. The shadow-side CTE is untouched (shadow_decisions has no manual rows).
+        let capturedPairedSql = '';
+        const handler: QueryHandler = async (sql) => {
+            if (isVersionLookupSql(sql)) {
+                return [{ label: 'v', status: 'active' }];
+            }
+            if (isPairedDiffSql(sql)) {
+                capturedPairedSql = sql;
+                return [{ paired_event_count: '0', paired_traded_event_count: '0', net_pnl_delta_usd: '0' }];
+            }
+            return [{ trade_count: '0', win_count: '0', net_pnl_usd: '0', label: 'v', status: 'active' }];
+        };
+
+        await compareVersions({ query: handler } as never, { aVersionId: 1, bVersionId: 2, from, to });
+
+        const manualFences = (capturedPairedSql.match(/pos\.trigger_source IS NULL OR pos\.trigger_source <> 'manual'/gu) ?? []).length;
+        expect(manualFences).toBe(2);
+    });
+
+    it('shadow-side CTE does NOT carry the manual-fence predicate (shadow_decisions has no trigger_source column)', async () => {
+        // why: complements the active-side M50c test above — the manual fence must stay confined
+        // to the active-side (positions-joined) CTE. Leaking it into the shadow branch would be a
+        // hard SQL error (shadow_decisions has no trigger_source column).
+        let capturedPairedSql = '';
+        const handler: QueryHandler = async (sql) => {
+            if (isVersionLookupSql(sql)) {
+                return [{ label: 'v', status: 'shadow' }];
+            }
+            if (isPairedDiffSql(sql)) {
+                capturedPairedSql = sql;
+                return [{ paired_event_count: '0', paired_traded_event_count: '0', net_pnl_delta_usd: '0' }];
+            }
+            return [{ trade_count: '0', win_count: '0', net_pnl_usd: '0', label: 'v', status: 'shadow' }];
+        };
+
+        await compareVersions({ query: handler } as never, { aVersionId: 1, bVersionId: 2, from, to });
+
+        expect(capturedPairedSql).not.toContain('trigger_source');
+    });
+
     it('reads shadow_decisions (not decisions/positions) for a shadow-vs-shadow pair', async () => {
         // M37 W1 (D1.1): two concurrently-evaluated shadow versions must pair
         // from `shadow_decisions` on the shared `event_id`. This is the fix that

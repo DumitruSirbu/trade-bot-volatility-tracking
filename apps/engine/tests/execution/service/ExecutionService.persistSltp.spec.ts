@@ -8,7 +8,7 @@
  *   D-PP-9: createOpen persists stop_loss_price and take_profit_price on the initial PENDING_OPEN row.
  */
 
-import { ExchangeEnvironmentEnum, PositionStateEnum, StrategyDirectionEnum } from '@bot/shared';
+import { ExchangeEnvironmentEnum, PositionStateEnum, RebalanceTriggerSourceEnum, StrategyDirectionEnum } from '@bot/shared';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import { HaltFlagService } from '../../../src/common/service/HaltFlagService';
@@ -29,6 +29,7 @@ import { PositionService } from '../../../src/position/service';
 import { RiskGateService } from '../../../src/risk/service/RiskGateService';
 import { StrategyVersionRepository } from '../../../src/strategy/repository/StrategyVersionRepository';
 import { buildApprovedEvent, buildExchangeSideAttachResult, buildOrderSnapshot, buildPositionEntityMock } from '../support/fixtures';
+import { buildOrderIntent } from '../../risk/support/fixtures';
 
 function makeService() {
     const appConfig = { isExecutionLive: true, exchangeEnv: ExchangeEnvironmentEnum.PAPER } as unknown as AppConfigService;
@@ -132,5 +133,56 @@ describe('ExecutionService.createOpen persists SL/TP at insert', () => {
         expect(insertedRow.state).toBe(PositionStateEnum.PENDING_OPEN);
         expect(insertedRow.stopLossPrice.toFixed()).toBe(new Money('30500').toFixed());
         expect(insertedRow.takeProfitPrice.toFixed()).toBe(new Money('29000').toFixed());
+    });
+});
+
+// ADR 0048 M50c — the intent's triggerSource must land on positions.trigger_source at insert so the
+// analysis surfaces can fence manual rebalances out of the primary calibration aggregation.
+describe('ExecutionService.createOpen persists trigger_source from the intent', () => {
+    it('persists triggerSource=MANUAL when the momentum open intent carried it (M50c)', async () => {
+        const { service, createOpenSpy } = makeService();
+        const event = buildApprovedEvent({ intent: buildOrderIntent({ triggerSource: RebalanceTriggerSourceEnum.MANUAL }) });
+
+        await service.onOrderIntentApproved(event);
+
+        expect(createOpenSpy.mock.calls[0][0].triggerSource).toBe(RebalanceTriggerSourceEnum.MANUAL);
+    });
+
+    it('persists triggerSource=SCHEDULED when the momentum open intent carried it', async () => {
+        const { service, createOpenSpy } = makeService();
+        const event = buildApprovedEvent({ intent: buildOrderIntent({ triggerSource: RebalanceTriggerSourceEnum.SCHEDULED }) });
+
+        await service.onOrderIntentApproved(event);
+
+        expect(createOpenSpy.mock.calls[0][0].triggerSource).toBe(RebalanceTriggerSourceEnum.SCHEDULED);
+    });
+
+    it('persists NULL trigger_source for a VWAP-path open (intent has no triggerSource)', async () => {
+        // The VWAP path (StrategyService) never sets triggerSource — that absence must persist as
+        // NULL, never a fabricated 'scheduled', so NULL rows stay legitimate organic history.
+        const { service, createOpenSpy } = makeService();
+
+        await service.onOrderIntentApproved(buildApprovedEvent());
+
+        expect(createOpenSpy.mock.calls[0][0].triggerSource).toBeNull();
+    });
+
+    // Close-then-reopen adversarial case: createPositionFromFill derives triggerSource ONLY from
+    // the CURRENT approved event's intent — it never reads a prior/closed position row for this
+    // symbol. Two consecutive OPEN approvals with DIFFERENT triggerSource values (simulating a
+    // symbol closed under one provenance and reopened under another in a later rebalance) must
+    // each persist their OWN intent's value — the second insert must not carry over the first.
+    it('does not leak a prior open intent triggerSource into a later, differently-tagged open (close-then-reopen)', async () => {
+        const { service, createOpenSpy } = makeService();
+
+        const firstEvent = buildApprovedEvent({ intent: buildOrderIntent({ triggerSource: RebalanceTriggerSourceEnum.MANUAL }) });
+        await service.onOrderIntentApproved(firstEvent);
+
+        const secondEvent = buildApprovedEvent({ intent: buildOrderIntent({ triggerSource: RebalanceTriggerSourceEnum.SCHEDULED }) });
+        await service.onOrderIntentApproved(secondEvent);
+
+        expect(createOpenSpy).toHaveBeenCalledTimes(2);
+        expect(createOpenSpy.mock.calls[0][0].triggerSource).toBe(RebalanceTriggerSourceEnum.MANUAL);
+        expect(createOpenSpy.mock.calls[1][0].triggerSource).toBe(RebalanceTriggerSourceEnum.SCHEDULED);
     });
 });

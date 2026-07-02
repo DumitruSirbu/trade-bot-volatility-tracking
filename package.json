@@ -18,6 +18,7 @@
         "audit:ci": "pnpm audit --audit-level=high --prod --json > audit-prod.json || true; pnpm --filter @bot/engine exec ts-node tests/ci/runScaGate.ts \"$PWD/audit-prod.json\"; status=$?; rm -f audit-prod.json; exit $status",
         "dev": "pnpm -r --parallel dev",
         "engine:dev": "pnpm --filter @bot/engine dev",
+        "rebalance:trigger": "pnpm --filter @bot/engine rebalance:trigger",
         "dashboard:dev": "pnpm --filter @bot/dashboard dev",
         "docs:check:links": "node scripts/docs/check-links.mjs",
         "docs:check:staleness": "node scripts/docs/check-staleness.mjs",

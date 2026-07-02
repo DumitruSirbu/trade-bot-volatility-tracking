@@ -23,6 +23,14 @@ export const MOMENTUM_REBALANCE_CRON_EXPRESSION = '7 1 * * *';
 // (registered only under the paper gate; deleted on module destroy).
 export const MOMENTUM_REBALANCE_CRON_NAME = 'momentum-rebalance';
 
+// Cooldown window guarding the manual rebalance trigger. The guard is ONE-DIRECTIONAL: a MANUAL
+// trigger is rejected when it lands within this window of the last emission (scheduled or manual).
+// It prevents a manual trigger from re-firing (or piling onto a just-fired scheduled cron) inside
+// the window. It does NOT suppress a scheduled cron tick that lands shortly AFTER a manual trigger —
+// that scheduled rebalance still fires, and that is accepted behavior, not a gap: suppressing the
+// real 01:07 UTC scheduled rebalance would be worse than an occasional extra rebalance. 5 minutes.
+export const REBALANCE_TRIGGER_COOLDOWN_MS = 5 * 60 * 1_000;
+
 // --- v1 mean-reversion exhaustion-confirmation tolerances (ADR 0003 §4, M3 brief) ---
 
 // Take-profit target is VWAP pulled in by this many sigma for conservatism: TP sits at

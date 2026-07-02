@@ -11,6 +11,7 @@ Scratch and investigation docs **before** they become milestone plans or ADRs.
 
 ## Active (root)
 
+- [2026-07-01-xmom-paper-liquidity-gate-analysis.md](2026-07-01-xmom-paper-liquidity-gate-analysis.md) — **M50** gate blockage: smoke era 91% `coin_book_too_thin`; **2026-07-02 01:07 cron** walked 100 symbols — **84% `time_stop_missing_or_invalid`** (2× vs 1× rebalance mismatch); tier2 liquidity relax is P1 not P0 (2026-07-01/02)
 - [2026-06-17-halt-blocks-protective-close-and-shadow-fill-regression.md](2026-06-17-halt-blocks-protective-close-and-shadow-fill-regression.md) — **CRITICAL**: global halt short-circuits protective closes (time-stop + SL frozen 2h12m on #101 INJ); shadow `simulated_fill` collapsed to ~0/day since Jun 10 (contradicts M37/M39); zombie `pending_open` #38 (2026-06-17) → **M40**
 - [live-exit-enforcement-gap.md](live-exit-enforcement-gap.md) — stuck open positions; live time-stop / paper SL-TP gap (2026-06-12)
 - [slot-model-and-correlated-leg-gaps.md](slot-model-and-correlated-leg-gaps.md) — slot C / correlated leg; gated by M30 soak (open)

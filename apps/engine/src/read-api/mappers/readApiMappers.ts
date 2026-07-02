@@ -518,7 +518,9 @@ function extractSignalScore(decision: DecisionEntity): string | null {
         return null;
     }
 
-    const raw = snapshot['signalScore'];
+    // Canonical `IMarketSnapshot` field is snake_case `signal_score`; older test
+    // fixtures used camelCase `signalScore` — accept both.
+    const raw = snapshot['signal_score'] ?? snapshot['signalScore'];
 
     if (typeof raw === 'string') {
         return raw;

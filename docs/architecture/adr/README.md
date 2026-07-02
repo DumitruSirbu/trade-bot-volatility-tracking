@@ -29,6 +29,7 @@ Also see [live-vs-backtest-contract.md](../live-vs-backtest-contract.md) for the
 | [0019 § M39 amendment](0019-promotion-gate.md#amendment--m39-2026-06-17) | M39 D3 realized-PnL precondition (W2), force_close abstain guard |
 | [0047](0047-portfolio-strategy-contract.md) | Portfolio-strategy contract — `IPortfolioStrategy` + `momentumParamsSchema` (M50) |
 | [0048](0048-rebalance-orchestrator.md) | Rebalance orchestrator — scheduler + momentum orchestrator routing through the unchanged risk gate (M50) |
+| [0048 § M50c amendment](0048-rebalance-orchestrator.md#amendment--m50c-2026-07-02-trigger-source-persisted-to-positionstrigger_source) | M50c — `positions.trigger_source` column + analysis exclusion of manual triggers |
 | [0049](0049-legacy-single-symbol-path-optional-dormant.md) | Legacy single-symbol (VWAP) path optional + dormant — `ACTIVE_STRATEGY_VERSION_ID` optional after VWAP retirement (M50) |
 | [0050](0050-xmom-cascade-topn-rebalance-anchor.md) | xmom rank-cascade selection, `top_n` basket (default 3), fixed 01:07 UTC rebalance cron (M50b) |
 

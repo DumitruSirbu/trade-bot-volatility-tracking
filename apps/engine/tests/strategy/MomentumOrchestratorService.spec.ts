@@ -31,6 +31,7 @@ import {
     PortfolioSelectionReasonEnum,
     PositionSideEnum,
     PositionSlotEnum,
+    RebalanceTriggerSourceEnum,
     RejectReasonEnum,
     RiskOutcomeEnum,
 } from '@bot/shared';
@@ -274,7 +275,7 @@ describe('MomentumOrchestratorService — paper gate', () => {
         rawMocks.config = { ...rawMocks.config, exchangeEnv: ExchangeEnvironmentEnum.LIVE };
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.universe.getEntries).not.toHaveBeenCalled();
         expect(mocks.riskGate.evaluate).not.toHaveBeenCalled();
@@ -286,7 +287,7 @@ describe('MomentumOrchestratorService — paper gate', () => {
         rawMocks.config = { ...rawMocks.config, exchangeEnv: ExchangeEnvironmentEnum.TESTNET };
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.riskGate.evaluate).not.toHaveBeenCalled();
     });
@@ -296,7 +297,7 @@ describe('MomentumOrchestratorService — paper gate', () => {
         rawMocks.config = { ...rawMocks.config, activePortfolioStrategyVersionId: null };
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.universe.getEntries).not.toHaveBeenCalled();
         expect(mocks.riskGate.evaluate).not.toHaveBeenCalled();
@@ -312,11 +313,11 @@ describe('MomentumOrchestratorService — overlap guard', () => {
 
         // Start the first call without awaiting — it sets isRebalancing=true synchronously
         // then suspends at the first `await resolveActiveVersion()`.
-        const firstCallPromise = service.onRebalanceDue({ nowMs: NOW_MS });
+        const firstCallPromise = service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         // Second call runs SYNCHRONOUSLY (same tick, before any microtasks) and sees
         // isRebalancing=true → returns immediately with overlap skip.
-        const secondCallPromise = service.onRebalanceDue({ nowMs: NOW_MS + 1 });
+        const secondCallPromise = service.onRebalanceDue({ nowMs: NOW_MS + 1, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         await Promise.all([firstCallPromise, secondCallPromise]);
 
@@ -334,7 +335,7 @@ describe('MomentumOrchestratorService — empty / thin universe selection', () =
         rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.riskGate.evaluate).not.toHaveBeenCalled();
         expect(mocks.events.emit).not.toHaveBeenCalledWith(ORDER_INTENT_APPROVED_EVENT, expect.anything());
@@ -345,7 +346,7 @@ describe('MomentumOrchestratorService — empty / thin universe selection', () =
         rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.UNIVERSE_TOO_SMALL });
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.riskGate.evaluate).not.toHaveBeenCalled();
         expect(mocks.events.emit).not.toHaveBeenCalledWith(ORDER_INTENT_APPROVED_EVENT, expect.anything());
@@ -365,7 +366,7 @@ describe('MomentumOrchestratorService — hold: symbol still in top-N and alread
         });
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.riskGate.evaluate).not.toHaveBeenCalled();
     });
@@ -386,12 +387,52 @@ describe('MomentumOrchestratorService — open: symbol in top-N but not open', (
         rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(1);
         const [intent] = mocks.riskGate.evaluate.mock.calls[0];
         expect(intent.intentAction).toBe(OrderIntentActionEnum.OPEN);
         expect(intent.symbol).toBe('BTCUSDT');
+    });
+
+    // ADR 0048 M50c — the trigger provenance rides the OPEN intent so the executor can persist it
+    // to positions.trigger_source. A MANUAL rebalance must stamp triggerSource=MANUAL on the intent.
+    it('stamps triggerSource=MANUAL on the OPEN intent when the rebalance was manually triggered', async () => {
+        const rawMocks = buildDefaultMocks();
+        rawMocks.positions.findOpen.mockResolvedValue([]);
+        rawMocks.universe.getEntries.mockReturnValue([buildMembershipEntry('BTCUSDT')]);
+        rawMocks.symbolStates.get.mockReturnValue(buildSymbolState(5.0));
+        rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
+        rawMocks.strategy.selectUniverse.mockReturnValue({
+            ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+            reason: PortfolioSelectionReasonEnum.RANKED,
+        });
+        rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
+        const { service, mocks } = await buildTestModule(rawMocks);
+
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.MANUAL });
+
+        const [intent] = mocks.riskGate.evaluate.mock.calls[0];
+        expect(intent.triggerSource).toBe(RebalanceTriggerSourceEnum.MANUAL);
+    });
+
+    it('stamps triggerSource=SCHEDULED on the OPEN intent when the rebalance came from the cron', async () => {
+        const rawMocks = buildDefaultMocks();
+        rawMocks.positions.findOpen.mockResolvedValue([]);
+        rawMocks.universe.getEntries.mockReturnValue([buildMembershipEntry('BTCUSDT')]);
+        rawMocks.symbolStates.get.mockReturnValue(buildSymbolState(5.0));
+        rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
+        rawMocks.strategy.selectUniverse.mockReturnValue({
+            ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+            reason: PortfolioSelectionReasonEnum.RANKED,
+        });
+        rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
+        const { service, mocks } = await buildTestModule(rawMocks);
+
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
+
+        const [intent] = mocks.riskGate.evaluate.mock.calls[0];
+        expect(intent.triggerSource).toBe(RebalanceTriggerSourceEnum.SCHEDULED);
     });
 });
 
@@ -407,7 +448,7 @@ describe('MomentumOrchestratorService — close: symbol open but not in top-N', 
         rawMocks.symbolStates.get.mockReturnValue(buildSymbolState());
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(1);
         const [intent] = mocks.riskGate.evaluate.mock.calls[0];
@@ -422,7 +463,7 @@ describe('MomentumOrchestratorService — close: symbol open but not in top-N', 
         rawMocks.symbolStates.get.mockReturnValue(buildSymbolState());
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         const [intent] = mocks.riskGate.evaluate.mock.calls[0];
         expect(intent.intentAction).toBe(OrderIntentActionEnum.CLOSE);
@@ -453,7 +494,7 @@ describe('MomentumOrchestratorService — closes precede opens within one rebala
             return buildApprovedDecision();
         });
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(callOrder).toHaveLength(2);
         expect(callOrder[0]).toBe(`${OrderIntentActionEnum.CLOSE}:ETHUSDT`);
@@ -480,7 +521,7 @@ describe('MomentumOrchestratorService — gate rejection for open intent', () =>
         rawMocks.riskGate.evaluate.mockResolvedValue(buildRejectedDecision());
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.decisions.record).toHaveBeenCalledTimes(1);
         expect(mocks.events.emit).not.toHaveBeenCalledWith(ORDER_INTENT_APPROVED_EVENT, expect.anything());
@@ -500,7 +541,7 @@ describe('MomentumOrchestratorService — gate rejection for open intent', () =>
         rawMocks.riskGate.evaluate.mockResolvedValue(buildRejectedDecision());
         const { service } = await buildTestModule(rawMocks);
 
-        await expect(service.onRebalanceDue({ nowMs: NOW_MS })).resolves.not.toThrow();
+        await expect(service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED })).resolves.not.toThrow();
     });
 });
 
@@ -536,7 +577,7 @@ describe('MomentumOrchestratorService — cold-boot trailing return fallback', (
         rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.candles.findRange).toHaveBeenCalledWith('BTCUSDT', '5m', expect.any(Date), expect.any(Date));
     });
@@ -571,7 +612,7 @@ describe('MomentumOrchestratorService — cold-boot trailing return fallback', (
         rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         const [universeArg] = mocks.strategy.selectUniverse.mock.calls[0][0].universe;
         expect(universeArg.symbol).toBe('BTCUSDT');
@@ -586,7 +627,7 @@ describe('MomentumOrchestratorService — cold-boot trailing return fallback', (
         rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         const { universe } = mocks.strategy.selectUniverse.mock.calls[0][0];
         expect(universe).toHaveLength(0);
@@ -609,7 +650,7 @@ describe('MomentumOrchestratorService — open skipped when InstrumentPortAdapte
         rawMocks.instrumentPort.findConstraints.mockResolvedValue(null);
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await expect(service.onRebalanceDue({ nowMs: NOW_MS })).resolves.not.toThrow();
+        await expect(service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED })).resolves.not.toThrow();
         expect(mocks.riskGate.evaluate).not.toHaveBeenCalled();
     });
 });
@@ -628,7 +669,7 @@ describe('MomentumOrchestratorService — open skipped when PositionSizer return
         rawMocks.sizer.size.mockReturnValue({ kind: 'skipped', reason: 'min_notional_not_met' });
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await expect(service.onRebalanceDue({ nowMs: NOW_MS })).resolves.not.toThrow();
+        await expect(service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED })).resolves.not.toThrow();
         expect(mocks.riskGate.evaluate).not.toHaveBeenCalled();
     });
 });
@@ -668,7 +709,7 @@ describe('MomentumOrchestratorService — tape-path guard: 24h lookback bypasses
         rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.NO_ELIGIBLE_SYMBOLS });
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         // Tape path must be entirely skipped — movePctOverWindow must not be called.
         expect(symbolStateMock.movePctOverWindow).not.toHaveBeenCalled();
@@ -695,7 +736,7 @@ describe('MomentumOrchestratorService — time-stop at 2× rebalance interval on
         });
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         const approvedEmit = mocks.events.emit.mock.calls.find(([eventName]) => eventName === ORDER_INTENT_APPROVED_EVENT);
         expect(approvedEmit).toBeDefined();
@@ -723,7 +764,7 @@ describe('MomentumOrchestratorService — ATR sourced from CandleRepository, not
         });
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         // getClosedBars must never be called — ATR uses the candle repository, not in-memory state.
         expect(symbolState.candles5m.getClosedBars).not.toHaveBeenCalled();
@@ -761,7 +802,7 @@ describe('MomentumOrchestratorService — cascade: gate rejection falls through 
         );
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(2);
         expect(mocks.riskGate.evaluate.mock.calls[0][0].symbol).toBe('BTCUSDT');
@@ -804,7 +845,7 @@ describe('MomentumOrchestratorService — churn-safe closes: retained set keys r
         });
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         // Only rejected opens for ranks 1-3 — no close intent for SOL.
         expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(3);
@@ -842,7 +883,7 @@ describe('MomentumOrchestratorService — ADR 0050 residual close: ranked but di
         });
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(callOrder).toEqual([`${OrderIntentActionEnum.OPEN}:BTCUSDT`, `${OrderIntentActionEnum.CLOSE}:LINKUSDT`]);
         expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(2);
@@ -860,7 +901,7 @@ describe('MomentumOrchestratorService — ADR 0050 definite close when ranked is
         rawMocks.symbolStates.get.mockReturnValue(buildSymbolState());
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(2);
         expect(mocks.riskGate.evaluate.mock.calls.map(([intent]) => intent.intentAction)).toEqual([OrderIntentActionEnum.CLOSE, OrderIntentActionEnum.CLOSE]);
@@ -892,7 +933,7 @@ describe('MomentumOrchestratorService — ADR 0050 cascade stops at top_n', () =
         rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         const openSymbols = mocks.riskGate.evaluate.mock.calls
             .filter(([intent]) => intent.intentAction === OrderIntentActionEnum.OPEN)
@@ -926,7 +967,7 @@ describe('MomentumOrchestratorService — ADR 0050 cascade stops at top_n', () =
         );
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(4);
         expect(mocks.events.emit).toHaveBeenCalledTimes(2);
@@ -958,7 +999,7 @@ describe('MomentumOrchestratorService — ADR 0050 hold counts toward top_n with
         rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS });
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED });
 
         expect(mocks.riskGate.evaluate).toHaveBeenCalledTimes(1);
         expect(mocks.riskGate.evaluate.mock.calls[0][0].symbol).toBe('SOLUSDT');
@@ -968,6 +1009,76 @@ describe('MomentumOrchestratorService — ADR 0050 hold counts toward top_n with
 
 // ─── exception resilience ─────────────────────────────────────────────────────
 
+// ─── eventId tagging: MANUAL vs SCHEDULED are distinct, queryable, non-colliding ──────────────
+//
+// triggerSource is appended to eventId as free text (ADR 0048 §10) rather than a schema change.
+// DecisionEntity's eventId index (idx_decisions_event_id) is NOT unique, so collisions there are
+// not a correctness hazard for this path — but the two trigger sources must still produce
+// genuinely different eventId values so a manual replay is distinguishable from a scheduled one.
+
+describe('MomentumOrchestratorService — eventId tagging by triggerSource', () => {
+    it('tags an OPEN eventId with "manual" for a MANUAL-triggered rebalance', async () => {
+        const rawMocks = buildDefaultMocks();
+        rawMocks.positions.findOpen.mockResolvedValue([]);
+        rawMocks.universe.getEntries.mockReturnValue([buildMembershipEntry('BTCUSDT')]);
+        rawMocks.symbolStates.get.mockReturnValue(buildSymbolState(5.0));
+        rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
+        rawMocks.strategy.selectUniverse.mockReturnValue({
+            ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+            reason: PortfolioSelectionReasonEnum.RANKED,
+        });
+        rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
+        const { service, mocks } = await buildTestModule(rawMocks);
+
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.MANUAL });
+
+        const [intent] = mocks.riskGate.evaluate.mock.calls[0];
+        expect(intent.eventId).toBe(`xmom-open-BTCUSDT-${NOW_MS}-manual`);
+        expect(mocks.decisions.record).toHaveBeenCalledWith(expect.objectContaining({ eventId: `xmom-open-BTCUSDT-${NOW_MS}-manual` }));
+    });
+
+    it('tags a CLOSE eventId with "manual" for a MANUAL-triggered rebalance', async () => {
+        const rawMocks = buildDefaultMocks();
+        const position = buildOpenPosition({ symbol: 'ETHUSDT', strategyVersionId: ACTIVE_VERSION_ID });
+        rawMocks.positions.findOpen.mockResolvedValue([position]);
+        rawMocks.strategy.selectUniverse.mockReturnValue({ ranked: [], reason: PortfolioSelectionReasonEnum.RANKED });
+        rawMocks.symbolStates.get.mockReturnValue(buildSymbolState());
+        const { service, mocks } = await buildTestModule(rawMocks);
+
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.MANUAL });
+
+        const [intent] = mocks.riskGate.evaluate.mock.calls[0];
+        expect(intent.eventId).toBe(`xmom-close-${position.id}-${NOW_MS}-manual`);
+    });
+
+    it('produces genuinely different OPEN eventIds for MANUAL vs SCHEDULED at the same symbol/nowMs', async () => {
+        async function triggerOpenAndCaptureEventId(triggerSource: RebalanceTriggerSourceEnum): Promise<string> {
+            const rawMocks = buildDefaultMocks();
+            rawMocks.positions.findOpen.mockResolvedValue([]);
+            rawMocks.universe.getEntries.mockReturnValue([buildMembershipEntry('BTCUSDT')]);
+            rawMocks.symbolStates.get.mockReturnValue(buildSymbolState(5.0));
+            rawMocks.candles.findRange.mockResolvedValue(buildMockBars());
+            rawMocks.strategy.selectUniverse.mockReturnValue({
+                ranked: [{ symbol: 'BTCUSDT', rank: 1, trailingReturnPct: 5.0 }],
+                reason: PortfolioSelectionReasonEnum.RANKED,
+            });
+            rawMocks.universe.getEntry.mockReturnValue(buildMembershipEntry('BTCUSDT'));
+            const { service, mocks } = await buildTestModule(rawMocks);
+
+            await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource });
+
+            return mocks.riskGate.evaluate.mock.calls[0][0].eventId as string;
+        }
+
+        const manualEventId = await triggerOpenAndCaptureEventId(RebalanceTriggerSourceEnum.MANUAL);
+        const scheduledEventId = await triggerOpenAndCaptureEventId(RebalanceTriggerSourceEnum.SCHEDULED);
+
+        expect(manualEventId).not.toBe(scheduledEventId);
+        expect(manualEventId.endsWith('-manual')).toBe(true);
+        expect(scheduledEventId.endsWith('-scheduled')).toBe(true);
+    });
+});
+
 describe('MomentumOrchestratorService — exception in rebalance body resets isRebalancing', () => {
     it('processes the next event normally after an exception in a prior rebalance', async () => {
         const rawMocks = buildDefaultMocks();
@@ -976,8 +1087,8 @@ describe('MomentumOrchestratorService — exception in rebalance body resets isR
         rawMocks.positions.findOpen.mockRejectedValueOnce(new Error('DB timeout')).mockResolvedValue([]);
         const { service, mocks } = await buildTestModule(rawMocks);
 
-        await service.onRebalanceDue({ nowMs: NOW_MS }); // first call → throws, isRebalancing reset
-        await service.onRebalanceDue({ nowMs: NOW_MS + 1 }); // second call → not blocked
+        await service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED }); // first call → throws, isRebalancing reset
+        await service.onRebalanceDue({ nowMs: NOW_MS + 1, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED }); // second call → not blocked
 
         // universe.getEntries called twice (both calls reached rebalance).
         expect(mocks.universe.getEntries).toHaveBeenCalledTimes(2);
@@ -988,6 +1099,6 @@ describe('MomentumOrchestratorService — exception in rebalance body resets isR
         rawMocks.positions.findOpen.mockRejectedValue(new Error('unexpected failure'));
         const { service } = await buildTestModule(rawMocks);
 
-        await expect(service.onRebalanceDue({ nowMs: NOW_MS })).resolves.not.toThrow();
+        await expect(service.onRebalanceDue({ nowMs: NOW_MS, triggerSource: RebalanceTriggerSourceEnum.SCHEDULED })).resolves.not.toThrow();
     });
 });
