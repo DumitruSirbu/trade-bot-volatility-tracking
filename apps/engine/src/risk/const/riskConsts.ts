@@ -99,6 +99,28 @@ export const COIN_DEPTH_FLOOR_10BPS_USDT: Record<CoinTierEnum, number> = {
     [CoinTierEnum.TIER_3]: 2_000,
 };
 
+// --- M51 paper-only per-coin liquidity relax (ADR 0042 §9) ---
+//
+// Relaxed per-coin liquidity floor/ceiling, applied ONLY when EXCHANGE_ENV=paper AND
+// PAPER_RELAX_PER_COIN_LIQUIDITY=true (the two-condition gate, resolved once at boot in
+// AppConfigService). These are SEPARATE from — and NEVER mutate — COIN_DEPTH_FLOOR_10BPS_USDT /
+// TIER_SPREAD_CEILING_PCT above: under the paper profile they are chosen as the floor/ceiling
+// INPUT at the check site (isBookTooThin / isSpreadTooWide), exactly the PAPER_RELAX_MARKET_STRESS
+// precedent of relaxing an input rather than editing the live const. Live / testnet / backtest read
+// the tier-keyed live floors above, byte-identical to pre-M51 (the relax is unreachable off paper).
+//
+// Relaxed depth floor: > $2,500 one-sided 10bps book. A $500 max-per-coin order is 20% of a $2,500
+// book → ~2 bps linear market-impact — a defensible order/book ratio for paper pipeline validation.
+// DO NOT lower below $2,500 ($2,000 = 25%, $1,500 = 33% consumption are too aggressive, ADR 0042 §9).
+// Same `depth <= floor` reject convention as ADR 0004 §6a: depth AT $2,500 rejects, $2,501 passes.
+// (The value coincides with the live tier2 floor but is a DISTINCT constant — a paper tier1 leader
+// clears as if it were tier2 without ever touching the tier1 const.)
+export const PAPER_RELAX_COIN_DEPTH_FLOOR_10BPS_USDT = 2_500;
+
+// Relaxed spread ceiling: <= 0.30%. Strict `>` ceiling reject convention (isSpreadTooWide): spread
+// AT 0.30% passes, 0.31% rejects. Distinct paper-only constant; the live tier ceilings are untouched.
+export const PAPER_RELAX_SPREAD_CEILING_PCT = 0.3;
+
 // --- funding filter (§8/§ funding) ---
 
 // Halve notional when funding is unfavourable and at/over the suppress threshold.

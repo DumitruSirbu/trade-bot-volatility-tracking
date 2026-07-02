@@ -294,6 +294,19 @@ export class EnvironmentVariables {
     @IsBoolean()
     PAPER_RELAX_CONSECUTIVE_LOSS_HALT: boolean = false;
 
+    // M51 (ADR 0042 §9) — paper-only switch that relaxes the per-coin liquidity
+    // floors (depth > $2,500, spread <= 0.30%) so thin cross-sectional-momentum
+    // leaders (ranks 1–7) can clear the gate in the paper soak. NEVER relaxes
+    // anything on live/testnet; the effective value additionally requires
+    // EXCHANGE_ENV=paper, enforced in AppConfigService. OPTIONAL with a field
+    // default of false; the @Transform fires only when the key is present, so only
+    // the exact string 'true' (case-insensitive, trimmed) enables it — the string
+    // 'false', a typo, or an empty value collapses to off (fail-safe).
+    @IsOptional()
+    @Transform(({ value }) => String(value).toLowerCase().trim() === 'true')
+    @IsBoolean()
+    PAPER_RELAX_PER_COIN_LIQUIDITY: boolean = false;
+
     // M25 (ADR 0042 §3) — paper-only idiosyncratic-slot override. The slot model
     // is physically capped at A/B/C = 3 in every env; MAX_IDIOSYNCRATIC_SLOTS=2
     // plus the slot-C borrow yields 3 concurrent. Raising the idiosyncratic count

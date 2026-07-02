@@ -71,6 +71,7 @@ export class AppConfigService {
     private readonly resolvedMarketStressAutoResumeEnabled: boolean;
     private readonly resolvedPaperRelaxMarketStress: boolean;
     private readonly resolvedPaperRelaxConsecutiveLossHalt: boolean;
+    private readonly resolvedPaperRelaxPerCoinLiquidity: boolean;
 
     constructor(private readonly configService: ConfigService<EnvironmentVariables, true>) {
         this.resolvedAuthHmacSecret = this.resolveAuthHmacSecret();
@@ -91,6 +92,7 @@ export class AppConfigService {
         this.resolvedMarketStressAutoResumeEnabled = this.resolveMarketStressAutoResumeEnabled();
         this.resolvedPaperRelaxMarketStress = this.resolvePaperRelaxMarketStress();
         this.resolvedPaperRelaxConsecutiveLossHalt = this.resolvePaperRelaxConsecutiveLossHalt();
+        this.resolvedPaperRelaxPerCoinLiquidity = this.resolvePaperRelaxPerCoinLiquidity();
     }
 
     get nodeEnv(): NodeEnvEnum {
@@ -159,6 +161,17 @@ export class AppConfigService {
     // boot, constant within a run, so the gate's determinism invariant holds.
     get paperRelaxConsecutiveLossHalt(): boolean {
         return this.resolvedPaperRelaxConsecutiveLossHalt;
+    }
+
+    // M51 (ADR 0042 §9) — effective paper-only per-coin liquidity relax switch,
+    // consumed by RiskGateService's spread/depth checks to select the relaxed
+    // floor/ceiling input. True ONLY when both EXCHANGE_ENV=paper AND
+    // PAPER_RELAX_PER_COIN_LIQUIDITY=true (the two-condition gate of ADR 0042
+    // §1/§9) — a live/testnet boot can never see it on, so a non-paper boot reads
+    // the tier-keyed live floors, byte-identical to pre-M51. Resolved once at boot,
+    // constant within a run, so the gate's determinism invariant holds.
+    get paperRelaxPerCoinLiquidity(): boolean {
+        return this.resolvedPaperRelaxPerCoinLiquidity;
     }
 
     // M25 (ADR 0042 §3) — optional paper override for the idiosyncratic-slot
@@ -633,6 +646,30 @@ export class AppConfigService {
 
         if (flagEnabled && isPaperEnv) {
             this.logger.warn('PAPER_RELAX_CONSECUTIVE_LOSS_HALT is active — consecutive-loss day-halt disabled for this paper soak run.');
+        }
+
+        return flagEnabled && isPaperEnv;
+    }
+
+    // M51 (ADR 0042 §9) — same two-condition gate as resolvePaperRelaxMarketStress:
+    // the relax is effective only when EXCHANGE_ENV=paper AND the flag is true. Does
+    // NOT derive on-by-default in paper — relaxing the per-coin liquidity floors
+    // requires an explicit paper opt-in. The schema field is already coerced to a
+    // strict boolean (exact 'true'), defaulting to false when absent.
+    private resolvePaperRelaxPerCoinLiquidity(): boolean {
+        const flagEnabled = this.configService.get('PAPER_RELAX_PER_COIN_LIQUIDITY', { infer: true });
+        const isPaperEnv = this.exchangeEnv === ExchangeEnvironmentEnum.PAPER;
+
+        if (flagEnabled && !isPaperEnv) {
+            this.logger.warn(
+                `PAPER_RELAX_PER_COIN_LIQUIDITY=true but EXCHANGE_ENV=${this.exchangeEnv} (not paper) — the flag has been ` +
+                    'NEUTRALIZED (the live per-coin liquidity floors stay active, identical to pre-M51). If this is intentional ' +
+                    '(e.g. a copied .env under inspection), no action needed; if not, check EXCHANGE_ENV.',
+            );
+        }
+
+        if (flagEnabled && isPaperEnv) {
+            this.logger.warn('PAPER_RELAX_PER_COIN_LIQUIDITY is active — per-coin depth/spread floors relaxed for this paper soak run.');
         }
 
         return flagEnabled && isPaperEnv;

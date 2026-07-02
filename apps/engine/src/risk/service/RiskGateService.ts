@@ -32,6 +32,8 @@ import {
     MARKET_STRESS_RESUME_ELIGIBLE_LEGS,
     MAX_LEVERAGE,
     MIN_RR_GATE_FLOOR,
+    PAPER_RELAX_COIN_DEPTH_FLOOR_10BPS_USDT,
+    PAPER_RELAX_SPREAD_CEILING_PCT,
     RESERVATION_TTL_MS,
     RISK_TAKER_FEE_RATE,
     SAME_BAR_RESUME_CLEAR_TICKS,
@@ -865,7 +867,11 @@ export class RiskGateService {
             return true;
         }
 
-        const ceiling = TIER_SPREAD_CEILING_PCT[intent.coinTier];
+        // M51 (ADR 0042 §9): under the two-condition paper relax (EXCHANGE_ENV=paper AND
+        // PAPER_RELAX_PER_COIN_LIQUIDITY=true — resolved in AppConfigService), the ceiling INPUT
+        // is the relaxed paper-only const; every other configuration reads the tier-keyed live
+        // ceiling unchanged. The strict `>` reject convention below is untouched.
+        const ceiling = this.appConfig.paperRelaxPerCoinLiquidity ? PAPER_RELAX_SPREAD_CEILING_PCT : TIER_SPREAD_CEILING_PCT[intent.coinTier];
 
         return spread > ceiling;
     }
@@ -881,7 +887,12 @@ export class RiskGateService {
     // can NEVER throw out of the gate. Boundary is <= (depth exactly at the floor rejects),
     // opposite the spread's strict >.
     private isBookTooThin(intent: IOrderIntent, context: IRiskGateContext): boolean {
-        const floor = COIN_DEPTH_FLOOR_10BPS_USDT[intent.coinTier];
+        // M51 (ADR 0042 §9): under the two-condition paper relax (EXCHANGE_ENV=paper AND
+        // PAPER_RELAX_PER_COIN_LIQUIDITY=true — resolved in AppConfigService), the floor INPUT is
+        // the relaxed paper-only const (a single scalar, tier-independent); every other
+        // configuration reads the tier-keyed live floor unchanged. The `depth <= floor` reject
+        // convention and the fail-closed guards below are untouched.
+        const floor = this.appConfig.paperRelaxPerCoinLiquidity ? PAPER_RELAX_COIN_DEPTH_FLOOR_10BPS_USDT : COIN_DEPTH_FLOOR_10BPS_USDT[intent.coinTier];
 
         if (floor === undefined) {
             return true;
