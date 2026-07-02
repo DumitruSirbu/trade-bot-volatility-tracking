@@ -867,14 +867,10 @@ export class RiskGateService {
             return true;
         }
 
-        // M51 (ADR 0042 §9): under the two-condition paper relax (EXCHANGE_ENV=paper AND
-        // PAPER_RELAX_PER_COIN_LIQUIDITY=true — resolved in AppConfigService), the effective
-        // ceiling is the per-tier MAX of the relaxed paper-only candidate and this coin's live
-        // tier ceiling, so the relax is NEVER stricter than live for any tier (a higher ceiling
-        // is looser; max guarantees the paper ceiling never sits below the live tier ceiling —
-        // QA-D2b). Every other configuration reads the tier-keyed live ceiling unchanged. The
-        // strict `>` reject convention below is untouched. Unknown tier is unchanged too:
-        // Math.max(0.30, undefined) = NaN and `spread > NaN` is false, identical to today.
+        // M51 (ADR 0042 §9): under the paper relax, the effective ceiling is the per-tier MAX of
+        // the relaxed paper-only candidate and this coin's live tier ceiling (max = never stricter
+        // than live; unknown tier stays fail-closed since `spread > NaN` is false). Full
+        // never-stricter-than-live rationale in riskConsts.ts header / ADR 0042 §9.
         const ceiling = this.appConfig.paperRelaxPerCoinLiquidity
             ? Math.max(PAPER_RELAX_SPREAD_CEILING_PCT, TIER_SPREAD_CEILING_PCT[intent.coinTier])
             : TIER_SPREAD_CEILING_PCT[intent.coinTier];
@@ -902,13 +898,9 @@ export class RiskGateService {
             return true; // fail-closed on unknown tier in every env, incl. paper relax
         }
 
-        // Under the two-condition paper relax (EXCHANGE_ENV=paper AND PAPER_RELAX_PER_COIN_LIQUIDITY
-        // =true — resolved in AppConfigService), the effective floor is the per-tier MIN of the
-        // relaxed paper-only candidate and this coin's live tier floor, so the relax is NEVER
-        // stricter than live for any tier (a lower floor is looser; min guarantees the paper floor
-        // never sits above the live tier floor — QA-D2b). Every other configuration reads the
-        // tier-keyed live floor unchanged. The `depth <= floor` reject convention and the
-        // fail-closed guards below are untouched.
+        // M51 (ADR 0042 §9): under the paper relax, the effective floor is the per-tier MIN of the
+        // relaxed paper-only candidate and this coin's live tier floor (min = never stricter than
+        // live). Full never-stricter-than-live rationale in riskConsts.ts header / ADR 0042 §9.
         const floor = this.appConfig.paperRelaxPerCoinLiquidity ? Math.min(PAPER_RELAX_COIN_DEPTH_FLOOR_10BPS_USDT, liveFloor) : liveFloor;
 
         const depthRaw = context.snapshot.book_depth_10bps_usdt;

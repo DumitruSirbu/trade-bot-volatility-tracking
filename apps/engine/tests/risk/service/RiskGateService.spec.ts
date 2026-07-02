@@ -39,6 +39,7 @@ import { ReservationLedger } from '../../../src/risk/service/ReservationLedger';
 import { RiskGateService } from '../../../src/risk/service/RiskGateService';
 import { SlotManager } from '../../../src/risk/service/SlotManager';
 import { StressHaltEvaluator } from '../../../src/risk/service/StressHaltEvaluator';
+import { MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER } from '../../../src/strategy/const';
 import {
     buildGateContext,
     buildOpenPositionView,
@@ -1249,14 +1250,13 @@ describe('RiskGateService', () => {
 
     describe('time-stop — M51 momentum 2× ceiling', () => {
         const REBALANCE_INTERVAL_MS = 86_400_000; // 24h default xmom interval
-        const MARGIN_MULTIPLIER = 2;
-        const CEILING_MINUTES = Math.ceil((REBALANCE_INTERVAL_MS * MARGIN_MULTIPLIER) / 60_000); // 2880
+        const CEILING_MINUTES = Math.ceil((REBALANCE_INTERVAL_MS * MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER) / 60_000); // 2880
 
         it('approves a 48h (2×) momentum time-stop under the 2×-derived ceiling — the deep-book unblock', async () => {
             const { gate } = makeGate();
             const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
             const intent = buildPassingIntent({
-                proposedExit: buildProposedExit({ timeStopAtMs: NOW_MS + REBALANCE_INTERVAL_MS * MARGIN_MULTIPLIER }),
+                proposedExit: buildProposedExit({ timeStopAtMs: NOW_MS + REBALANCE_INTERVAL_MS * MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER }),
             });
             const context = buildPassingContext({
                 nowMs: NOW_MS,

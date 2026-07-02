@@ -146,3 +146,57 @@ describe('AppConfigService M51 — paperRelaxPerCoinLiquidity boot-time misconfi
         expect(activeWarns).toHaveLength(1);
     });
 });
+
+// ─── CFG9–CFG11: relaxed-floor safety-math coupling advisory (ADR 0042 §9) ────
+//
+// The relaxed $2,500 depth floor's safety rationale assumes a max per-coin order of <=$500. When
+// the relax is active AND the operator raised MAX_EXPOSURE_PER_COIN_USDT past $500, a single
+// advisory warn fires (never a throw) so the book-impact assumption drift is visible at boot.
+
+function extractSafetyMathWarns(warnSpy: jest.SpyInstance): unknown[] {
+    return warnSpy.mock.calls.filter(([msg]) => /max-order assumption/i.test(String(msg)));
+}
+
+describe('AppConfigService M51 — relaxed-floor safety-math coupling advisory', () => {
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    it('CFG9: relax active + MAX_EXPOSURE_PER_COIN_USDT above $500 → fires the safety-math advisory warn', () => {
+        const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+        buildService({
+            EXCHANGE_ENV: ExchangeEnvironmentEnum.PAPER,
+            PAPER_RELAX_PER_COIN_LIQUIDITY: true,
+            MAX_EXPOSURE_PER_COIN_USDT: 1_000,
+        });
+
+        const safetyWarns = extractSafetyMathWarns(warnSpy);
+        expect(safetyWarns).toHaveLength(1);
+        expect(String(safetyWarns[0])).toMatch(/1000/);
+    });
+
+    it('CFG10: relax active + MAX_EXPOSURE_PER_COIN_USDT exactly $500 (boundary) → does NOT fire the advisory warn', () => {
+        const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+        buildService({
+            EXCHANGE_ENV: ExchangeEnvironmentEnum.PAPER,
+            PAPER_RELAX_PER_COIN_LIQUIDITY: true,
+            MAX_EXPOSURE_PER_COIN_USDT: 500,
+        });
+
+        expect(extractSafetyMathWarns(warnSpy)).toHaveLength(0);
+    });
+
+    it('CFG11: relax NEUTRALIZED on live + MAX_EXPOSURE_PER_COIN_USDT above $500 → does NOT fire the advisory warn', () => {
+        const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+        buildService({
+            EXCHANGE_ENV: ExchangeEnvironmentEnum.LIVE,
+            PAPER_RELAX_PER_COIN_LIQUIDITY: true,
+            MAX_EXPOSURE_PER_COIN_USDT: 1_000,
+        });
+
+        expect(extractSafetyMathWarns(warnSpy)).toHaveLength(0);
+    });
+});
