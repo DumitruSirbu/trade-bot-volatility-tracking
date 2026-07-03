@@ -3,7 +3,7 @@
  * Tests override only the fields under test — see F.I.R.S.T. / Clean Code §Tests.
  */
 
-import { CoinTierEnum, CorrelationModeEnum, FlowTypeEnum, OrderIntentActionEnum, PositionSideEnum, PositionSlotEnum } from '@bot/shared';
+import { CoinTierEnum, CorrelationModeEnum, ExitReasonEnum, FlowTypeEnum, OrderIntentActionEnum, PositionSideEnum, PositionSlotEnum } from '@bot/shared';
 import { StopTypeEnum } from '@bot/shared';
 
 import { Money } from '../../../src/common/utils/money';
@@ -124,6 +124,7 @@ export function buildClosedPositionView(overrides: Partial<IClosedPositionView> 
         symbol: 'BTCUSDT',
         realizedPnl: new Money('-10'),
         closedAtMs: 1_716_307_200_000,
+        exitReason: ExitReasonEnum.STOP_LOSS,
         ...overrides,
     };
 }

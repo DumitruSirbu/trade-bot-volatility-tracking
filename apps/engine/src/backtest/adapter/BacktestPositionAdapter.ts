@@ -1,4 +1,4 @@
-import { CorrelationModeEnum, IBacktestPosition, IBacktestTradeResult, PositionSideEnum, PositionSlotEnum } from '@bot/shared';
+import { CorrelationModeEnum, ExitReasonEnum, IBacktestPosition, IBacktestTradeResult, PositionSideEnum, PositionSlotEnum } from '@bot/shared';
 
 import { Money } from '../../common/utils/money';
 import { IClosedPositionView, IOpenPositionView, IOpenPositionsPort } from '../../risk/interface/IOpenPositionsPort';
@@ -55,6 +55,7 @@ export class BacktestPositionAdapter implements IOpenPositionsPort {
             symbol: trade.symbol,
             realizedPnl: new Money(trade.netPnlUsdt),
             closedAtMs: trade.closedAtMs,
+            exitReason: trade.exitReason as ExitReasonEnum,
         };
     }
 

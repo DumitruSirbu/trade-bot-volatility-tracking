@@ -1,5 +1,6 @@
 import {
     CoinTierEnum,
+    ExitReasonEnum,
     HaltSourceEnum,
     IMarketSnapshot,
     IMarketStressResumedEvent,
@@ -932,6 +933,15 @@ export class RiskGateService {
     }
 
     private async isCooldownActive(intent: IOrderIntent, context: IRiskGateContext): Promise<boolean> {
+        // ADR 0051 §M52a-4: same-cycle retry entries are exempt from cooldown-after-loss. The retry fires
+        // on the next 5m bar (<=10 min), structurally inside the 15-min window, so cooldown can only
+        // deadlock it — the wrong instrument for this cadence, not a risk decision overridden. The drift
+        // gate does NOT subsume cooldown (unsigned, arm-time-only); residual adverse-selection risk is held
+        // by the daily-loss limit (unexempted, full slippage-inclusive PnL) + attempt cap + soak gate.
+        if (intent.isRetryEntry === true) {
+            return false;
+        }
+
         const lastClose = await context.openPositions.findLastCloseForSymbol(intent.symbol);
 
         if (lastClose === null || !lastClose.realizedPnl.isNegative()) {
@@ -1006,7 +1016,13 @@ export class RiskGateService {
     // (ADR 0004 §5) — not a stored column. A win resets the streak.
     private async isConsecutiveLossHalt(context: IRiskGateContext): Promise<boolean> {
         const closed = await context.openPositions.findClosedOnUtcDay(context.utcDateString);
-        const ordered = [...closed].sort((left, right) => left.closedAtMs - right.closedAtMs);
+
+        // ADR 0004 §5 / ADR 0051 §M52a-5: force_close is a mechanical unwind, not a selection loss; its
+        // money cost is still caught by the (unexempted) daily-loss limit. Filter the legs OUT of the
+        // sequence entirely — they neither increment nor reset the streak. A null exitReason is KEPT
+        // (fail toward preserving the halt, never toward suppressing it).
+        const thesisClosed = closed.filter((position) => position.exitReason !== ExitReasonEnum.FORCE_CLOSE);
+        const ordered = [...thesisClosed].sort((left, right) => left.closedAtMs - right.closedAtMs);
 
         return this.longestTrailingLossStreak(ordered) >= CONSECUTIVE_LOSS_HALT_COUNT;
     }

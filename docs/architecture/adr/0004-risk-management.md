@@ -298,7 +298,18 @@ entries (`DAILY_LOSS_LIMIT`); reduce/close still pass.
 is derived from today's closed `positions` (ordered by `closed_at`), not stored as a
 column — keeps `risk_state` minimal and replayable. After
 `params.consecutive_loss_halt` consecutive losses → block entries for the rest of the UTC
-day (`CONSECUTIVE_LOSS_HALT`). A win resets the streak.
+day (`CONSECUTIVE_LOSS_HALT`, persisted global halt). A win resets the streak.
+**Exit-reason scope of "loss" (ADR 0051 §M52a-5, 2026-07-03).** The halt is a
+**signal-quality** breaker — it detects that the strategy's *selection/thesis* has been
+repeatedly wrong today. `force_close` legs are therefore **excluded from the streak
+derivation** (filtered out before the scan — they neither count nor reset it): a
+`force_close` is a *mechanical unwind* of an entry that never established a thesis (rejected
+at the ADR 0045 fill-acceptance seam, or a rebalance slot-recovery flatten), so it carries no
+signal about selection quality. Its **money cost is not ignored** — it is fully counted by
+the daily/weekly loss limits above (which sum `realized_pnl_day` over every close, including
+`force_close`). This exclusion is **global** (LIVE and paper), makes the halt *more precise*
+rather than more permissive, and cannot mask a real thesis loss. A `null`/legacy `exit_reason`
+is conservatively **kept** in the streak (fail toward preserving the halt).
 - **Weekly window** = a **rolling 7-day** sum of `realized_pnl_day` over the last 7
 `risk_state` rows ending at today (inclusive), i.e. `[today-6d, today]` by UTC date. Not
 ISO week; rolling. Breaches when the 7-day sum `≤ -weekly_loss_limit` →
@@ -308,6 +319,23 @@ query (new repository method; M4 adds it).
 Boundary handling: a position opened on day N and closed on day N+1 books realized PnL to
 **day N+1** (close date), matching how exchanges settle and keeping the daily row a clean
 "what was realized today" ledger.
+
+**Cooldown-after-loss — scope of "loss" (ADR 0051 §M52a-4, 2026-07-03).** The cooldown
+(`isCooldownActive`, keyed on the most-recent close having negative realized PnL within
+`COOLDOWN_AFTER_LOSS_MS`) exists to stop re-opening a symbol after a **discretionary,
+thesis-invalidating trading loss**. A same-cycle xmom retry entry (`intent.isRetryEntry === true`) is
+**exempt** from this check — the retry fires on the next 5m bar (≤10 min), structurally *inside* the
+15-min window, so the retry's own `force_close` always arms a cooldown that outlives the retry's fire
+window; no armed retry could ever re-enter. **Note:** a paper `force_close` is **not** fee-only — it
+takes mandatory adverse tier-floor slippage on the close leg (ADR 0051 §M52a-2), so its realized loss
+is slippage-dominated. The exemption is justified **not** by "the loss carries no information," but by
+the cooldown being the wrong instrument for the sub-bar retry cadence: the residual adverse-selection
+risk is carried by the daily-loss limit (not exempted; sees the full slippage magnitude), the retry's
+own attempt cap, and the M52 soak adverse-selection gate. The exemption is inert in LIVE (`isRetryEntry`
+is set only by the paper-gated, default-off retry orchestrator). Full rationale, corrected premise, and
+both fix specs (cooldown exemption + consecutive-loss exit-reason exclusion): **ADR 0051 §M52a**. The
+parallel recovery-time mirror `ReconciliationService.isCooldownStillActive` (ADR 0010 §7) is
+intentionally unchanged (retries do not survive restart).
 
 ### 6. Stress-halt source — M1 fast-stress snapshot fields, overrides ADX
 
