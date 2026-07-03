@@ -33,6 +33,7 @@ Also see [live-vs-backtest-contract.md](../live-vs-backtest-contract.md) for the
 | [0048 § M51 amendment](0048-rebalance-orchestrator.md#amendment--m51-2026-07-02-the-time-stop-gate-ceiling-must-derive-from-the-same-2-margin-constant-as-the-intent) | M51 — time-stop gate ceiling derives from `MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER` (2×), same constant as the intent |
 | [0049](0049-legacy-single-symbol-path-optional-dormant.md) | Legacy single-symbol (VWAP) path optional + dormant — `ACTIVE_STRATEGY_VERSION_ID` optional after VWAP retirement (M50) |
 | [0050](0050-xmom-cascade-topn-rebalance-anchor.md) | xmom rank-cascade selection, `top_n` basket (default 3), fixed 01:07 UTC rebalance cron (M50b) |
+| [0051](0051-xmom-force-close-retry-volatility-gated.md) | xmom `force_close` slot recovery — bounded, volatility-gated same-coin retry (paper-only, default-off, soak-gated) (M52) |
 
 ## Risk, halts, paper profile
 

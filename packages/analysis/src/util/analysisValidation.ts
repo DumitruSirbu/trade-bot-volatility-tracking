@@ -60,3 +60,13 @@ export function validateDateOrderOrThrow(fromDate: string, toDate: string): void
         throw new AnalysisValidationError('range', `fromDate (${fromDate}) must be on or before toDate (${toDate})`);
     }
 }
+
+// M52 D3 — canonical home for the strategy-version-id validation every query function needs.
+// getPerformance.ts and listPositions.ts each carry their own pre-existing local copy (out of this
+// milestone's scope to consolidate); new query modules should import this one rather than adding a
+// third copy.
+export function validateVersionIdOrThrow(versionId: number): void {
+    if (!Number.isInteger(versionId) || versionId <= 0 || versionId > Number.MAX_SAFE_INTEGER) {
+        throw new AnalysisValidationError('versionId', `must be a positive integer ≤Number.MAX_SAFE_INTEGER, got ${String(versionId)}`);
+    }
+}

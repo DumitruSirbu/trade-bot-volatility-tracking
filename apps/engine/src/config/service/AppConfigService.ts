@@ -78,6 +78,7 @@ export class AppConfigService {
     private readonly resolvedPaperRelaxMarketStress: boolean;
     private readonly resolvedPaperRelaxConsecutiveLossHalt: boolean;
     private readonly resolvedPaperRelaxPerCoinLiquidity: boolean;
+    private readonly resolvedXmomForceCloseRetry: boolean;
 
     constructor(private readonly configService: ConfigService<EnvironmentVariables, true>) {
         this.resolvedAuthHmacSecret = this.resolveAuthHmacSecret();
@@ -99,6 +100,7 @@ export class AppConfigService {
         this.resolvedPaperRelaxMarketStress = this.resolvePaperRelaxMarketStress();
         this.resolvedPaperRelaxConsecutiveLossHalt = this.resolvePaperRelaxConsecutiveLossHalt();
         this.resolvedPaperRelaxPerCoinLiquidity = this.resolvePaperRelaxPerCoinLiquidity();
+        this.resolvedXmomForceCloseRetry = this.resolveXmomForceCloseRetry();
     }
 
     get nodeEnv(): NodeEnvEnum {
@@ -178,6 +180,16 @@ export class AppConfigService {
     // constant within a run, so the gate's determinism invariant holds.
     get paperRelaxPerCoinLiquidity(): boolean {
         return this.resolvedPaperRelaxPerCoinLiquidity;
+    }
+
+    // M52 (ADR 0051 §4) — effective paper-only xmom force_close retry switch, consumed by
+    // MomentumOrchestratorService to decide whether an eligible force_close is armed for a
+    // next-bar retry. True ONLY when both EXCHANGE_ENV=paper AND XMOM_FORCE_CLOSE_RETRY=true (the
+    // same two-condition gate as the paper-relax flags) — a live/testnet boot can never see it on,
+    // so a non-paper boot is byte-identical to the pre-M52 do-nothing behavior (the retry path is
+    // unreachable). Resolved once at boot, constant within a run.
+    get xmomForceCloseRetry(): boolean {
+        return this.resolvedXmomForceCloseRetry;
     }
 
     // M25 (ADR 0042 §3) — optional paper override for the idiosyncratic-slot
@@ -677,6 +689,31 @@ export class AppConfigService {
         if (flagEnabled && isPaperEnv) {
             this.logger.warn('PAPER_RELAX_PER_COIN_LIQUIDITY is active — per-coin depth/spread floors relaxed for this paper soak run.');
             this.warnIfMaxExposurePerCoinInvalidatesRelaxSafetyMath();
+        }
+
+        return flagEnabled && isPaperEnv;
+    }
+
+    // M52 (ADR 0051 §4) — same two-condition gate as the paper-relax flags: the retry is armable
+    // only when EXCHANGE_ENV=paper AND the flag is true. Does NOT derive on-by-default in paper —
+    // the retry is an unvalidated adverse-selection hypothesis, so it requires an explicit paper
+    // opt-in. The schema field is already coerced to a strict boolean, defaulting to false when
+    // absent. A live/testnet boot with the flag set logs a NEUTRALIZED warn and returns false, so
+    // the retry path is unreachable off paper.
+    private resolveXmomForceCloseRetry(): boolean {
+        const flagEnabled = this.configService.get('XMOM_FORCE_CLOSE_RETRY', { infer: true });
+        const isPaperEnv = this.exchangeEnv === ExchangeEnvironmentEnum.PAPER;
+
+        if (flagEnabled && !isPaperEnv) {
+            this.logger.warn(
+                `XMOM_FORCE_CLOSE_RETRY=true but EXCHANGE_ENV=${this.exchangeEnv} (not paper) — the flag has been NEUTRALIZED ` +
+                    '(no force_close retry is ever armed, identical to pre-M52). If this is intentional (e.g. a copied .env under ' +
+                    'inspection), no action needed; if not, check EXCHANGE_ENV.',
+            );
+        }
+
+        if (flagEnabled && isPaperEnv) {
+            this.logger.warn('XMOM_FORCE_CLOSE_RETRY is active — small-drift xmom force_closes will arm a next-bar same-coin retry for this paper soak run.');
         }
 
         return flagEnabled && isPaperEnv;

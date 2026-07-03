@@ -114,6 +114,20 @@ export class PositionEntity {
     @Column({ name: 'trigger_source', type: 'varchar', nullable: true })
     triggerSource?: RebalanceTriggerSourceEnum | null;
 
+    // M52 D3 (ADR 0051 §6) — retry-slot-recovery attribution. TRUE only for a D2 same-coin retry
+    // entry (fired from MomentumOrchestratorService.fireArmedRetry); NULL for every attempt-1 open,
+    // VWAP/legacy open, and pre-existing row. The paper-soak analysis separates retry entries from
+    // attempt-1 entries on this column to answer the adverse-selection question.
+    @Column({ name: 'is_retry_entry', type: 'boolean', nullable: true })
+    isRetryEntry?: boolean | null;
+
+    // M52 D3 (ADR 0051 §6) — the ADR 0045 fill-acceptance guard's measured anchor drift, in ATR
+    // units, recorded at force_close time (the exact value logGeometryAnchorDrift logs). Populated
+    // only on rows the guard force-closed with a reconstructable geometry anchor; NULL otherwise. The
+    // D4 threshold-calibration query reads its distribution to set MOMENTUM_RETRY_MAX_ATR_DRIFT.
+    @Column({ name: 'force_close_atr_units_drift', type: 'numeric', precision: 18, scale: 8, nullable: true, transformer: decimalColumnTransformer })
+    forceCloseAtrUnitsDrift?: DecimalValue | null;
+
     @Column({ name: 'time_stop_at', type: 'timestamptz', nullable: true })
     timeStopAt?: Date | null;
 

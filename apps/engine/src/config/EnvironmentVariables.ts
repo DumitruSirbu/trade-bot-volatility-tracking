@@ -307,6 +307,19 @@ export class EnvironmentVariables {
     @IsBoolean()
     PAPER_RELAX_PER_COIN_LIQUIDITY: boolean = false;
 
+    // M52 (ADR 0051 §4) — paper-only switch that arms the bounded, volatility-gated same-coin retry
+    // when the ADR 0045 fill-acceptance guard force-closes an xmom OPEN. NEVER reaches live/testnet;
+    // the effective value additionally requires EXCHANGE_ENV=paper, enforced in AppConfigService. The
+    // retry is an unvalidated adverse-selection hypothesis (measured in the M52 soak), so it ships
+    // default-off — the current do-nothing behavior (slot left empty until the next cron) is the safe
+    // default. OPTIONAL with a field default of false; the @Transform fires only when the key is
+    // present, so only the exact string 'true' (case-insensitive, trimmed) enables it — the string
+    // 'false', a typo, or an empty value collapses to off (fail-safe).
+    @IsOptional()
+    @Transform(({ value }) => String(value).toLowerCase().trim() === 'true')
+    @IsBoolean()
+    XMOM_FORCE_CLOSE_RETRY: boolean = false;
+
     // M25 (ADR 0042 §3) — paper-only idiosyncratic-slot override. The slot model
     // is physically capped at A/B/C = 3 in every env; MAX_IDIOSYNCRATIC_SLOTS=2
     // plus the slot-C borrow yields 3 concurrent. Raising the idiosyncratic count

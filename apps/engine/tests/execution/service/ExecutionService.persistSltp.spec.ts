@@ -186,3 +186,41 @@ describe('ExecutionService.createOpen persists trigger_source from the intent', 
         expect(createOpenSpy.mock.calls[1][0].triggerSource).toBe(RebalanceTriggerSourceEnum.SCHEDULED);
     });
 });
+
+// M52 D3 (ADR 0051 §6) — a D2 retry entry must persist positions.is_retry_entry=true so the paper-soak
+// adverse-selection analysis can separate retry entries from attempt-1 entries. Every attempt-1 /
+// non-retry open persists NULL (the retry set must be a strict, non-contaminated subset).
+describe('ExecutionService.createOpen persists is_retry_entry from the intent', () => {
+    it('persists is_retry_entry=true when the retry-rebuild intent carried it', async () => {
+        const { service, createOpenSpy } = makeService();
+        const event = buildApprovedEvent({ intent: buildOrderIntent({ isRetryEntry: true }) });
+
+        await service.onOrderIntentApproved(event);
+
+        expect(createOpenSpy.mock.calls[0][0].isRetryEntry).toBe(true);
+    });
+
+    it('persists NULL is_retry_entry for an attempt-1 open (intent has no isRetryEntry)', async () => {
+        // An attempt-1 cascade leg / VWAP open never sets isRetryEntry — that absence must persist as
+        // NULL, keeping the retry set separable (never a fabricated false that reads as "measured").
+        const { service, createOpenSpy } = makeService();
+
+        await service.onOrderIntentApproved(buildApprovedEvent());
+
+        expect(createOpenSpy.mock.calls[0][0].isRetryEntry).toBeNull();
+    });
+
+    // Retry-then-attempt-1 adversarial: createPositionFromFill derives isRetryEntry ONLY from the
+    // current approved event's intent — a retry open must not leak its true into a later attempt-1
+    // open on the same symbol (a superseding cron re-selecting the coin as a fresh attempt-1).
+    it('does not leak a prior retry intent isRetryEntry into a later attempt-1 open', async () => {
+        const { service, createOpenSpy } = makeService();
+
+        await service.onOrderIntentApproved(buildApprovedEvent({ intent: buildOrderIntent({ isRetryEntry: true }) }));
+        await service.onOrderIntentApproved(buildApprovedEvent());
+
+        expect(createOpenSpy).toHaveBeenCalledTimes(2);
+        expect(createOpenSpy.mock.calls[0][0].isRetryEntry).toBe(true);
+        expect(createOpenSpy.mock.calls[1][0].isRetryEntry).toBeNull();
+    });
+});

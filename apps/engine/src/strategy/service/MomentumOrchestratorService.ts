@@ -23,12 +23,15 @@ import {
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 
-import { MS_PER_MINUTE, ORDER_INTENT_APPROVED_EVENT } from '../../common/const';
+import { CANDLE_CLOSED_EVENT, MOMENTUM_FILL_FORCE_CLOSED_EVENT, MS_PER_MINUTE, ORDER_INTENT_APPROVED_EVENT } from '../../common/const';
+import { IMomentumFillForceClosedEvent } from '../../common/interface';
 import { Money, MoneyValue } from '../../common/utils/money';
 import { AppConfigService } from '../../config/service';
 import { ATR_PERIOD } from '../../market-data/const';
 import { PRICE_TAPE_RETENTION_MS } from '../../market-data/const/candleConsts';
 import { computeAtr } from '../../market-data/indicator/computeAtr';
+import { ICandle } from '../../market-data/interface/ICandle';
+import { ICandleClosedEvent } from '../../market-data/interface/ICandleClosedEvent';
 import { CandleRepository } from '../../market-data/repository/CandleRepository';
 import { UniverseMembershipRepository } from '../../market-data/repository/UniverseMembershipRepository';
 import { SymbolStateRegistry } from '../../market-data/service/SymbolStateRegistry';
@@ -37,7 +40,21 @@ import { PositionEntity } from '../../position/entity';
 import { PositionRepository } from '../../position/repository/PositionRepository';
 import { IOrderIntent, IOrderIntentApprovedEvent, IRiskDecision, IRiskGateContext, IRiskLimits } from '../../risk/interface';
 import { InstrumentPortAdapter, OpenPositionsPortAdapter, PositionSizer, RiskGateService, RiskStatePortAdapter } from '../../risk/service';
-import { MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER } from '../const';
+import {
+    CANDLE_INTERVAL_MS,
+    MOMENTUM_RETRY_ABANDONED_TIMEOUT,
+    MOMENTUM_RETRY_ARMED,
+    MOMENTUM_RETRY_BASKET_FULL,
+    MOMENTUM_RETRY_ELIGIBLE,
+    MOMENTUM_RETRY_EXHAUSTED,
+    MOMENTUM_RETRY_FIRED,
+    MOMENTUM_RETRY_MAX_ATR_DRIFT,
+    MOMENTUM_RETRY_MAX_ATTEMPTS_PER_SYMBOL,
+    MOMENTUM_RETRY_MAX_WAIT_MS,
+    MOMENTUM_RETRY_SKIPPED_DRIFT,
+    MOMENTUM_RETRY_SUPERSEDED,
+    MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER,
+} from '../const';
 import { DecisionRepository } from '../repository/DecisionRepository';
 import { StrategyVersionRepository } from '../repository/StrategyVersionRepository';
 import { XMomPortfolioStrategy } from '../strategies/XMomPortfolioStrategy';
@@ -66,6 +83,38 @@ interface IRebalanceLegContext {
     readonly nowMs: number;
     readonly triggerSource: RebalanceTriggerSourceEnum;
     readonly params: IMomentumParams;
+    // Per-cycle correlation nonce (M52 D1, ADR 0051 §2.1) stamped on every OPEN this rebalance
+    // emits, so an async force_close is attributable back to the cycle that opened it.
+    readonly rebalanceCycleId: string;
+    // Marks the leg as a D2 slot-recovery retry (M52 D3, ADR 0051 §6). Only fireArmedRetry sets it;
+    // the normal cascade leaves it undefined so attempt-1 opens persist positions.is_retry_entry NULL.
+    readonly isRetryEntry?: boolean;
+}
+
+// The retry-eligibility outcome for one force_close (M52 D1, ADR 0051 §3). D1 stops at this
+// decision — D2 consumes an `eligible` decision to arm a next-closed-5m-bar retry (fresh sizing,
+// reservation-safe) behind the default-off paper-only XMOM_FORCE_CLOSE_RETRY flag. `outcome` is one
+// of the MOMENTUM_RETRY_* tags; `atrUnitsDrift` is the drift the breaker keyed on.
+interface IMomentumRetryDecision {
+    readonly outcome: string;
+    readonly eligible: boolean;
+    readonly symbol: string;
+    readonly rank: number;
+    readonly rebalanceCycleId: string;
+    readonly strategyVersionId: number;
+    readonly atrUnitsDrift: MoneyValue;
+}
+
+// An eligible force_close armed to retry on the next closed 5m bar (M52 D2, ADR 0051 §3.3). The
+// arm carries the cycle + rank the fresh rebuild re-stamps, the trigger provenance for the rebuilt
+// leg's context, and `armedAtMs` (the arming cycle's nowMs) so the bounded MOMENTUM_RETRY_MAX_WAIT_MS
+// guard can reject a next bar that arrives too late. Keyed by symbol in the orchestrator's armed map.
+interface IArmedRetry {
+    readonly symbol: string;
+    readonly rank: number;
+    readonly rebalanceCycleId: string;
+    readonly triggerSource: RebalanceTriggerSourceEnum;
+    readonly armedAtMs: number;
 }
 
 // The M50 rebalance orchestrator (ADR 0048 §2.3). On each UNIVERSE_REBALANCE_DUE_EVENT it builds
@@ -85,6 +134,28 @@ export class MomentumOrchestratorService {
     private activeVersionId!: number;
 
     private activeParams!: IMomentumParams;
+
+    // M52 D1 (ADR 0051 §2.1/§3.3). The cycle a force_close is retried against; a report carrying a
+    // different id has been superseded by a newer rebalance and is abandoned.
+    private currentCycleId: string | null = null;
+
+    // Per-cycle attempt ledger keyed by `${rebalanceCycleId}::${symbol}` → retry count (ADR 0051
+    // §3.2). Cleared at the start of every rebalance — only the current cycle can host a retry.
+    private readonly retryAttempts = new Map<string, number>();
+
+    // M52 D2 (ADR 0051 §3.3). Armed next-bar retries keyed by symbol. Populated when an eligible
+    // force_close arrives AND the paper-only XMOM_FORCE_CLOSE_RETRY flag is on; drained on the next
+    // closed 5m bar for the symbol. Cleared at the start of every rebalance — a newer cycle
+    // supersedes any armed retry from the prior one.
+    private readonly armedRetries = new Map<string, IArmedRetry>();
+
+    // The current cycle's rebalance instant (M52 D2). Anchors the MOMENTUM_RETRY_MAX_WAIT_MS guard
+    // and stamps each arm's `armedAtMs`; null until the first rebalance of the run.
+    private currentCycleNowMs: number | null = null;
+
+    // The current cycle's trigger provenance (M52 D2), carried onto a rebuilt retry leg's context so
+    // the retry's decision row keeps the same scheduled/manual attribution as attempt 1.
+    private currentTriggerSource: RebalanceTriggerSourceEnum | null = null;
 
     constructor(
         private readonly config: AppConfigService,
@@ -133,6 +204,206 @@ export class MomentumOrchestratorService {
         }
     }
 
+    // M52 D1 (ADR 0051 §2.1/§3). The retry-eligibility decision surface. When the ADR 0045
+    // fill-acceptance guard force-closes an OPEN momentum position, ExecutionService reports it
+    // here; this listener decides whether the emptied slot is retry-eligible and LOGS the outcome.
+    // D1 stops at the decision — it fires NO order. D2 consumes an `eligible` decision to arm the
+    // deferred, freshly-sized, next-closed-5m-bar retry behind the default-off XMOM_FORCE_CLOSE_RETRY
+    // paper flag. Any failure is swallowed with an error log — a broken retry decision must never
+    // take down the (already-returned) rebalance path.
+    @OnEvent(MOMENTUM_FILL_FORCE_CLOSED_EVENT)
+    async onMomentumFillForceClosed(event: IMomentumFillForceClosedEvent): Promise<void> {
+        try {
+            const decision = await this.evaluateRetryEligibility(event);
+
+            this.logMomentumRetryDecision(decision);
+            this.armRetryIfEnabled(decision);
+        } catch (cause) {
+            this.logger.error(`momentum force_close retry decision failed for ${event.symbol}: ${formatErrorCause(cause)}`);
+        }
+    }
+
+    // M52 D2 (ADR 0051 §3.3). Arm an ELIGIBLE force_close for a next-bar retry — but ONLY when the
+    // paper-only XMOM_FORCE_CLOSE_RETRY flag is on. With the flag off (or any non-paper env, where
+    // AppConfigService neutralizes it) this is a no-op, so the D1 behavior is preserved exactly: the
+    // decision is logged and NO order is ever armed or fired. Never instant — the fire happens on the
+    // next closed 5m bar (onCandleClosed), strictly after ExecutionService.unwindRejectedFill's
+    // synchronous reservation release, so the retry cannot double-book against the exposure caps.
+    private armRetryIfEnabled(decision: IMomentumRetryDecision): void {
+        if (!decision.eligible || !this.config.xmomForceCloseRetry) {
+            return;
+        }
+
+        if (this.currentCycleNowMs === null || this.currentTriggerSource === null) {
+            return;
+        }
+
+        this.armedRetries.set(decision.symbol, {
+            symbol: decision.symbol,
+            rank: decision.rank,
+            rebalanceCycleId: decision.rebalanceCycleId,
+            triggerSource: this.currentTriggerSource,
+            armedAtMs: this.currentCycleNowMs,
+        });
+
+        this.logger.log(
+            `${MOMENTUM_RETRY_ARMED} symbol=${decision.symbol} rank=${decision.rank} cycleId=${decision.rebalanceCycleId} — fires on next closed 5m bar`,
+        );
+    }
+
+    // M52 D2 (ADR 0051 §3.3). The bar-close ingest seam that fires an armed retry. On the NEXT closed
+    // 5m bar for an armed symbol, rebuild the open intent from that fresh bar and re-enter the
+    // UNCHANGED gate. A broken retry must never take down market-data ingestion — every failure is
+    // swallowed with an error log.
+    @OnEvent(CANDLE_CLOSED_EVENT)
+    async onCandleClosed(event: ICandleClosedEvent): Promise<void> {
+        if (event.interval !== CANDLE_INTERVAL_5M) {
+            return;
+        }
+
+        const armed = this.armedRetries.get(event.symbol);
+
+        if (armed === undefined) {
+            return;
+        }
+
+        // Claim-on-entry: drop the arm synchronously (Map.get+Map.delete never suspend) BEFORE any
+        // await, so a re-entrant bar-close for the same symbol — MarketDataService can emit two closed
+        // bars back-to-back for a quiet symbol swept after a >5m gap — sees `undefined` and returns.
+        // This is what guarantees an arm fires at most once (§2.2 never overfill the basket).
+        this.armedRetries.delete(event.symbol);
+
+        try {
+            await this.fireArmedRetry(armed, event.candle);
+        } catch (cause) {
+            this.logger.error(`momentum armed retry failed for ${event.symbol}: ${formatErrorCause(cause)}`);
+        }
+    }
+
+    // Fire (or abandon) one armed retry against the fresh 5m bar. The arm is already claimed (deleted
+    // from the map) by onCandleClosed before this runs, so it can fire at most once. Order of guards is
+    // deliberate: (1) flag re-check — defensive: an armed entry cannot exist with the flag off, but a
+    // mid-run reviewer sees the fire path is unreachable without the paper flag. (2) supersession — a
+    // stale cycle id means a newer rebalance replaced this arm. (3) bounded wait — a bar arriving beyond
+    // MAX_WAIT has a stale re-anchor. (4) live top_n re-check at FIRE time (§2.2, ADR 0051 §3.3) — a
+    // concurrent fill or manual rebalance may have refilled the basket since arming; never overfill.
+    // Only then is the freshly-rebuilt intent routed through the unchanged gate (§3.5).
+    private async fireArmedRetry(armed: IArmedRetry, candle: ICandle): Promise<void> {
+        if (!this.config.xmomForceCloseRetry) {
+            return;
+        }
+
+        if (armed.rebalanceCycleId !== this.currentCycleId) {
+            this.logger.log(`${MOMENTUM_RETRY_SUPERSEDED} symbol=${armed.symbol} cycleId=${armed.rebalanceCycleId} — armed retry dropped (cycle superseded)`);
+
+            return;
+        }
+
+        const barCloseMs = candle.openTimeMs + CANDLE_INTERVAL_MS;
+        const waitedMs = barCloseMs - armed.armedAtMs;
+
+        if (waitedMs > MOMENTUM_RETRY_MAX_WAIT_MS) {
+            this.logger.log(`${MOMENTUM_RETRY_ABANDONED_TIMEOUT} symbol=${armed.symbol} waitedMs=${waitedMs} — next bar arrived too late, slot left empty`);
+
+            return;
+        }
+
+        const openCount = await this.countOpenPositionsForActiveVersion();
+
+        if (openCount >= this.activeParams.top_n) {
+            this.logger.log(`${MOMENTUM_RETRY_BASKET_FULL} symbol=${armed.symbol} — armed retry abandoned (basket refilled before fire)`);
+
+            return;
+        }
+
+        // Fresh build against the just-closed bar: new entry price, recomputed ATR, fresh sizer.size()
+        // — NEVER attempt-1 geometry (ADR 0051 §3.5). The rebuilt leg carries the same cycle id (for
+        // ledger attribution) + rank, re-anchored on this bar's close instant.
+        const context: IRebalanceLegContext = {
+            nowMs: barCloseMs,
+            triggerSource: armed.triggerSource,
+            params: this.activeParams,
+            rebalanceCycleId: armed.rebalanceCycleId,
+            // M52 D3 (ADR 0051 §6): tag the rebuilt leg as a retry so the persisted position row is
+            // separable from attempt-1 entries in the paper-soak adverse-selection analysis.
+            isRetryEntry: true,
+        };
+
+        const approved = await this.processOpen(armed.symbol, armed.rank, context);
+
+        this.logger.log(`${MOMENTUM_RETRY_FIRED} symbol=${armed.symbol} rank=${armed.rank} cycleId=${armed.rebalanceCycleId} approved=${approved}`);
+    }
+
+    // Run the ADR 0051 §3 breaker. Order is deliberate: (1) supersession/version guard, (2) attempt
+    // cap backstop (§3.2), (3) volatility breaker — the PRIMARY gate (§3.1), (4) live top_n re-check
+    // (§2.2, never the stale `filled`). Only an ELIGIBLE outcome consumes a ledger attempt.
+    private async evaluateRetryEligibility(event: IMomentumFillForceClosedEvent): Promise<IMomentumRetryDecision> {
+        const decide = (outcome: string, eligible: boolean): IMomentumRetryDecision => ({
+            outcome,
+            eligible,
+            symbol: event.symbol,
+            rank: event.rank,
+            rebalanceCycleId: event.rebalanceCycleId,
+            strategyVersionId: event.strategyVersionId,
+            atrUnitsDrift: event.atrUnitsDrift,
+        });
+
+        // A report for a foreign version, or for a cycle a newer rebalance has already superseded,
+        // is abandoned (the re-anchor is stale — ADR 0051 §3.3).
+        if (event.strategyVersionId !== this.activeVersionId || event.rebalanceCycleId !== this.currentCycleId) {
+            return decide(MOMENTUM_RETRY_SUPERSEDED, false);
+        }
+
+        const ledgerKey = this.buildRetryLedgerKey(event.rebalanceCycleId, event.symbol);
+
+        // Attempt cap (backstop) — a symbol already retried this cycle is not retried again.
+        if ((this.retryAttempts.get(ledgerKey) ?? 0) >= MOMENTUM_RETRY_MAX_ATTEMPTS_PER_SYMBOL) {
+            return decide(MOMENTUM_RETRY_EXHAUSTED, false);
+        }
+
+        // Volatility breaker (the PRIMARY gate) — retry only a plausibly-stale small drift; at/above
+        // the threshold the drift is a genuine dislocation and the slot is left empty.
+        if (event.atrUnitsDrift.greaterThanOrEqualTo(MOMENTUM_RETRY_MAX_ATR_DRIFT)) {
+            return decide(MOMENTUM_RETRY_SKIPPED_DRIFT, false);
+        }
+
+        // Live top_n re-check (§2.2) — never trust the stale `filled`; abandon if the basket has
+        // already refilled (a concurrent fill or a manual rebalance) so the retry can never overfill.
+        const openCount = await this.countOpenPositionsForActiveVersion();
+
+        if (openCount >= this.activeParams.top_n) {
+            return decide(MOMENTUM_RETRY_BASKET_FULL, false);
+        }
+
+        this.retryAttempts.set(ledgerKey, (this.retryAttempts.get(ledgerKey) ?? 0) + 1);
+
+        return decide(MOMENTUM_RETRY_ELIGIBLE, true);
+    }
+
+    private logMomentumRetryDecision(decision: IMomentumRetryDecision): void {
+        this.logger.log(
+            `${decision.outcome} symbol=${decision.symbol} rank=${decision.rank} cycleId=${decision.rebalanceCycleId} ` +
+                `atrUnitsDrift=${decision.atrUnitsDrift.toFixed(4)} eligible=${decision.eligible}`,
+        );
+    }
+
+    // The per-cycle correlation nonce (ADR 0051 §2.1): deterministic in (nowMs, triggerSource) so
+    // the same cron tick always yields the same id, and a later tick a distinct one.
+    private buildRebalanceCycleId(nowMs: number, triggerSource: RebalanceTriggerSourceEnum): string {
+        return `xmom-cycle-${nowMs}-${triggerSource}`;
+    }
+
+    private buildRetryLedgerKey(rebalanceCycleId: string, symbol: string): string {
+        return `${rebalanceCycleId}::${symbol}`;
+    }
+
+    // Live open-momentum count for the active version (ADR 0051 §2.2) — never the stale `filled`
+    // cascade counter. Shared by the eligibility decision and the fire-time re-check so neither can
+    // drift out of sync on what "the basket is full" means.
+    private async countOpenPositionsForActiveVersion(): Promise<number> {
+        return (await this.positions.findOpen()).filter((position) => position.strategyVersionId === this.activeVersionId).length;
+    }
+
     // Load + cache the active portfolio version. Reloads only when the configured id changes
     // (a config change + restart in practice). Returns false when the path is dormant / unresolved.
     private async resolveActiveVersion(): Promise<boolean> {
@@ -163,7 +434,16 @@ export class MomentumOrchestratorService {
 
     private async rebalance(nowMs: number, triggerSource: RebalanceTriggerSourceEnum): Promise<void> {
         const params = this.activeParams;
-        const context: IRebalanceLegContext = { nowMs, triggerSource, params };
+        const rebalanceCycleId = this.buildRebalanceCycleId(nowMs, triggerSource);
+
+        this.currentCycleId = rebalanceCycleId;
+        this.currentCycleNowMs = nowMs;
+        this.currentTriggerSource = triggerSource;
+        this.retryAttempts.clear();
+        // A new cycle supersedes any retry still armed from the prior one (ADR 0051 §3.3).
+        this.armedRetries.clear();
+
+        const context: IRebalanceLegContext = { nowMs, triggerSource, params, rebalanceCycleId };
         const universe = await this.buildUniverse(params, nowMs);
         const selection = this.strategy.selectUniverse({ universe, params, nowMs });
         const ranked = selection.ranked;
@@ -393,6 +673,13 @@ export class MomentumOrchestratorService {
             // ADR 0048 M50c: rides the intent → executor → positions.trigger_source so the analysis
             // surfaces can fence manual rebalances out of the primary calibration aggregation.
             triggerSource,
+            // M52 D1 (ADR 0051 §2.1): correlate the async force_close back to this cycle + rank so
+            // the orchestrator's retry breaker can act on the emptied slot.
+            rebalanceCycleId: context.rebalanceCycleId,
+            rank,
+            // M52 D3 (ADR 0051 §6): undefined for attempt-1 cascade legs, true only for a D2 retry
+            // rebuild — rides to positions.is_retry_entry for the paper-soak attribution.
+            isRetryEntry: context.isRetryEntry,
         };
     }
 
