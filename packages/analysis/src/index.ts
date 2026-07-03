@@ -38,6 +38,16 @@ export type {
     IMissDistributionBucket,
 } from './query/getIdiosyncrasyMissDistribution.js';
 
+export { getRetryAttribution } from './query/getRetryAttribution.js';
+export type {
+    IGetRetryAttributionParams,
+    IRetryAttributionReport,
+    IRetrySurvival,
+    IRetryCounterfactual,
+    IMatchedControlCell,
+    IDriftDistributionBucket,
+} from './query/getRetryAttribution.js';
+
 export { selectHaltState } from './query/selectHaltState.js';
 
 export { decodeCursor, encodeCursor } from './util/CursorCodec.js';

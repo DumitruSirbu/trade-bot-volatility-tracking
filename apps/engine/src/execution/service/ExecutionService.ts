@@ -20,6 +20,7 @@ import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import {
     AuditFailureReasonEnum,
     EXCHANGE_OVERFILL_DRIFT_EVENT,
+    MOMENTUM_FILL_FORCE_CLOSED_EVENT,
     ORDER_AUDIT_PERSIST_FAILED_EVENT,
     ORDER_INTENT_APPROVED_EVENT,
     ORDER_INTENT_EXPIRED_EVENT,
@@ -29,7 +30,7 @@ import {
     POSITION_CLOSED_EVENT,
     POSITION_OPENED_EVENT,
 } from '../../common/const';
-import { IOrderIntentUnknownEvent, IPositionClosedEvent, IPositionOpenedEvent } from '../../common/interface';
+import { IMomentumFillForceClosedEvent, IOrderIntentUnknownEvent, IPositionClosedEvent, IPositionOpenedEvent } from '../../common/interface';
 import { HaltFlagService } from '../../common/service';
 import { DecimalValue, formatMoney, Money, MoneyValue } from '../../common/utils/money';
 import { AppConfigService } from '../../config/service';
@@ -1204,21 +1205,67 @@ export class ExecutionService {
     // diverged from the reconstructed signal reference, in ATR units (regime-independent canary for
     // how unreliable reconstructReferencePrice is in live) and absolute %. LOG ONLY — never gates.
     private logGeometryAnchorDrift(ctx: IFillAcceptanceContext): void {
-        const { event, positionRow, fillSummary } = ctx;
+        const drift = this.computeGeometryAnchorDrift(ctx);
+
+        if (drift === null) {
+            return;
+        }
+
+        this.logger.log(
+            `GEOMETRY_ANCHOR_DRIFT positionId=${ctx.positionRow.id} symbol=${ctx.event.intent.symbol} flowType=${ctx.event.intent.flowType} ` +
+                `driftPct=${drift.driftPct.toFixed(4)} atrUnits=${drift.atrUnits.toFixed(4)}`,
+        );
+    }
+
+    // The single source of the ADR 0045 anchor-drift math. Both logGeometryAnchorDrift (M48) and
+    // the M52 force_close report event consume this so the two never diverge — M52 adds NO new
+    // drift math in the execution layer (ADR 0051 §2.1). Returns null when the fill lacked the
+    // snapshot/geometry needed to reconstruct the reference (never for a momentum OPEN, which always
+    // stamps entrySnapshot + geometryParams on approval).
+    private computeGeometryAnchorDrift(ctx: IFillAcceptanceContext): { driftPct: MoneyValue; atrUnits: MoneyValue } | null {
+        const { event, fillSummary } = ctx;
 
         if (event.entrySnapshot === undefined || event.geometryParams === undefined || event.entrySnapshot.atr_14 === undefined) {
-            return;
+            return null;
         }
 
         const fill = new Money(fillSummary.avgFillPrice);
         const ref = new Money(event.intent.referencePrice);
-        const absDriftPct = fill.minus(ref).abs().dividedBy(ref).times(100);
-        const atrDrift = fill.minus(ref).abs().dividedBy(new Money(event.entrySnapshot.atr_14));
+        const driftPct = fill.minus(ref).abs().dividedBy(ref).times(100);
+        const atrUnits = fill.minus(ref).abs().dividedBy(new Money(event.entrySnapshot.atr_14));
 
-        this.logger.log(
-            `GEOMETRY_ANCHOR_DRIFT positionId=${positionRow.id} symbol=${event.intent.symbol} flowType=${event.intent.flowType} ` +
-                `driftPct=${absDriftPct.toFixed(4)} atrUnits=${atrDrift.toFixed(4)}`,
-        );
+        return { driftPct, atrUnits };
+    }
+
+    // M52 D1 (ADR 0051 §2.1). When the force_close unwind is for an OPEN momentum position, report
+    // it to the orchestrator with the drift the guard already measured. The execution layer makes
+    // NO retry decision — it only surfaces the number logGeometryAnchorDrift logged. A momentum OPEN
+    // is identified by the rebalanceCycleId the orchestrator stamped on the intent; every
+    // non-momentum unwind is a no-op here.
+    private emitMomentumForceCloseReport(ctx: IFillAcceptanceContext, drift: { driftPct: MoneyValue; atrUnits: MoneyValue } | null, reason?: string): void {
+        const { event } = ctx;
+        const rebalanceCycleId = event.intent.rebalanceCycleId;
+
+        if (rebalanceCycleId === undefined) {
+            return;
+        }
+
+        if (drift === null) {
+            return;
+        }
+
+        // rank is always stamped alongside rebalanceCycleId (MomentumOrchestratorService), so it's
+        // guaranteed present here; `0` would be an invalid rank (1-based) if ever asserted otherwise.
+        const report: IMomentumFillForceClosedEvent = {
+            rebalanceCycleId,
+            symbol: event.intent.symbol,
+            strategyVersionId: event.strategyVersionId,
+            rank: event.intent.rank as number,
+            atrUnitsDrift: drift.atrUnits,
+            driftPct: drift.driftPct,
+            reason,
+        };
+        this.events.emit(MOMENTUM_FILL_FORCE_CLOSED_EVENT, report);
     }
 
     // Unwind a rejected open fill via a synthetic FLATTEN (one CLEAN CLOSED row, FORCE_CLOSE).
@@ -1234,6 +1281,17 @@ export class ExecutionService {
                 `reason=${reason} - unwinding via FLATTEN`,
         );
 
+        // M52 D3 (ADR 0051 §6) — the guard's measured anchor drift, computed ONCE from the single
+        // source (no new math). Persisted onto the row for the drift-distribution / threshold
+        // calibration query and reused verbatim in the force_close report event below.
+        const drift = this.computeGeometryAnchorDrift(ctx);
+
+        // Persist the drift BEFORE the synthetic close reloads the row (the reduce path re-reads it
+        // fresh from the DB), so the close finalize's full-row save carries the value rather than
+        // clobbering it. null (non-reconstructable geometry) leaves the column NULL. Column-scoped
+        // UPDATE — cannot collide with the concurrent state/PnL finalize.
+        await this.persistForceCloseAtrDrift(positionRow.id, drift);
+
         await this.fillAcceptanceUnwind.emitSyntheticClose({
             positionRow,
             side: event.intent.tradeSide,
@@ -1243,6 +1301,22 @@ export class ExecutionService {
             strategyVersionId: event.strategyVersionId,
         });
         this.releaseReservationSafely(event.reservationId);
+
+        // M52 D1 (ADR 0051 §3.4) — report the force_close to the orchestrator AFTER the reservation
+        // is released, so the retry-eligibility decision (and any D2 retry) can never race a
+        // still-held reservation. No-op unless this was an OPEN momentum position.
+        this.emitMomentumForceCloseReport(ctx, drift, reason);
+    }
+
+    // M52 D3 (ADR 0051 §6) — record the guard's measured ATR-unit drift on the force-closed row.
+    // No-op when the fill lacked a reconstructable geometry anchor (non-momentum / snapshot-less),
+    // which is the correct NULL for the drift-distribution query.
+    private async persistForceCloseAtrDrift(positionId: number, drift: { driftPct: MoneyValue; atrUnits: MoneyValue } | null): Promise<void> {
+        if (drift === null) {
+            return;
+        }
+
+        await this.positions.updateForceCloseAtrUnitsDrift(positionId, drift.atrUnits);
     }
 
     // Weighted-average entry on ADD (ADR 0007 §3 + must-fix #4). Uses the slot-scoped
@@ -1394,6 +1468,9 @@ export class ExecutionService {
             positionSlot: event.approvedSlot,
             correlationMode: event.intent.correlationMode,
             triggerSource: event.intent.triggerSource ?? null,
+            // M52 D3 (ADR 0051 §6): true only for a D2 retry rebuild; undefined→NULL for every
+            // attempt-1 / non-momentum open, keeping retry entries separable in the paper-soak analysis.
+            isRetryEntry: event.intent.isRetryEntry ?? null,
             timeStopAt: new Date(event.clampedExit.timeStopAtMs),
             // M33 Task 5 (GBT H3): persist the clamped SL/TP at INSERT time — not only at
             // applyProtectiveAttachResult. The local monitor's arm is in-memory; a crash between

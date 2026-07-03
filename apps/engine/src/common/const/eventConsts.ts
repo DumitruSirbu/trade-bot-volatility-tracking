@@ -54,6 +54,12 @@ export const ORDER_PROTECTIVE_FALLBACK_EVENT = 'execution.protective.fallback';
 export const POSITION_OPENED_EVENT = 'execution.position.opened';
 export const POSITION_CLOSED_EVENT = 'execution.position.closed';
 
+// M52 D1 (ADR 0051 §2.1). Emitted by ExecutionService.unwindRejectedFill when the ADR 0045
+// fill-acceptance guard force-closes an OPEN momentum position, carrying the drift the guard
+// already measured. The momentum orchestrator listens and runs the retry-eligibility decision —
+// the execution layer only reports the force_close, it makes no retry decision. Engine-internal.
+export const MOMENTUM_FILL_FORCE_CLOSED_EVENT = 'execution.momentum.fillForceClosed';
+
 // Emitted in LIVE mode when the zero-fill audit-row insert fails — the audit trail is a
 // survival-class invariant in live operation, so a failure escalates to error-level + a
 // dedicated event so an operator alert (M9) can fire. Dry-run keeps warn-level only.

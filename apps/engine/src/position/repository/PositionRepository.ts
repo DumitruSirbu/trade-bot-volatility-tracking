@@ -251,4 +251,13 @@ export class PositionRepository extends BaseRepository<PositionEntity> implement
 
         return result.affected ?? 0;
     }
+
+    // M52 D3 (ADR 0051 §6) — record the fill-acceptance guard's measured anchor drift (ATR units)
+    // on a force-closed row. Column-scoped UPDATE (like updateProtectiveOrderTypeIfState) so it
+    // touches only this one column and cannot clobber a concurrent state/PnL finalize write. Called
+    // from ExecutionService.unwindRejectedFill BEFORE the synthetic close reloads the row, so the
+    // subsequent close finalize preserves the value.
+    async updateForceCloseAtrUnitsDrift(positionId: number, atrUnitsDrift: MoneyValue): Promise<void> {
+        await this.repository.update({ id: positionId }, { forceCloseAtrUnitsDrift: atrUnitsDrift });
+    }
 }

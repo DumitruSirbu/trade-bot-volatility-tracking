@@ -40,6 +40,43 @@ export const MOMENTUM_REBALANCE_CRON_NAME = 'momentum-rebalance';
 // real 01:07 UTC scheduled rebalance would be worse than an occasional extra rebalance. 5 minutes.
 export const REBALANCE_TRIGGER_COOLDOWN_MS = 5 * 60 * 1_000;
 
+// --- M52 D1 — xmom force_close slot-recovery retry breaker (ADR 0051 §3) ---
+
+// Volatility circuit breaker (the PRIMARY retry gate, ADR 0051 §3.1). A force_close is
+// retry-eligible only when its measured atrUnits drift is STRICTLY BELOW this threshold — a small
+// drift is a plausibly-stale reference; at/above is a genuine dislocation and the slot is left
+// empty (MOMENTUM_RETRY_SKIPPED_DRIFT). PROVISIONAL 1.0: the M52 soak (D3) calibrates it from the
+// empirical drift distribution. Under 1.0 the observed FARTCOIN (1.76) / WLD (1.32) do NOT retry.
+export const MOMENTUM_RETRY_MAX_ATR_DRIFT = 1.0;
+
+// Attempt cap (a safety BACKSTOP only, not the gate — ADR 0051 §3.2). At most one retry per
+// (rebalanceCycleId, symbol); a second force_close of the same symbol in the same cycle is not
+// retried (MOMENTUM_RETRY_EXHAUSTED). Bounds fill→force_close→retry→force_close oscillation.
+export const MOMENTUM_RETRY_MAX_ATTEMPTS_PER_SYMBOL = 1;
+
+// Bounded wait guard on an armed retry (ADR 0051 §3.3, M52 D2). An eligible retry is armed and
+// fires on the NEXT closed 5m bar for the symbol (re-anchored, never instant); if that bar arrives
+// more than this long after the cycle that armed it, the re-anchor is stale and the retry is
+// abandoned (slot left empty). A fresh 5m bar is normally ≤5 min away, so at 10 min (2 bars) this
+// only trips when ingestion stalls; a new rebalance cycle also supersedes any armed retry first.
+export const MOMENTUM_RETRY_MAX_WAIT_MS = 10 * 60 * 1_000;
+
+// Retry-eligibility decision outcome tags (ADR 0051 §3). Emitted as structured log markers at the
+// force_close→decision seam so the paper soak (D3) can count each transition without parsing prose.
+export const MOMENTUM_RETRY_ELIGIBLE = 'MOMENTUM_RETRY_ELIGIBLE';
+export const MOMENTUM_RETRY_SKIPPED_DRIFT = 'MOMENTUM_RETRY_SKIPPED_DRIFT';
+export const MOMENTUM_RETRY_EXHAUSTED = 'MOMENTUM_RETRY_EXHAUSTED';
+export const MOMENTUM_RETRY_BASKET_FULL = 'MOMENTUM_RETRY_BASKET_FULL';
+export const MOMENTUM_RETRY_SUPERSEDED = 'MOMENTUM_RETRY_SUPERSEDED';
+
+// D2 armed-retry execution outcome tags (ADR 0051 §3.3/§3.5). Emitted at the next-bar fire seam:
+// MOMENTUM_RETRY_FIRED when the freshly-rebuilt intent re-enters the gate; MOMENTUM_RETRY_ARMED
+// when an eligible force_close is armed to wait for the next bar; MOMENTUM_RETRY_ABANDONED_TIMEOUT
+// when the next bar arrived beyond MOMENTUM_RETRY_MAX_WAIT_MS.
+export const MOMENTUM_RETRY_ARMED = 'MOMENTUM_RETRY_ARMED';
+export const MOMENTUM_RETRY_FIRED = 'MOMENTUM_RETRY_FIRED';
+export const MOMENTUM_RETRY_ABANDONED_TIMEOUT = 'MOMENTUM_RETRY_ABANDONED_TIMEOUT';
+
 // --- v1 mean-reversion exhaustion-confirmation tolerances (ADR 0003 §4, M3 brief) ---
 
 // Take-profit target is VWAP pulled in by this many sigma for conservatism: TP sits at

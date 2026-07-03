@@ -61,4 +61,20 @@ export interface IOrderIntent {
     // calibration aggregation. Left undefined by the VWAP path (StrategyService), which has no
     // rebalance-trigger concept — that absence persists as NULL. Engine-internal — no shared change.
     readonly triggerSource?: RebalanceTriggerSourceEnum;
+    // Per-cycle correlation nonce stamped by the momentum orchestrator on every OPEN it emits in
+    // one rebalance() invocation (M52 D1, ADR 0051 §2.1). It flows through the approved event →
+    // fill-acceptance context so the async fill-acceptance guard can attribute a force_close back
+    // to the cycle that opened it. Presence also marks the intent as a momentum OPEN for the
+    // force_close report event. Left undefined by every non-momentum path. Engine-internal.
+    readonly rebalanceCycleId?: string;
+    // The cascade rank (1-based) of this momentum OPEN (ADR 0051 §2.1). Carried explicitly so the
+    // force_close report event is self-describing without reverse-deriving it from signalScore.
+    // Left undefined by every non-momentum path. Engine-internal — no shared change.
+    readonly rank?: number;
+    // Marks a D2 force_close slot-recovery retry entry (M52 D3, ADR 0051 §6). Set true only on the
+    // rebuilt intent the momentum orchestrator fires from fireArmedRetry; the executor persists it to
+    // positions.is_retry_entry so the paper-soak adverse-selection analysis can separate retry entries
+    // from attempt-1 entries. Left undefined by every attempt-1 / non-momentum path (persists as NULL).
+    // Engine-internal — no shared change.
+    readonly isRetryEntry?: boolean;
 }

@@ -164,6 +164,12 @@ export const VOLATILITY_THRESHOLD_PCT = 2.5;
 - **onDelete:** RESTRICT for required lookups, SET NULL for optional FKs, CASCADE for dependent children. **onUpdate:** CASCADE.
 - **Transaction mode:** `each`.
 
+## Environment Variables
+
+- **Every new env var/flag ships with its `.env.example` entry in the same commit** — not a follow-up. This applies to any new `EnvironmentVariables.ts` field or `AppConfigService` flag.
+- Match the existing block style: what it does, exact gating conditions (e.g. "effective only when `EXCHANGE_ENV=paper`"), default value, and an explicit "NEVER set in live/testnet" where applicable.
+- Paper-only exploration flags belong in the "Paper exploration profile" block pattern (see `PAPER_RELAX_*` entries), commented out with the recommended value shown so a live operator can't copy the block and silently loosen live risk.
+
 ## Build & lint gate
 
 **AUTHORITATIVE:** Every implementer enforces zero-defect build + lint before handing off to review.

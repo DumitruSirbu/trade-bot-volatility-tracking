@@ -214,6 +214,7 @@ function buildService(
         positions = {
             createOpen: jest.fn().mockResolvedValue(buildPositionRow()),
             save: jest.fn().mockResolvedValue(buildPositionRow()),
+            updateForceCloseAtrUnitsDrift: jest.fn().mockResolvedValue(undefined),
             findOpenBySymbolAndSlot: jest.fn().mockResolvedValue(null),
         },
         positionService = {
