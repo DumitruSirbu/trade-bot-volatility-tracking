@@ -11,7 +11,7 @@
  * halt fires, the full-row writer is never touched.
  */
 
-import { CoinTierEnum, CorrelationModeEnum, OrderIntentActionEnum, PositionSideEnum, RejectReasonEnum, RiskOutcomeEnum } from '@bot/shared';
+import { CoinTierEnum, CorrelationModeEnum, ExitReasonEnum, OrderIntentActionEnum, PositionSideEnum, RejectReasonEnum, RiskOutcomeEnum } from '@bot/shared';
 
 import { Money } from '../../../src/common/utils/money';
 import { HALT_LEG_BTC_SHOCK } from '../../../src/risk/const';
@@ -115,8 +115,8 @@ describe('RiskGateService M45 D3a — C1b: consecutive-loss persistHalt uses ups
 
     function buildTwoConsecutiveLossContext(riskStatePort: ReturnType<typeof buildRiskStatePort>) {
         const closedToday = [
-            { symbol: 'ETHUSDT', realizedPnl: new Money('-5'), closedAtMs: NOW_MS - 120_000 },
-            { symbol: 'SOLUSDT', realizedPnl: new Money('-3'), closedAtMs: NOW_MS - 60_000 },
+            { symbol: 'ETHUSDT', realizedPnl: new Money('-5'), closedAtMs: NOW_MS - 120_000, exitReason: ExitReasonEnum.STOP_LOSS },
+            { symbol: 'SOLUSDT', realizedPnl: new Money('-3'), closedAtMs: NOW_MS - 60_000, exitReason: ExitReasonEnum.STOP_LOSS },
         ];
         return buildGateContext({
             nowMs: NOW_MS,

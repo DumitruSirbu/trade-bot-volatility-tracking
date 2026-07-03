@@ -8,7 +8,11 @@
   orchestrator — the retry lives at the same orchestrator impurity boundary), ADR 0050 (rank-cascade
   + `top_n` basket — the retry recovers a slot the cascade counted but the fill lost), ADR 0004 (risk
   gate / slots / exposure caps — **unchanged**; every retry re-enters through the same gate).
-- **Amends:** nothing. This is additive behavior gated behind a default-off, paper-only flag.
+- **Amends:** the core retry (§1–§7) is additive behavior gated behind a default-off, paper-only flag.
+  The **M52a amendment** additionally narrows two `RiskGateService` stateful-limit checks so a mechanical
+  `force_close` no longer counts as a trading loss: (a) retry-entry intents are exempt from
+  cooldown-after-loss (paper-only reach), and (b) the consecutive-loss halt streak excludes
+  `force_close` legs (**global**, LIVE and paper — see ADR 0004 §5).
 
 > **ADR numbering note.** The next free number after `0050` is **0051**; this ADR uses it.
 
@@ -54,11 +58,16 @@ In the **2026-07-03 01:07 UTC** scheduled rebalance, **FARTCOIN/USDT** (`atrUnit
 `force_close`'d within ~0.1 s — the market moved sharply between the decision-time reference (latest
 closed 5m bar) and the actual fill.
 
-**This is the guard working exactly as designed, and it is far cheaper than the losses it prevents:**
-the observed `force_close` unwind cost ~$0.20 to reverse, versus a ~$14.91 realized `stop_loss` on the
-same strategy when a degenerate-geometry fill was *allowed* to run. Nothing here proposes weakening the
-guard. The guard stays byte-for-byte (ADR 0045 unchanged). This ADR only decides **what to do with the
-now-empty slot**: leave it empty for a day, or attempt a bounded, carefully-gated recovery.
+**This is the guard working exactly as designed, and in this instance it was far cheaper than the loss
+it prevents:** these two unwinds cost ~$0.20 apiece to reverse under the calm conditions of this
+sample, versus a ~$14.91 realized `stop_loss` on the same strategy when a degenerate-geometry fill was
+*allowed* to run. **That ~$0.20 is a single low-volatility observation, not the cost of a `force_close`
+in general** — the close leg carries mandatory adverse tier-floor slippage (M52a-2), so on a volatile
+day or a higher tier the unwind cost can be an order of magnitude larger. What holds generally is the
+*direction* of the trade-off (unwinding a degenerate-geometry fill is cheaper than letting it run to a
+stop), not the specific dollar figure. Nothing here proposes weakening the guard. The guard stays
+byte-for-byte (ADR 0045 unchanged). This ADR only decides **what to do with the now-empty slot**: leave
+it empty for a day, or attempt a bounded, carefully-gated recovery.
 
 ### 1.3 Why a naive "just retry" is wrong (quant review, authoritative)
 
@@ -293,6 +302,11 @@ assumed**.
    hypothesis directly.
 5. **Counterfactual PnL: retried slots vs leaving them empty** — the bottom-line test of whether the
    whole mechanism adds value over the current do-nothing behavior.
+6. **`force_close` realized-PnL distribution (magnitude *and* sign, split by `coin_tier` and trigger
+   type)** — tests the M52a-2 premise directly. The first M52a draft assumed `force_close` is
+   fee-only; the code applies mandatory adverse tier-floor slippage on the close leg
+   (tier1 0.15% / tier2 0.5% / tier3 1.0%), so the realized loss is expected to be slippage-dominated.
+   This measures whether it is, which sizes the money bleed the daily-loss limit (M52a-3) must absorb.
 
 **Go / no-go bar (D4 closure):** the retry is recommended to stay **on** only if **all** hold:
 
@@ -331,8 +345,9 @@ migration), and within an ATR%-matched cell it differs from return-on-notional o
 SL-distance factor, so it yields the same sign and ranking of adverse selection.
 
 **Metric 2 excludes `force_close` legs from both arms; metrics 1 and 5 include them.** A `force_close`
-leg's `realized_pnl` is a ~$0.20 unwind artifact, not a forward return — including it in metric 2's
-attempt-1 arm dilutes the baseline with near-zero rows for exactly the coins that got retried (every
+leg's `realized_pnl` is an unwind artifact (fees + mandatory close-leg tier-floor slippage, magnitude
+per M52a-2), not a forward return — including it in metric 2's
+attempt-1 arm dilutes the baseline with off-thesis rows for exactly the coins that got retried (every
 retry is preceded by an attempt-1 `force_close`), biasing the delta toward "less adverse." Metric 2's
 row source therefore fences `exit_reason <> 'force_close'` on **both** arms. This bias compounds with
 (does not cancel) the sizing bias above — both make retries look better than reality — so both fixes
@@ -388,9 +403,10 @@ measurement. Metric 1 (survival rate) IS added to this query now: it is a cheap 
   way to force extra observation cycles remains the M50c manual-trigger surface (ADR 0048 §M50c).
 
 - **Weaken / disable the ADR 0045 fill-acceptance guard so the fill is never force-closed in the first
-  place.** Rejected, emphatically. The guard is the cheap insurance the whole exercise depends on:
-  ~$0.20 to unwind a degenerate-geometry fill vs a ~$14.91 realized `stop_loss` when such a fill is
-  allowed to run (§1.2). The guard stays byte-for-byte. This ADR operates strictly *downstream* of it.
+  place.** Rejected, emphatically. The guard is the insurance the whole exercise depends on: unwinding a
+  degenerate-geometry fill (~$0.20 in the calm §1.2 sample, but slippage-scaled and larger on a volatile
+  day — M52a-2) is directionally cheaper than the ~$14.91 realized `stop_loss` such a fill runs to when
+  allowed. The guard stays byte-for-byte. This ADR operates strictly *downstream* of it.
 
 - **Put the retry decision in the execution layer (decide-and-refire where the force_close happens).**
   Rejected. The retry is gate-dependent, needs the live open-position count, the per-cycle attempt
@@ -411,3 +427,317 @@ measurement. Metric 1 (survival rate) IS added to this query now: it is a cheap 
 - **Reuse attempt-1 notional/geometry for the retry (skip re-sizing).** Rejected. ATR has typically
   risen on the fast mover that drifted; reusing the old size mis-risks the position and seats it closer
   to the reversion zone (quant §1.3). The retry re-runs the full sizer fresh (§3.5).
+
+---
+
+## M52a Amendment — two stacked stateful-limit vetoes structurally block the armed retry (2026-07-03, revised)
+
+> **Revision note.** The first draft of this amendment fixed only the cooldown veto (M52a-4) on the
+> premise that a paper `force_close` is "fee-only, zero-slippage" and therefore carries "no
+> information." Two adversarial reviews (bot-review-logic, bot-review-quant) showed both claims wrong
+> against the code. This revision (a) corrects the `force_close`-PnL premise (M52a-2), (b) reframes the
+> cooldown exemption's justification onto a backstop that actually holds (M52a-4), and (c) promotes the
+> exit-reason-aware **consecutive-loss-halt** fix from a deferred LOW tech-debt item to **in-scope**,
+> because the exact same fee/slippage-negative `force_close` legs trip a second, *worse* veto one check
+> below cooldown (M52a-5).
+
+### M52a-1. The defect — the exemption alone does not unblock the retry, it moves the veto down one check
+
+A manual rebalance (`npm run rebalance:trigger`) force-closed RIF, MAGMA, XPL. RIF measured
+`drift=0.24` → `MOMENTUM_RETRY_ELIGIBLE` → `MOMENTUM_RETRY_ARMED`, and ~4 min later fired on the next
+5m bar as `MOMENTUM_RETRY_FIRED approved=false` — vetoed by `RiskGateService`:
+`REJECTED open RIF/USDT:USDT reason=cooldown_active`. (MAGMA `drift=1.23` → `SKIPPED_DRIFT` and XPL →
+`BASKET_FULL` are correct exclusions, not the defect.)
+
+`checkStatefulLimits` (`RiskGateService.ts:830`) runs its sub-checks in order:
+`isCooldownActive` → `checkLossWindows` → overtrading → funding. There are **two** vetoes on that path
+that a `force_close`-driven negative close arms, not one:
+
+1. **Cooldown-after-loss (per-symbol, transient).** `isCooldownActive` (`RiskGateService.ts:934`) arms
+   a `COOLDOWN_AFTER_LOSS_MS` (env `COOLDOWN_AFTER_LOSS_MS = 900000`, 15 min) block whenever the
+   **most recent close** on the symbol had `realizedPnl.isNegative()`. The retry fires on the next
+   closed 5m bar (§3.3) — ≤10 min, always **inside** the 15-min window — so the retry's own
+   `force_close` always arms a cooldown that outlives the retry's fire window.
+
+2. **Consecutive-loss halt (global, day-wide, DB-persisted).** One check below cooldown,
+   `checkLossWindows` → `isConsecutiveLossHalt` (`RiskGateService.ts:1015`) derives a loss streak from
+   `findClosedOnUtcDay` (`PositionRepository.ts:115`), whose query filters `state = CLOSED` **only,
+   with no `exit_reason` exclusion**. Every fee/slippage-negative `force_close` leg therefore counts
+   toward the streak exactly like a real trading loss, `longestTrailingLossStreak` scans them, and with
+   `CONSECUTIVE_LOSS_HALT_COUNT = 2` (`riskConsts.ts:46`) the observed incident (RIF, MAGMA, XPL — 3
+   `force_close`s in one cycle) builds a streak ≥ 2. When the streak trips, `persistHalt`
+   (`RiskGateService.ts:991`) writes `is_halted = true` on today's `risk_state` row — a **global**
+   halt affecting every symbol and every strategy for the rest of the UTC day.
+
+The consequence for the shipped cooldown exemption (M52a-4): once the retry is no longer vetoed by
+`cooldown_active`, it **falls straight through to `checkLossWindows`**, which now rejects it with
+`CONSECUTIVE_LOSS_HALT` instead. Net effect of the exemption **in isolation**: it does not unblock the
+retry, it **upgrades the veto** from a per-symbol 15-min block to a global, persisted, whole-day halt.
+Both fixes are therefore required together.
+
+> **Masking caveat (unstated in the first draft).** The consecutive-loss halt is currently *masked* in
+> paper soak only because soak runs with `paperRelaxConsecutiveLossHalt` ON — `checkLossWindows`
+> returns early (`RiskGateService.ts:970`) **before** the streak check when that flag is set. The
+> moment soak turns that relax OFF to validate real halt behavior, three `force_close`s in a day halt
+> the whole bot. The fix below corrects the derivation **regardless of the relax flag**, so the halt is
+> correct whether the flag is on or off.
+
+### M52a-2. Corrected premise — a paper `force_close` is slippage-dominated, not fee-only
+
+The first draft asserted a paper `force_close` "flattens at the current mark with zero slippage" and is
+therefore "always negative-by-fees-only." **This is false.** Verified against the code:
+
+- `ExecutionService` passes `markPrice = fillSummary.avgFillPrice` for the synthetic FLATTEN, but
+  `PaperFillSimulator.translateToFillIntent` → `deriveReferencePrice`
+  (`PaperFillSimulator.ts:262–309`) **ignores that price** for a reduce/close leg and re-derives the
+  exit from the **live bid/ask** (a closing long hits the bid).
+- `applyAdverseSlippage` / `computeTierFillPrice` (`tierSlippageCalculator.ts:82–106`) then applies
+  **mandatory adverse tier-floor slippage on the close leg** (tier1 0.15% / tier2 0.5% / tier3 1.0%).
+
+So a `force_close`'s realized PnL is **slippage-dominated** — it can be an order of magnitude larger
+than the fees (scaling with tier and notional), and it can include a **real adverse price move** over
+the fill-latency window. The n=3 RIF/MAGMA/XPL sample (one manual trigger, calm conditions, observed
+`-0.159 / -0.203 / -0.200`) does **not** establish "fee-only" as an invariant; it is a small,
+low-volatility sample. **"`force_close` realized PnL is small and fee-only" is demoted to a hypothesis**
+pending soak measurement of the actual `force_close` PnL distribution (magnitude *and* sign, split by
+`coin_tier` and trigger type) — added to the §6 soak metrics as metric 6.
+
+**Why the deadlock diagnosis survives the correction.** The two vetoes key on the **sign** of realized
+PnL (`realizedPnl.isNegative()`), not its magnitude. A slippage-dominated `force_close` is, if
+anything, *more* reliably negative than a fee-only one. So the structural block in M52a-1 holds
+independent of the premise — only the *original justification* for exempting the retry (below) depended
+on the false "no information" claim and must change.
+
+### M52a-3. Root cause — a mechanical unwind is neither a discretionary trading loss nor a selection failure
+
+Both vetoes conflate a **mechanical unwind** with the failure mode each is actually built to catch.
+
+- **What cooldown-after-loss protects (ADR 0004 §5).** Stop *re-opening the same symbol* immediately
+  after a **real, thesis-invalidating trading loss** (a stop-loss hit, an adverse time-stop) — the
+  per-symbol revenge / adverse-selection failure mode, on a 15-min horizon.
+- **What the consecutive-loss halt protects (ADR 0004 §5).** Detect that the strategy's **selection /
+  thesis has been repeatedly wrong today** and halt *all* new entries for the day. It is a
+  **signal-quality** circuit breaker, deliberately *not* a money-magnitude one — money magnitude is the
+  daily- and weekly-loss limits' job (`checkLossWindows`, evaluated first, not exempted).
+
+A `force_close` is categorically different from what either guard targets. It is a mechanical unwind of
+an entry that **never established a thesis** — the fill degenerated at the ADR 0045 fill-acceptance
+seam and was rejected *before* the position could run, or it is a rebalance slot-recovery flatten.
+Three `force_close`s in one manual-rebalance cycle is **not** "the strategy's selection was wrong three
+times"; it is "three fast-mover entries slipped past the geometry guard in one cycle." It reflects
+**execution quality**, not **selection quality**.
+
+The corrected premise (M52a-2, `force_close` can be slippage-*expensive*) does **not** change this
+conclusion — it clarifies the division of labour:
+
+- The **money** a `force_close` costs (fees + slippage, possibly large) is real and **is** counted —
+  by the **daily-loss limit**, which sums `realized_pnl_day` over *every* close including `force_close`
+  legs and *including retries*, and is **not** exempted. That is the honest instrument for "am I
+  bleeding too much today, from any cause."
+- The **signal** a `force_close` carries about selection quality is **nil** — so it must not feed the
+  consecutive-loss streak, and re-opening after one is not "chasing a loss."
+
+### M52a-4. Decision A — exempt retry-entry intents from the cooldown-after-loss gate (shipped; justification revised)
+
+`isCooldownActive` returns `false` immediately when `intent.isRetryEntry === true`, before it reads the
+last close (already implemented, `RiskGateService.ts:939`). The retry class is exempt from
+cooldown-after-loss; **all other opens keep the check byte-for-byte**.
+
+**The original justification is withdrawn.** The first draft argued the retry's own volatility drift
+gate "subsumes" cooldown — that `isRetryEntry === true` is "unreachable for a symbol that actually
+moved against us." That is **false**, for two independently sufficient reasons the quant review
+established against the code:
+
+- **The drift gate is unsigned.** `computeGeometryAnchorDrift` uses `.abs()`
+  (`ExecutionService.ts:1234–1235`), so `drift < 1.0` admits **small adverse** moves just as readily as
+  small favorable ones. A symbol that moved slightly *against* us (e.g. drift 0.4 adverse) still arms a
+  retry. "Unreachable for a symbol that moved against us" is therefore wrong — it is only unreachable
+  for *large* moves, in either direction.
+- **The gate is measured at arm time, not re-verified at fire time.** The drift is computed on
+  attempt-1's fill. The retry then waits a full 5m bar and **rebuilds from a fresh reference**
+  (§3.5) — so the arm-time drift bound says nothing about the retry entry's *own* adverse exposure. The
+  gate does **not** bound "chasing a real adverse move."
+
+**The corrected justification.** Cooldown-after-loss is a per-symbol revenge guard calibrated to a
+15-min horizon. The retry's cadence (fires on the next 5m bar, ≤10 min, structurally *inside* 15 min)
+makes cooldown **incapable of doing anything but deadlocking the retry** — it is the wrong instrument
+for this cadence, not a live risk decision being overridden. Exempting it removes a structural
+deadlock; it does **not** remove protection, because the residual adverse-selection risk is carried by
+instruments that can actually see it:
+
+- **The daily-loss limit (`checkLossWindows`, not exempted)** sees the full realized-PnL magnitude of
+  every `force_close` and every retry, slippage included — the honest money backstop (M52a-3).
+- **The §3.2 attempt cap** bounds oscillation to one retry per `(rebalanceCycleId, symbol)`.
+- **The §6 soak adverse-selection hard gate (metric 2)** is the actual validation that retry entries do
+  not systematically buy the worst tick; until it passes, the whole retry ships default-off (§4).
+
+So the "chasing losses" failure mode is bounded — by the daily-loss limit and the attempt cap and the
+soak gate — *not* by a per-symbol 15-min cooldown the retry cadence structurally defeats.
+
+**Concrete fix spec (for `bot-engine-nestjs`) — already implemented; recorded for the audit trail.**
+One file, one method, no new constant, no interface change, no migration.
+
+- **File / method:** `apps/engine/src/risk/service/RiskGateService.ts`, `isCooldownActive` (lines
+  934–950). Guard clause at the top, before the `findLastCloseForSymbol` read:
+  `if (intent.isRetryEntry === true) { return false; }`.
+- **Discriminator already exists.** `IOrderIntent.isRetryEntry` (`IOrderIntent.ts:79`) is set `true`
+  **only** by the retry orchestrator's `fireArmedRetry` (`MomentumOrchestratorService.ts:329`);
+  attempt-1 opens leave it `undefined`. Comparison is strict `=== true` so every non-retry intent takes
+  the unchanged path — no accidental widening.
+- **Comment must cite the revised justification** (this M52a-4): the retry cadence structurally defeats
+  the 15-min cooldown; residual risk is held by the daily-loss limit + attempt cap + soak gate — **not**
+  by the drift gate (unsigned, arm-time-only).
+
+**Tests `bot-qa-engineer` must add (paired to the fix):**
+1. A retry-flagged intent (`isRetryEntry: true`) whose last close is a negative `force_close` within
+   the cooldown window is **not** rejected `cooldown_active` (the regression the live soak exposed).
+2. A non-retry intent (`isRetryEntry` undefined) with the same recent negative close **is** still
+   rejected `cooldown_active` — the invariant is preserved for the discretionary path.
+3. A retry-flagged intent still fails every *other* gate check that should reject it (e.g. book too
+   thin, exposure cap, **and the consecutive-loss halt of M52a-5 when real losses precede it**) — the
+   exemption scopes exactly one sub-check; it is not a gate bypass.
+
+### M52a-5. Decision B — the consecutive-loss streak excludes `force_close` legs (promoted from LOW to in-scope)
+
+**Why the `isRetryEntry` intent-exemption does NOT fit this veto.** `isConsecutiveLossHalt` derives the
+streak from **aggregate closed positions on the day** (`findClosedOnUtcDay`), not from the evaluated
+intent, and on trip it **persists a global `is_halted` day row** (`persistHalt`). An `isRetryEntry`
+guard on this check would be nearly useless: (a) the streak-building `force_close` legs remain in the
+DB and would halt the very next **non-retry** open — tomorrow's 01:07 cron, or an entirely different
+symbol; (b) once the global halt is persisted, it blocks everything for the day regardless of any
+single intent's flag. The M52a-2 scoping claim in the first draft ("this defect only bites the retry
+path; outside it the next re-entry is ~24h away") is **false for this veto specifically** — the
+consecutive-loss halt is global and independent of any one symbol's retry timing. The fix must live at
+the **streak derivation**, not on the intent.
+
+**Decision.** Make the streak derivation **exit-reason-aware**: `force_close` legs are **filtered out
+before the scan** — they neither increment nor reset the streak (they are invisible to it). This
+faithfully encodes the invariant of M52a-3: the halt counts **thesis-bearing closes only**
+(`stop_loss`, `take_profit`, `time_stop`, `signal`, `liquidated`, …), because only those speak to
+selection quality. The money cost of the excluded `force_close` legs is still fully counted by the
+daily-loss limit (M52a-3), so nothing is un-protected.
+
+> **Filter, do not reset.** A `force_close` must be *removed* from the sequence, **not** treated as a
+> streak-resetting "win." A `force_close` sitting between two real `stop_loss` legs must stay invisible
+> so the two genuine thesis losses still trip the halt at streak 2 — treating it as a win would let a
+> mechanical unwind silently *cancel* a legitimate losing streak and weaken the protection.
+
+**Concrete fix spec (for `bot-engine-nestjs`) — same rigor as M52a-4. Engine-internal only; NO
+`bot-shared-maintainer` change.**
+
+The first draft deferred this as needing a shared-contract change through `bot-shared-maintainer`. That
+was wrong: the view the gate reads is the **engine-internal** `IClosedPositionView` in
+`apps/engine/src/risk/interface/IOpenPositionsPort.ts` — *not* the shared
+`packages/shared/src/interface/IClosedPositionView.ts` (which already carries `exitReason`). The
+backtest trade view (`IBacktestTradeResult`) already carries `exitReason` including `'force_close'`.
+So the change is confined to `apps/engine`.
+
+1. **`apps/engine/src/risk/interface/IOpenPositionsPort.ts`** — add `readonly exitReason:
+   ExitReasonEnum | null;` to the engine-internal `IClosedPositionView` (import `ExitReasonEnum` from
+   `@bot/shared`). Keep it **nullable** so a legacy/unknown row is expressible.
+2. **`apps/engine/src/risk/service/OpenPositionsPortAdapter.ts`** — `toClosedView` maps
+   `exitReason: position.exitReason ?? null` (`PositionEntity.exitReason` is already
+   `ExitReasonEnum | null`, `PositionEntity.ts:74`).
+3. **`apps/engine/src/backtest/adapter/BacktestPositionAdapter.ts`** — `toClosedView` maps
+   `exitReason: trade.exitReason as ExitReasonEnum` (`IBacktestTradeResult.exitReason` is a string
+   union whose members match `ExitReasonEnum`). Inert in practice — `force_close` cannot occur in
+   backtest (§5) — but the field must be populated for type-completeness and parity.
+4. **`apps/engine/src/risk/service/RiskGateService.ts`** — in `isConsecutiveLossHalt`
+   (`RiskGateService.ts:1015`), filter the fetched closes to exclude `force_close` **before** ordering
+   and scanning:
+   `const thesisClosed = closed.filter((position) => position.exitReason !== ExitReasonEnum.FORCE_CLOSE);`
+   then order + `longestTrailingLossStreak(thesisClosed)`. `longestTrailingLossStreak` is unchanged.
+   A `null` `exitReason` is **kept** (a legacy/unknown close still counts) — fail toward *preserving*
+   the halt, never toward suppressing it. Attach a comment citing ADR 0004 §5 / ADR 0051 §M52a-5:
+   `force_close` is a mechanical unwind, not a selection loss; its money cost is caught by the
+   daily-loss limit.
+5. **`apps/engine/tests/risk/support/fixtures.ts`** — `buildClosedPositionView` gains an `exitReason`
+   default (e.g. `ExitReasonEnum.STOP_LOSS`, so existing streak fixtures that build negative closes
+   still count) plus override support.
+
+**Tests `bot-qa-engineer` must add (paired to the fix):**
+1. A day with **two negative `force_close` closes and nothing else** does **not** halt —
+   `isConsecutiveLossHalt` returns `false`, no `persistHalt` write (the RIF/MAGMA/XPL regression).
+2. A day of `stop_loss` (neg) → `force_close` (neg) → `stop_loss` (neg) **does** halt at streak 2 — the
+   `force_close` is invisible, so the two real thesis losses still trip it (guards against the
+   "treat force_close as a reset" mis-fix).
+3. A day of **two real `stop_loss` losses** still halts (unchanged baseline) — the invariant is
+   preserved for thesis losses.
+4. A negative close with **`exitReason = null`** still counts toward the streak — the fail-safe default.
+5. The fix holds with `paperRelaxConsecutiveLossHalt` **OFF** — the derivation is correct independent of
+   the relax flag (M52a-1 masking caveat).
+
+### M52a-6. Alternatives considered
+
+- **Apply the `isRetryEntry` intent-exemption to the consecutive-loss halt too (mirror Decision A).**
+  Rejected — it does not fit the veto's shape (M52a-5). The halt fires on aggregate closed-position
+  history and persists a **global** day row; an intent flag cannot un-persist a global halt, and the
+  streak-building `force_close` legs would still halt the next non-retry open. The derivation-level
+  exit-reason exclusion is the only fix that addresses the actual mechanism.
+- **Treat a `force_close` as a streak-resetting "win" instead of filtering it out.** Rejected. A
+  `force_close` between two real `stop_loss` legs would then silently cancel a legitimate losing
+  streak, weakening the halt. A mechanical unwind must be *invisible* to the streak, not a positive
+  signal (M52a-5).
+- **Fix only the cooldown veto (the first draft) and defer the consecutive-loss halt as LOW
+  tech-debt.** Rejected — this is the promotion. With the cooldown exemption shipped, the retry falls
+  through to the consecutive-loss halt, which is *worse* (global, persisted). The two defects are the
+  same root cause (`force_close` counted as a loss) on two stacked checks; fixing one without the other
+  ships a change whose only effect is to make the veto more severe (M52a-1).
+- **Distinguish "real loss" from "mechanical flatten" inside `isCooldownActive` globally** (make
+  cooldown itself exit-reason-aware, dropping the intent exemption). Rejected as the cooldown fix. The
+  only *reachable* case where a `force_close` last-close matters within the 15-min window is the retry
+  path (a non-retry re-entry after a `force_close` is the next daily cron, ~24h out, far past
+  cooldown). The `isRetryEntry` exemption already covers that one reachable case with a smaller blast
+  radius than rewriting the cooldown semantic for every strategy. (The `exitReason` data now on the
+  engine view *would* make this cheap, but it buys no additional reachable protection — kept as LOW
+  tech-debt in M52a-8.)
+- **Shorten the cooldown for retry-armed re-entries via a new constant.** Rejected. To unblock a retry
+  firing within ~5 min of its own `force_close`, the retry-specific cooldown would have to be
+  effectively zero — the exemption with extra machinery, a misleading name, and a constant that must be
+  kept below `MOMENTUM_RETRY_MAX_WAIT_MS` forever or the deadlock silently returns.
+- **Gate the cooldown exemption behind `xmomForceCloseRetry` as well as `isRetryEntry`.** Rejected as
+  redundant coupling. `isRetryEntry === true` is *only* reachable when the paper-gated, default-off
+  retry orchestrator ran (which already requires the flag), so re-reading strategy config inside the
+  risk gate adds no safety.
+
+### M52a-7. Trading-safety invariants — explicitly defended
+
+- **No order path bypasses the risk gate (CLAUDE.md hard rule).** The retry intent still runs the
+  **entire** `RiskGateService.evaluate` pipeline. Decision A scopes exactly **one** sub-check
+  (`isCooldownActive`) to exclude the retry class; Decision B changes **what counts as a loss** in
+  **one** derivation (`isConsecutiveLossHalt`), narrowing it to thesis-bearing closes for **every**
+  strategy — it does not weaken any threshold. Every other check (stress, spread, book depth, OI,
+  daily/weekly loss limits, overtrading caps, exposure caps, R:R, SL-inside-liquidation, sizing) is
+  unchanged and still applies to retries. Neither change is a bypass, a new order path, or a new gate
+  rule; both mirror the established `paperRelaxConsecutiveLossHalt` precedent of scoping a single check.
+- **Decision B is a global narrowing, and that is correct — not a paper-only relax.** Excluding
+  `force_close` legs from the consecutive-loss streak applies in LIVE too. This is intended: a
+  `force_close` is a mechanical unwind in *any* environment, its money cost is caught by the (unchanged,
+  not-exempted) daily-loss limit, and counting it as a selection loss is a false positive everywhere.
+  The change makes the halt *more precise*, not more permissive, and cannot mask real thesis losses
+  (those keep counting).
+- **Inert-in-LIVE for Decision A.** `isRetryEntry` is set only by the retry orchestrator, reachable
+  only when `EXCHANGE_ENV = paper` **and** `XMOM_FORCE_CLOSE_RETRY` is on (default-off, §4). In every
+  LIVE path `isRetryEntry` is `undefined`, so `isCooldownActive` behaves exactly as today. **Reviewer
+  rule:** any code path that sets `intent.isRetryEntry = true` outside the paper-gated retry
+  orchestrator is a must-fix — it would leak the cooldown exemption toward live capital.
+- **Backtest parity preserved.** The retry path is inert in backtest (§5), so `isRetryEntry` is never
+  `true` and Decision A never fires there. For Decision B, `force_close` cannot occur in backtest (§5),
+  so the exit-reason filter never removes a backtest close — the derivation is identical live and in
+  backtest. No parity divergence from either change.
+- **Money stays `decimal`.** No arithmetic changes; the streak filter compares an enum, the removed
+  cooldown comparison was already `decimal.js`.
+
+### M52a-8. Consciously out of scope
+
+- **The reconciliation cooldown mirror.** `ReconciliationService.isCooldownStillActive`
+  (`ReconciliationService.ts:1687`, ADR 0010 §7) duplicates the last-close-PnL-sign derivation for the
+  crash-recovery decision "may I re-open this symbol on restart?" It is **not** changed here: armed
+  retries live in an in-memory map lost on restart, so a retry never resumes across a process boundary
+  and this mirror cannot deadlock it. Its conservative behavior (decline to re-open a just-force_closed
+  symbol on cold start) is correct for recovery. Recorded as LOW tech-debt: if global cooldown is ever
+  made exit-reason-aware, this mirror should move in lockstep.
+- **Making cooldown-after-loss itself exit-reason-aware (dropping the intent exemption).** With the
+  `exitReason` field now on the engine-internal `IClosedPositionView` (Decision B), this is cheap — but
+  it buys no additional *reachable* protection (M52a-6), so it stays LOW tech-debt. Decision A's intent
+  exemption remains the sanctioned cooldown fix.

@@ -22,7 +22,7 @@
  *   - Boundary conditions throughout
  */
 
-import { CoinTierEnum, CorrelationModeEnum, OrderIntentActionEnum, PositionSideEnum, RejectReasonEnum, RiskOutcomeEnum } from '@bot/shared';
+import { CoinTierEnum, CorrelationModeEnum, ExitReasonEnum, OrderIntentActionEnum, PositionSideEnum, RejectReasonEnum, RiskOutcomeEnum } from '@bot/shared';
 
 import { Money } from '../../../src/common/utils/money';
 import {
@@ -435,6 +435,7 @@ describe('RiskGateService', () => {
                 symbol: 'BTCUSDT',
                 realizedPnl: new Money('-10'),
                 closedAtMs: NOW_MS - 5 * 60_000,
+                exitReason: ExitReasonEnum.STOP_LOSS,
             };
             const context = buildPassingContext({
                 nowMs: NOW_MS,
@@ -453,6 +454,7 @@ describe('RiskGateService', () => {
                 symbol: 'BTCUSDT',
                 realizedPnl: new Money('50'), // profit
                 closedAtMs: NOW_MS - 1 * 60_000,
+                exitReason: ExitReasonEnum.TAKE_PROFIT,
             };
             const context = buildPassingContext({
                 nowMs: NOW_MS,
@@ -472,6 +474,7 @@ describe('RiskGateService', () => {
                 symbol: 'BTCUSDT',
                 realizedPnl: new Money('-20'),
                 closedAtMs: NOW_MS - COOLDOWN_MS - 1, // one ms past the cooldown
+                exitReason: ExitReasonEnum.STOP_LOSS,
             };
             const context = buildPassingContext({
                 nowMs: NOW_MS,
@@ -571,8 +574,8 @@ describe('RiskGateService', () => {
             const { gate } = makeGate();
             const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
             const closedToday = [
-                { symbol: 'ETHUSDT', realizedPnl: new Money('-5'), closedAtMs: NOW_MS - 120_000 },
-                { symbol: 'SOLUSDT', realizedPnl: new Money('-3'), closedAtMs: NOW_MS - 60_000 },
+                { symbol: 'ETHUSDT', realizedPnl: new Money('-5'), closedAtMs: NOW_MS - 120_000, exitReason: ExitReasonEnum.STOP_LOSS },
+                { symbol: 'SOLUSDT', realizedPnl: new Money('-3'), closedAtMs: NOW_MS - 60_000, exitReason: ExitReasonEnum.STOP_LOSS },
             ];
             const context = buildPassingContext({
                 nowMs: NOW_MS,
@@ -589,9 +592,9 @@ describe('RiskGateService', () => {
             const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
             // Two losses, then a win — streak resets
             const closedToday = [
-                { symbol: 'ETHUSDT', realizedPnl: new Money('-5'), closedAtMs: NOW_MS - 180_000 },
-                { symbol: 'SOLUSDT', realizedPnl: new Money('-3'), closedAtMs: NOW_MS - 120_000 },
-                { symbol: 'BNBUSDT', realizedPnl: new Money('+20'), closedAtMs: NOW_MS - 60_000 },
+                { symbol: 'ETHUSDT', realizedPnl: new Money('-5'), closedAtMs: NOW_MS - 180_000, exitReason: ExitReasonEnum.STOP_LOSS },
+                { symbol: 'SOLUSDT', realizedPnl: new Money('-3'), closedAtMs: NOW_MS - 120_000, exitReason: ExitReasonEnum.STOP_LOSS },
+                { symbol: 'BNBUSDT', realizedPnl: new Money('+20'), closedAtMs: NOW_MS - 60_000, exitReason: ExitReasonEnum.TAKE_PROFIT },
             ];
             const context = buildPassingContext({
                 nowMs: NOW_MS,
@@ -606,7 +609,7 @@ describe('RiskGateService', () => {
         it('approves with only 1 consecutive loss (below the halt threshold of 2)', async () => {
             const { gate } = makeGate();
             const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
-            const closedToday = [{ symbol: 'ETHUSDT', realizedPnl: new Money('-5'), closedAtMs: NOW_MS - 60_000 }];
+            const closedToday = [{ symbol: 'ETHUSDT', realizedPnl: new Money('-5'), closedAtMs: NOW_MS - 60_000, exitReason: ExitReasonEnum.STOP_LOSS }];
             const context = buildPassingContext({
                 nowMs: NOW_MS,
                 openPositions: buildOpenPositionsPort({ closed: closedToday }),
@@ -621,8 +624,8 @@ describe('RiskGateService', () => {
             const { gate } = makeGate();
             const NOW_MS = 1_716_307_200_000 + 5 * 60_000;
             const closedToday = [
-                { symbol: 'ETHUSDT', realizedPnl: new Money('-5'), closedAtMs: NOW_MS - 120_000 },
-                { symbol: 'SOLUSDT', realizedPnl: new Money('-3'), closedAtMs: NOW_MS - 60_000 },
+                { symbol: 'ETHUSDT', realizedPnl: new Money('-5'), closedAtMs: NOW_MS - 120_000, exitReason: ExitReasonEnum.STOP_LOSS },
+                { symbol: 'SOLUSDT', realizedPnl: new Money('-3'), closedAtMs: NOW_MS - 60_000, exitReason: ExitReasonEnum.STOP_LOSS },
             ];
             const riskState = buildRiskStatePort({ day: buildRiskStateDay({ isHalted: false }) });
             const context = buildPassingContext({

@@ -1,4 +1,4 @@
-import { CorrelationModeEnum, PositionSideEnum, PositionSlotEnum } from '@bot/shared';
+import { CorrelationModeEnum, ExitReasonEnum, PositionSideEnum, PositionSlotEnum } from '@bot/shared';
 
 import { MoneyValue } from '../../common/utils/money';
 
@@ -18,6 +18,7 @@ export interface IClosedPositionView {
     readonly symbol: string;
     readonly realizedPnl: MoneyValue;
     readonly closedAtMs: number;
+    readonly exitReason: ExitReasonEnum | null;
 }
 
 // State port for open exposure / slot occupancy and recent closes (ADR 0004 §7). Live impl

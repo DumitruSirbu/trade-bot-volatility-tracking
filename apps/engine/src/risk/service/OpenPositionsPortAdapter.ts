@@ -66,6 +66,7 @@ export class OpenPositionsPortAdapter implements IOpenPositionsPort {
             symbol: position.symbol,
             realizedPnl: position.realizedPnl ?? new Money(0),
             closedAtMs: position.closedAt.getTime(),
+            exitReason: position.exitReason ?? null,
         };
     }
 
