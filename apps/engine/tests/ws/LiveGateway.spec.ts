@@ -21,6 +21,8 @@ import { PerSocketQueue } from '../../src/ws/backpressure/PerSocketQueue';
 import { PnlThrottle, PositionCoalescer } from '../../src/ws/coalescing/Coalescers';
 import { PositionEntity } from '../../src/position/entity';
 import { PositionRepository } from '../../src/position/repository/PositionRepository';
+import { StrategyVersionEntity } from '../../src/strategy/entity';
+import { StrategyVersionRepository } from '../../src/strategy/repository/StrategyVersionRepository';
 import { AuthTokenService, WsAuthHandshake } from '../../src/auth/AuthModule';
 import type { IRevokedJtiRepositoryPort } from '../../src/auth/AuthModule';
 
@@ -127,6 +129,18 @@ class StubPositionRepository {
     }
 }
 
+class StubStrategyVersionRepository {
+    private readonly rows = new Map<number, StrategyVersionEntity>();
+
+    seed(id: number, name: string): void {
+        this.rows.set(id, { id, name } as StrategyVersionEntity);
+    }
+
+    async findById(id: number): Promise<StrategyVersionEntity | null> {
+        return this.rows.get(id) ?? null;
+    }
+}
+
 function fakePosition(id: number, overrides: Partial<PositionEntity> = {}): PositionEntity {
     const base: Partial<PositionEntity> = {
         id,
@@ -169,7 +183,12 @@ afterEach(() => {
     builtAdapters.length = 0;
 });
 
-function buildGateway(opts: { revoked?: StubRevokedRepo; positions?: StubPositionRepository; clock?: () => number }): {
+function buildGateway(opts: {
+    revoked?: StubRevokedRepo;
+    positions?: StubPositionRepository;
+    strategyVersions?: StubStrategyVersionRepository;
+    clock?: () => number;
+}): {
     gateway: LiveGateway;
     server: FakeServer;
     namespace: FakeNamespace;
@@ -177,6 +196,7 @@ function buildGateway(opts: { revoked?: StubRevokedRepo; positions?: StubPositio
 } {
     const revoked = opts.revoked ?? new StubRevokedRepo();
     const positions = opts.positions ?? new StubPositionRepository();
+    const strategyVersions = opts.strategyVersions ?? new StubStrategyVersionRepository();
     const clock = opts.clock ?? ((): number => Date.now());
 
     const tokenStub = {
@@ -205,7 +225,7 @@ function buildGateway(opts: { revoked?: StubRevokedRepo; positions?: StubPositio
     const handshake = new WsAuthHandshake(tokenStub);
 
     const adapter = new WsAuthAdapter(handshake, revoked, clock);
-    const gateway = new LiveGateway(adapter, positions as unknown as PositionRepository);
+    const gateway = new LiveGateway(adapter, positions as unknown as PositionRepository, strategyVersions as unknown as StrategyVersionRepository);
     const server = new FakeServer();
 
     gateway.setServerForTest(server as unknown as Parameters<LiveGateway['setServerForTest']>[0]);

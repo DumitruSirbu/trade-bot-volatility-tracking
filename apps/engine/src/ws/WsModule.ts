@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AuthModule } from '../auth/AuthModule';
 import { PositionModule } from '../position/PositionModule';
+import { StrategyModule } from '../strategy/StrategyModule';
 import { LiveGateway } from './LiveGateway';
 import { WS_CLOCK, WsAuthAdapter } from './auth/WsAuthHandshake';
 
@@ -21,7 +22,7 @@ import { WS_CLOCK, WsAuthAdapter } from './auth/WsAuthHandshake';
 // init — no extra wiring needed.
 
 @Module({
-    imports: [AuthModule, PositionModule],
+    imports: [AuthModule, PositionModule, StrategyModule],
     providers: [{ provide: WS_CLOCK, useValue: (): number => Date.now() }, WsAuthAdapter, LiveGateway],
     exports: [LiveGateway],
 })

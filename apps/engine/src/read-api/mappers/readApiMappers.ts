@@ -82,7 +82,7 @@ export function mapOpenPosition(input: IOpenPositionMapInput): IOpenPositionView
     };
 }
 
-export function mapClosedPosition(position: PositionEntity): IClosedPositionView {
+export function mapClosedPosition(position: PositionEntity, strategyVersionName: string): IClosedPositionView {
     return {
         id: String(position.id),
         symbol: position.symbol,
@@ -102,6 +102,7 @@ export function mapClosedPosition(position: PositionEntity): IClosedPositionView
         // missing — never invent a category.
         exitReason: position.exitReason ?? ('unknown' as PositionEntity['exitReason'] & string),
         strategyVersionId: String(position.strategyVersionId),
+        strategyVersionName,
     };
 }
 
@@ -109,6 +110,7 @@ export interface IPositionDetailMapInput {
     readonly position: PositionEntity;
     readonly markPrice: MoneyValue | null;
     readonly clientOrderId: string;
+    readonly strategyVersionName: string;
 }
 
 export function mapPositionDetail(input: IPositionDetailMapInput): IPositionDetailView {
@@ -127,6 +129,7 @@ export function mapPositionDetail(input: IPositionDetailMapInput): IPositionDeta
         openedAt: open.openedAt,
         slot: open.slot,
         strategyVersionId: open.strategyVersionId,
+        strategyVersionName: input.strategyVersionName,
         eventId: open.eventId,
         state: open.state,
         protectiveOrderType: open.protectiveOrderType,
@@ -571,10 +574,12 @@ export const CLOSED_POSITION_VIEW_KEYS: ReadonlyArray<keyof IClosedPositionView>
     'closedAt',
     'exitReason',
     'strategyVersionId',
+    'strategyVersionName',
 ];
 
 export const POSITION_DETAIL_VIEW_KEYS: ReadonlyArray<keyof IPositionDetailView> = [
     ...OPEN_POSITION_VIEW_KEYS,
+    'strategyVersionName',
     'clientOrderId',
     'reservationId',
     'recoveryPhase',

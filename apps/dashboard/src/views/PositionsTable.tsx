@@ -7,7 +7,7 @@ import { ApiError } from '@/api/apiClient';
 import { usePositionsOpen } from '@/api/queries';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { addMoneyStrings, formatAgeMs, formatMoneyString } from '@/lib/utils';
+import { addMoneyStrings, formatAgeMs, formatMoneyString, formatPriceString } from '@/lib/utils';
 
 const HEADERS: readonly string[] = ['Symbol', 'Side', 'Leverage', 'Entry', 'Mark', 'SL', 'TP', 'Unrealized PnL', 'Age'];
 
@@ -22,10 +22,10 @@ const PositionRowView = ({ position, nowMs, onOpen }: { position: IOpenPositionV
             <Badge variant={sideVariant(position.side)}>{position.side.toUpperCase()}</Badge>
         </TableCell>
         <TableCell>{position.leverage}x</TableCell>
-        <TableCell className="tabular-nums">{formatMoneyString(position.entryPrice, 4)}</TableCell>
-        <TableCell className="tabular-nums">{formatMoneyString(position.currentPrice, 4)}</TableCell>
-        <TableCell className="tabular-nums text-destructive">{position.slPrice ? formatMoneyString(position.slPrice, 4) : '—'}</TableCell>
-        <TableCell className="tabular-nums text-green-600">{position.tpPrice ? formatMoneyString(position.tpPrice, 4) : '—'}</TableCell>
+        <TableCell className="tabular-nums">{formatPriceString(position.entryPrice)}</TableCell>
+        <TableCell className="tabular-nums">{formatPriceString(position.currentPrice)}</TableCell>
+        <TableCell className="tabular-nums text-destructive">{position.slPrice ? formatPriceString(position.slPrice) : '—'}</TableCell>
+        <TableCell className="tabular-nums text-green-600">{position.tpPrice ? formatPriceString(position.tpPrice) : '—'}</TableCell>
         <TableCell className="tabular-nums">{formatMoneyString(sumUnrealized(position))}</TableCell>
         <TableCell className="text-muted-foreground">{formatAgeMs(position.openedAt, nowMs)}</TableCell>
     </TableRow>

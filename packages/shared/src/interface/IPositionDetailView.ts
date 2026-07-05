@@ -15,6 +15,8 @@ export interface IPositionDetailView {
     openedAt: string;
     slot: number;
     strategyVersionId: string;
+    /** strategy_versions.name (e.g. "xmom", "volatility-vwap") */
+    strategyVersionName: string;
     /** Real event_id from the opening decision, or null when no joining decision exists. */
     eventId: string | null;
     state: PositionStateEnum;

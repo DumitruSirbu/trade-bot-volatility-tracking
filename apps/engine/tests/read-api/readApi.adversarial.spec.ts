@@ -144,7 +144,7 @@ function buildHarness() {
     const versions = new FakeStrategyVersionRepository();
     const cursors = new CursorCodec(new StubSecretProvider() as never);
 
-    const positionsController = new PositionsController(positions as unknown as PositionRepository, cursors);
+    const positionsController = new PositionsController(positions as unknown as PositionRepository, versions as unknown as StrategyVersionRepository, cursors);
     const metricsController = new MetricsController(
         decisions as unknown as DecisionRepository,
         positions as unknown as PositionRepository,

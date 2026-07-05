@@ -14,6 +14,8 @@ const momentumParamsBaseSchema = z.object({
     xmom_atr_stop_multiplier: z.number().positive().default(2.0),
     // Minimum reward:risk ratio; the risk gate rejects intents below this floor.
     xmom_min_rr: z.number().positive().default(1.5),
+    // Take-profit arm ratio; decoupled from xmom_min_rr (guard floor) per M53.
+    xmom_tp_arm_rr: z.number().positive().default(1.5),
 });
 
 export const momentumParamsSchema = momentumParamsBaseSchema;

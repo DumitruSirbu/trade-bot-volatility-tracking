@@ -5,14 +5,21 @@ import { ExitReasonEnum, PositionSideEnum } from '@bot/shared';
 
 import { ApiError } from '@/api/apiClient';
 import { usePositionsClosed } from '@/api/queries';
+import { StrategyNameLabel } from '@/components/StrategyNameLabel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { formatDurationMs, formatMoneyString } from '@/lib/utils';
+import { formatDurationMs, formatMoneyString, formatPriceString } from '@/lib/utils';
 
-const HEADERS: readonly string[] = ['Symbol', 'Side', 'Leverage', 'Entry', 'Exit', 'Realized PnL', 'Exit reason', 'Hold', 'Strategy'];
+const HEADERS: readonly string[] = ['Symbol', 'Side', 'Leverage', 'Entry', 'Exit', 'Realized PnL', 'Exit reason', 'Closed at', 'Hold', 'Strategy'];
 
 const sideVariant = (side: PositionSideEnum): 'success' | 'destructive' => (side === PositionSideEnum.LONG ? 'success' : 'destructive');
+
+const formatClosedAt = (iso: string): string => {
+    const ms = Date.parse(iso);
+
+    return Number.isFinite(ms) ? new Date(ms).toISOString().replace('T', ' ').slice(0, 19) : iso;
+};
 
 type ExitReasonVariant = 'destructive' | 'success' | 'secondary' | 'outline';
 
@@ -49,15 +56,16 @@ const ClosedPositionRowView = ({ position, onOpen }: { position: IClosedPosition
             <Badge variant={sideVariant(position.side)}>{position.side.toUpperCase()}</Badge>
         </TableCell>
         <TableCell>{position.leverage}x</TableCell>
-        <TableCell className="tabular-nums">{formatMoneyString(position.entryPrice, 4)}</TableCell>
-        <TableCell className="tabular-nums">{formatMoneyString(position.exitPrice, 4)}</TableCell>
+        <TableCell className="tabular-nums">{formatPriceString(position.entryPrice)}</TableCell>
+        <TableCell className="tabular-nums">{formatPriceString(position.exitPrice)}</TableCell>
         <TableCell className={`tabular-nums ${pnlTintClass(position.realizedPnlUsd)}`}>{formatMoneyString(position.realizedPnlUsd)}</TableCell>
         <TableCell>
             <Badge variant={exitReasonVariant(position.exitReason)}>{position.exitReason ?? 'unknown'}</Badge>
         </TableCell>
+        <TableCell className="text-muted-foreground">{formatClosedAt(position.closedAt)}</TableCell>
         <TableCell className="text-muted-foreground">{formatDurationMs(position.openedAt, position.closedAt)}</TableCell>
         <TableCell>
-            <span className="font-mono text-xs">{position.strategyVersionId}</span>
+            <StrategyNameLabel strategyVersionName={position.strategyVersionName} />
         </TableCell>
     </TableRow>
 );

@@ -5,6 +5,7 @@ import { LIVE_NAMESPACE, WS_EVENT_AUTH_EXPIRED, WS_EVENT_STREAM_LAGGED, WS_QUEUE
 import { ISweeperSocketSource, WsAuthAdapter } from '../../src/ws/auth/WsAuthHandshake';
 import { PerSocketQueue } from '../../src/ws/backpressure/PerSocketQueue';
 import { PositionRepository } from '../../src/position/repository/PositionRepository';
+import { StrategyVersionRepository } from '../../src/strategy/repository/StrategyVersionRepository';
 import { AuthTokenService, WsAuthHandshake } from '../../src/auth/AuthModule';
 import type { IRevokedJtiRepositoryPort } from '../../src/auth/AuthModule';
 
@@ -144,7 +145,8 @@ function buildGateway(opts: { clock?: () => number; revoked?: StubRevokedRepo } 
     const handshake = new WsAuthHandshake(tokenStub);
     const adapter = new WsAuthAdapter(handshake, revoked, clock);
     const positions = { findById: jest.fn().mockResolvedValue(null) } as unknown as PositionRepository;
-    const gateway = new LiveGateway(adapter, positions);
+    const strategyVersions = { findById: jest.fn().mockResolvedValue(null) } as unknown as StrategyVersionRepository;
+    const gateway = new LiveGateway(adapter, positions, strategyVersions);
     const server = new FakeServer();
 
     gateway.setServerForTest(server as unknown as Parameters<LiveGateway['setServerForTest']>[0]);

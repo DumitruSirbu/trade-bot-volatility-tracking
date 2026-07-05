@@ -50,6 +50,39 @@ export const formatMoneyString = (value: string | null | undefined, fractionDigi
     return isNegative ? `-${body}` : body;
 };
 
+// Price helper. Server emits decimal-safe strings sourced from numeric(38,18)
+// columns (entry/mark/SL/TP). Unlike formatMoneyString, this must NOT truncate
+// to a small fixed decimal count — low-price altcoins carry significant digits
+// deep into the fraction (e.g. "0.00031847") that a blanket toFixed(4)-style
+// cut would silently destroy. Preserves up to the column's max scale, trims
+// trailing zeros, and keeps a 2-digit floor so whole-number prices still read
+// as "100.00" rather than a bare "100".
+const MAX_PRICE_FRACTION_DIGITS = 18;
+const MIN_PRICE_FRACTION_DIGITS = 2;
+
+export const formatPriceString = (value: string | null | undefined): string => {
+    if (value === null || value === undefined || value === '') {
+        return '—';
+    }
+
+    if (!DECIMAL_PATTERN.test(value)) {
+        return value;
+    }
+
+    const isNegative = value.startsWith('-');
+    const unsigned = isNegative ? value.slice(1) : value;
+    const [rawInt, rawFrac = ''] = unsigned.split('.');
+    const groupedInt = rawInt.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const significantFrac = rawFrac.slice(0, MAX_PRICE_FRACTION_DIGITS).replace(/0+$/, '');
+    const frac =
+        significantFrac.length < MIN_PRICE_FRACTION_DIGITS
+            ? (significantFrac + '0'.repeat(MIN_PRICE_FRACTION_DIGITS)).slice(0, MIN_PRICE_FRACTION_DIGITS)
+            : significantFrac;
+    const body = `${groupedInt}.${frac}`;
+
+    return isNegative ? `-${body}` : body;
+};
+
 const MILLIS_PER_SECOND = 1_000;
 const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_HOUR = 3_600;

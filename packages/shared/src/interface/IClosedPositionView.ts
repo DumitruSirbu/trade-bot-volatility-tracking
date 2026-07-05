@@ -14,4 +14,6 @@ export interface IClosedPositionView {
     closedAt: string;
     exitReason: ExitReasonEnum;
     strategyVersionId: string;
+    /** strategy_versions.name (e.g. "xmom", "volatility-vwap") */
+    strategyVersionName: string;
 }
