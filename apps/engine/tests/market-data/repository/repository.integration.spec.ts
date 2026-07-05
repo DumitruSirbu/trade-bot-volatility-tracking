@@ -510,13 +510,14 @@ describe('Repository integration tests (require Postgres with migrations run)', 
             expect(activeVersionNumbers).not.toContain(3);
         });
 
-        it('findByNameAndVersion returns the v0 row with correct direction and shadow status', async () => {
-            // v0 is demoted to shadow by CorrectActiveStrategyStatus migration.
+        it('findByNameAndVersion returns the v0 row with correct direction and archived status', async () => {
+            // v0 was demoted to shadow by CorrectActiveStrategyStatus migration, then archived by
+            // M53 D4 (ArchiveRetiredVwapShadowRows) once VWAP was fully retired.
             const v0 = await strategyVersionRepo.findByNameAndVersion('volatility-vwap', 0);
 
             expect(v0).not.toBeNull();
             expect(v0!.direction).toBe('mean_reversion');
-            expect(v0!.status).toBe(StrategyStatusEnum.SHADOW);
+            expect(v0!.status).toBe(StrategyStatusEnum.ARCHIVED);
         });
 
         it('v0 params have trade_enabled set to false', async () => {

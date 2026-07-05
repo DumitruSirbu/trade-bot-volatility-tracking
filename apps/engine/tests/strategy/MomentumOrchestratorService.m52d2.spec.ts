@@ -171,6 +171,7 @@ function buildDefaultMocks(xmomForceCloseRetry = true): IMockSet {
                     min_universe_size: 5,
                     xmom_atr_stop_multiplier: 2.0,
                     xmom_min_rr: 1.5,
+                    xmom_tp_arm_rr: 1.5,
                 },
             }),
         },
@@ -268,6 +269,7 @@ function primeCycleState(service: MomentumOrchestratorService): void {
         min_universe_size: 5,
         xmom_atr_stop_multiplier: 2.0,
         xmom_min_rr: 1.5,
+        xmom_tp_arm_rr: 1.5,
     };
     anyService.currentCycleId = CYCLE_ID;
     anyService.currentCycleNowMs = NOW_MS;

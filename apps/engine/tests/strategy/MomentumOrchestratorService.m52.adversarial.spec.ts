@@ -153,6 +153,7 @@ function buildDefaultMocks(xmomForceCloseRetry = true): IMockSet {
                     min_universe_size: 5,
                     xmom_atr_stop_multiplier: 2.0,
                     xmom_min_rr: 1.5,
+                    xmom_tp_arm_rr: 1.5,
                 },
             }),
         },
@@ -246,6 +247,7 @@ function primeCycleState(service: MomentumOrchestratorService, versionId = ACTIV
         min_universe_size: 5,
         xmom_atr_stop_multiplier: 2.0,
         xmom_min_rr: 1.5,
+        xmom_tp_arm_rr: 1.5,
     };
     anyService.currentCycleId = CYCLE_ID;
     anyService.currentCycleNowMs = NOW_MS;
@@ -453,6 +455,7 @@ describe('MomentumOrchestratorService — M52 adversarial QA', () => {
                     min_universe_size: 5,
                     xmom_atr_stop_multiplier: 2.0,
                     xmom_min_rr: 1.5,
+                    xmom_tp_arm_rr: 1.5,
                 },
             });
             mocks.config.activePortfolioStrategyVersionId = OTHER_VERSION_ID;
