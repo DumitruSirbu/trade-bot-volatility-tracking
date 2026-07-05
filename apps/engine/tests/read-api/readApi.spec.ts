@@ -234,7 +234,7 @@ function buildHarness(): {
     const versions = new FakeStrategyVersionRepository();
     const cursors = new CursorCodec(new StubSecretProvider());
 
-    const positionsController = new PositionsController(positions as unknown as PositionRepository, cursors);
+    const positionsController = new PositionsController(positions as unknown as PositionRepository, versions as unknown as StrategyVersionRepository, cursors);
     const metricsController = new MetricsController(
         decisions as unknown as DecisionRepository,
         positions as unknown as PositionRepository,
@@ -266,6 +266,7 @@ describe('ReadApi DTO key snapshots (ADR 0022 §2.3 — anti-leakage)', () => {
 
     it('CLOSED position view exposes EXACTLY the IClosedPositionView keys', async () => {
         const harness = buildHarness();
+        harness.versions.byId.set(1, { id: 1, name: 'xmom' } as StrategyVersionEntity);
         harness.positions.closed.push(
             buildPosition({
                 id: 7,
@@ -281,10 +282,23 @@ describe('ReadApi DTO key snapshots (ADR 0022 §2.3 — anti-leakage)', () => {
         const [view] = result.items;
 
         expect(Object.keys(view).sort()).toEqual([...CLOSED_POSITION_VIEW_KEYS].sort());
+        expect(view.strategyVersionName).toBe('xmom');
+    });
+
+    it('CLOSED position view falls back to "unknown" when the strategy version row is missing', async () => {
+        const harness = buildHarness();
+        // No version seeded — the join misses (out-of-band deletion).
+        harness.positions.closed.push(buildPosition({ id: 8, state: PositionStateEnum.CLOSED, closedAt: new Date('2026-05-24T11:30:00Z') }));
+
+        const result = await harness.positionsController.listClosed();
+        const [view] = result.items;
+
+        expect(view.strategyVersionName).toBe('unknown');
     });
 
     it('DETAIL position view exposes EXACTLY the IPositionDetailView keys + clientOrderId/reservationId stubs', async () => {
         const harness = buildHarness();
+        harness.versions.byId.set(1, { id: 1, name: 'xmom' } as StrategyVersionEntity);
         const row = buildPosition({ id: 42 });
         harness.positions.byId.set(42, row);
 
@@ -295,6 +309,7 @@ describe('ReadApi DTO key snapshots (ADR 0022 §2.3 — anti-leakage)', () => {
         // detail-only). reservationId stays null until M6 W4b denormalises it.
         expect(view.clientOrderId).toBe('position-42');
         expect(view.reservationId).toBeNull();
+        expect(view.strategyVersionName).toBe('xmom');
     });
 
     it('DECISION view exposes EXACTLY the IDecisionView keys', async () => {

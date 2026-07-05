@@ -18,7 +18,7 @@ import { DataSource } from 'typeorm';
 import type { ExitReasonEnum, IClosedPositionView, IOpenPositionView, IPaginated, PositionSideEnum, ProtectiveOrderTypeEnum } from '@bot/shared';
 import { PositionSlotEnum, PositionStateEnum } from '@bot/shared';
 
-import { DEFAULT_LIMIT, MAX_LIMIT, SYMBOL_MAX_LENGTH, SYMBOL_REGEX } from '../const/index.js';
+import { DEFAULT_LIMIT, MAX_LIMIT, SYMBOL_MAX_LENGTH, SYMBOL_REGEX, UNKNOWN_STRATEGY_VERSION_NAME } from '../const/index.js';
 import { decodeCursor, encodeCursor } from '../util/CursorCodec.js';
 import { AnalysisValidationError, validateDateRangeOrThrow } from '../util/analysisValidation.js';
 
@@ -48,6 +48,7 @@ interface IPositionRow {
     readonly closed_at: Date | null;
     readonly exit_reason: string | null;
     readonly strategy_version_id: string;
+    readonly strategy_version_name: string | null;
     readonly protective_order_type: string;
     readonly stop_loss_price: string | null;
     readonly take_profit_price: string | null;
@@ -130,12 +131,14 @@ export async function listPositions(ds: DataSource, params: IListPositionsParams
             p.closed_at                         AS closed_at,
             p.exit_reason                       AS exit_reason,
             p.strategy_version_id::text         AS strategy_version_id,
+            sv.name                              AS strategy_version_name,
             p.protective_order_type             AS protective_order_type,
             p.stop_loss_price::text             AS stop_loss_price,
             p.take_profit_price::text           AS take_profit_price,
             p.position_slot                     AS position_slot,
             d_open.event_id                     AS d_open_event_id
         FROM positions p
+        LEFT JOIN strategy_versions sv ON sv.strategy_versions_id = p.strategy_version_id
         LEFT JOIN LATERAL (
             SELECT event_id
             FROM decisions
@@ -224,6 +227,7 @@ function mapClosedRow(row: IPositionRow): IClosedPositionView {
         closedAt: new Date(row.closed_at ?? row.opened_at).toISOString(),
         exitReason: (row.exit_reason ?? 'unknown') as ExitReasonEnum,
         strategyVersionId: row.strategy_version_id,
+        strategyVersionName: row.strategy_version_name ?? UNKNOWN_STRATEGY_VERSION_NAME,
     };
 }
 

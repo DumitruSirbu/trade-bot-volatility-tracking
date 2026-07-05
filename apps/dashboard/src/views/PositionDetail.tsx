@@ -6,10 +6,11 @@ import { PositionStateEnum } from '@bot/shared';
 import { ApiError } from '@/api/apiClient';
 import { usePositionByIdQuery } from '@/api/mutations';
 import { useDecisionsRecent } from '@/api/queries';
+import { StrategyNameLabel } from '@/components/StrategyNameLabel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { addMoneyStrings, formatAgeMs, formatMoneyString } from '@/lib/utils';
+import { addMoneyStrings, formatAgeMs, formatMoneyString, formatPriceString } from '@/lib/utils';
 
 // M10 W4 — single-position detail page. Route: /positions/:id.
 // Pulls /v1/positions/:id directly (cache key controlKeys.positionById).
@@ -71,8 +72,8 @@ const PricingCard = ({ position, nowMs }: { position: IPositionDetailView; nowMs
             <DetailRow label="Side" value={<Badge variant={position.side === 'long' ? 'success' : 'destructive'}>{position.side.toUpperCase()}</Badge>} />
             <DetailRow label="Quantity" value={position.qty} />
             <DetailRow label="Leverage" value={`${position.leverage}x`} />
-            <DetailRow label="Entry price" value={formatMoneyString(position.entryPrice, 4)} />
-            <DetailRow label="Mark / current" value={formatMoneyString(position.currentPrice, 4)} />
+            <DetailRow label="Entry price" value={formatPriceString(position.entryPrice)} />
+            <DetailRow label="Mark / current" value={formatPriceString(position.currentPrice)} />
             <DetailRow label="Time in trade" value={formatAgeMs(position.openedAt, nowMs)} />
             <DetailRow label="Slot" value={position.slot} />
         </CardContent>
@@ -86,10 +87,10 @@ const ProtectionCard = ({ position }: { position: IPositionDetailView }): React.
         </CardHeader>
         <CardContent>
             <DetailRow label="Protective order" value={position.protectiveOrderType} />
-            <DetailRow label="Stop-loss" value={formatMoneyString(position.slPrice, 4)} />
-            <DetailRow label="Take-profit" value={formatMoneyString(position.tpPrice, 4)} />
+            <DetailRow label="Stop-loss" value={formatPriceString(position.slPrice)} />
+            <DetailRow label="Take-profit" value={formatPriceString(position.tpPrice)} />
             <DetailRow label="State" value={position.state} />
-            <DetailRow label="Strategy version" value={<span className="font-mono text-xs">{position.strategyVersionId}</span>} />
+            <DetailRow label="Strategy version" value={<StrategyNameLabel strategyVersionName={position.strategyVersionName} />} />
             <DetailRow label="Event id" value={<span className="font-mono text-xs">{position.eventId}</span>} />
             <DetailRow label="Client order id" value={<span className="font-mono text-xs">{position.clientOrderId}</span>} />
         </CardContent>

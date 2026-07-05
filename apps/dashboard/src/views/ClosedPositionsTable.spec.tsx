@@ -52,6 +52,7 @@ function makeClosed(overrides: Partial<IClosedPositionView> = {}): IClosedPositi
         closedAt: '2026-05-28T11:42:00.000Z',
         exitReason: ExitReasonEnum.TAKE_PROFIT,
         strategyVersionId: 'v3',
+        strategyVersionName: 'xmom',
         ...overrides,
     };
 }
@@ -100,11 +101,13 @@ describe('ClosedPositionsTable — columns', () => {
         expect(screen.getByText('LONG')).toBeInTheDocument();
         expect(screen.getByText('3x')).toBeInTheDocument();
         expect(screen.getByText('64,250.1234')).toBeInTheDocument();
-        expect(screen.getByText('63,900.5000')).toBeInTheDocument();
+        expect(screen.getByText('63,900.50')).toBeInTheDocument();
         expect(screen.getByText('12.18')).toBeInTheDocument();
         expect(screen.getByText('take_profit')).toBeInTheDocument();
+        expect(screen.getByText('2026-05-28 11:42:00')).toBeInTheDocument();
         expect(screen.getByText('1h 42m')).toBeInTheDocument();
-        expect(screen.getByText('v3')).toBeInTheDocument();
+        expect(screen.getByText('xmom')).toBeInTheDocument();
+        expect(screen.queryByText('v3')).not.toBeInTheDocument();
     });
 
     it('renders leverage as {n}x, not as a money value', () => {
@@ -152,6 +155,30 @@ describe('ClosedPositionsTable — PnL sign tint', () => {
         const cell = screen.getByText('0.00');
 
         expect(cell.className).not.toContain('text-destructive');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Strategy name rendering
+// ---------------------------------------------------------------------------
+
+describe('ClosedPositionsTable — strategy name', () => {
+    it('renders the known short name and its tooltip content', async () => {
+        const user = userEvent.setup();
+        setPage(null, [makeClosed({ strategyVersionName: 'xmom' })]);
+        renderTable();
+
+        expect(screen.getByText('xmom')).toBeInTheDocument();
+
+        await user.hover(screen.getByText('xmom'));
+        expect(await screen.findByText('Cross-Sectional Momentum')).toBeInTheDocument();
+    });
+
+    it('falls back to the raw short name when it is not in the display lookup', () => {
+        setPage(null, [makeClosed({ strategyVersionName: 'some-future-strategy' })]);
+        renderTable();
+
+        expect(screen.getByText('some-future-strategy')).toBeInTheDocument();
     });
 });
 

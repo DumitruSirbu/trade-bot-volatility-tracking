@@ -3,7 +3,8 @@ import { Controller, Get, NotFoundException, Param, Query, UseGuards, UseInterce
 
 import { AuthGuard, RequiredScopes } from '../../auth/AuthGuard';
 import { PositionRepository } from '../../position/repository/PositionRepository';
-import { PAGE_SIZE_DEFAULT, PAGE_SIZE_MAX } from '../const/readApiConsts';
+import { StrategyVersionRepository } from '../../strategy/repository/StrategyVersionRepository';
+import { PAGE_SIZE_DEFAULT, PAGE_SIZE_MAX, UNKNOWN_STRATEGY_VERSION_NAME } from '../const/readApiConsts';
 import { mapClosedPosition, mapOpenPosition, mapPositionDetail } from '../mappers/readApiMappers';
 import { NoStoreCacheInterceptor } from '../interceptor/NoStoreCacheInterceptor';
 import { CursorCodec } from '../pagination/CursorCodec';
@@ -27,6 +28,7 @@ import { CursorCodec } from '../pagination/CursorCodec';
 export class PositionsController {
     constructor(
         private readonly positions: PositionRepository,
+        private readonly strategyVersions: StrategyVersionRepository,
         private readonly cursors: CursorCodec,
     ) {}
 
@@ -48,7 +50,8 @@ export class PositionsController {
         const cursorTuple = decoded === null || typeof decoded.id !== 'number' ? null : { closedAt: decoded.ts, id: decoded.id };
 
         const rows = await this.positions.findClosedPage(cursorTuple, pageSize);
-        const items = rows.map(mapClosedPosition);
+        const nameByVersionId = await this.hydrateVersionNames(rows.map((row) => row.strategyVersionId));
+        const items = rows.map((position) => mapClosedPosition(position, nameByVersionId.get(position.strategyVersionId) ?? UNKNOWN_STRATEGY_VERSION_NAME));
 
         // M9 R2 wave B (Q8): repository.findClosedPage now guards
         // `closed_at IS NOT NULL`, so `last.closedAt` is non-null by construction
@@ -87,7 +90,32 @@ export class PositionsController {
             throw new NotFoundException({ error: 'NOT_FOUND', reason: 'position not found' });
         }
 
-        return mapPositionDetail({ position, markPrice: null, clientOrderId: deriveClientOrderId(position.id) });
+        const version = await this.strategyVersions.findById(position.strategyVersionId);
+        const strategyVersionName = version === null ? UNKNOWN_STRATEGY_VERSION_NAME : version.name;
+
+        return mapPositionDetail({ position, markPrice: null, clientOrderId: deriveClientOrderId(position.id), strategyVersionName });
+    }
+
+    // Resolve the distinct strategy-version ids in a closed-position page into their
+    // `name` labels once per request. Typical id cardinality per page is small (a
+    // handful of active/retired versions), so a per-id findById after de-duplication
+    // is acceptable — mirrors MetricsController.hydrateVersions. A version deleted
+    // out-of-band is simply absent from the map; the caller falls back to
+    // UNKNOWN_STRATEGY_VERSION_NAME rather than poisoning the response.
+    private async hydrateVersionNames(strategyVersionIds: ReadonlyArray<number>): Promise<Map<number, string>> {
+        const uniqueIds = [...new Set(strategyVersionIds)];
+        const versions = await Promise.all(uniqueIds.map((id) => this.strategyVersions.findById(id)));
+        const nameByVersionId = new Map<number, string>();
+
+        for (let i = 0; i < uniqueIds.length; i++) {
+            const version = versions[i];
+
+            if (version !== null) {
+                nameByVersionId.set(uniqueIds[i], version.name);
+            }
+        }
+
+        return nameByVersionId;
     }
 }
 

@@ -80,6 +80,7 @@ function makePosition(overrides?: Partial<IPositionDetailView>): IPositionDetail
         slot: 1,
         state: PositionStateEnum.OPEN,
         strategyVersionId: 'v2',
+        strategyVersionName: 'xmom',
         eventId: 'evt-001',
         clientOrderId: 'cli-001',
         protectiveOrderType: ProtectiveOrderTypeEnum.EXCHANGE_SIDE,
@@ -247,6 +248,29 @@ describe('PositionDetail — money strings never coerced to Number', () => {
             expect(bodyText).toContain('99,999,999.99');
             // Definitely must not contain a rounded or truncated version.
             expect(bodyText).not.toContain('100000000');
+        });
+    });
+});
+
+describe('PositionDetail — strategy name', () => {
+    it('renders the strategy short name instead of the raw strategyVersionId', async () => {
+        mockPositionById.mockReturnValue(loadedState(makePosition({ strategyVersionId: 'v2', strategyVersionName: 'xmom' })));
+
+        renderDetail();
+
+        await waitFor(() => {
+            expect(screen.getByText('xmom')).toBeInTheDocument();
+        });
+        expect(screen.queryByText('v2')).not.toBeInTheDocument();
+    });
+
+    it('falls back to the raw short name for an unknown strategy', async () => {
+        mockPositionById.mockReturnValue(loadedState(makePosition({ strategyVersionName: 'some-future-strategy' })));
+
+        renderDetail();
+
+        await waitFor(() => {
+            expect(screen.getByText('some-future-strategy')).toBeInTheDocument();
         });
     });
 });

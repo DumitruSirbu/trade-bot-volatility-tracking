@@ -35,3 +35,12 @@ export const DECISIONS_ROW_CAP = 10_000;
  * directly). The string MUST stay in sync with `StrategyStatusEnum.ACTIVE`.
  */
 export const STRATEGY_STATUS_ACTIVE = 'active';
+
+/**
+ * Fallback surfaced on `IClosedPositionView.strategyVersionName` when a row's
+ * `strategy_version_id` references a version deleted out-of-band. Mirrors
+ * `UNKNOWN_STRATEGY_VERSION_NAME` in `apps/engine/src/read-api/const/readApiConsts.ts`
+ * — duplicated rather than imported since the two packages don't share a
+ * runtime-const boundary.
+ */
+export const UNKNOWN_STRATEGY_VERSION_NAME = 'unknown';

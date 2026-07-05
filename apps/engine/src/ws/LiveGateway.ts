@@ -9,6 +9,8 @@ import { IPositionClosedEvent } from '../common/interface/IPositionClosedEvent';
 import { IPositionOpenedEvent } from '../common/interface/IPositionOpenedEvent';
 import { POSITION_STATE_TRANSITIONED_EVENT } from '../position/const';
 import { PositionRepository } from '../position/repository/PositionRepository';
+import { StrategyVersionRepository } from '../strategy/repository/StrategyVersionRepository';
+import { UNKNOWN_STRATEGY_VERSION_NAME } from '../read-api/const/readApiConsts';
 import { mapClosedPosition, mapOpenPosition } from '../read-api/mappers/readApiMappers';
 import { PerSocketQueue } from './backpressure/PerSocketQueue';
 import { PnlThrottle, PositionCoalescer } from './coalescing/Coalescers';
@@ -125,6 +127,7 @@ export class LiveGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     constructor(
         private readonly auth: WsAuthAdapter,
         private readonly positions: PositionRepository,
+        private readonly strategyVersions: StrategyVersionRepository,
     ) {}
 
     onModuleInit(): void {
@@ -301,7 +304,10 @@ export class LiveGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         // rather than synthesise a payload here. Statically imported at the
         // top of the file so the "no write paths from WS" boundary remains
         // visible to static analysis (R1 fix wave #6).
-        const view = mapClosedPosition(position);
+        const version = await this.strategyVersions.findById(position.strategyVersionId);
+        const strategyVersionName = version === null ? UNKNOWN_STRATEGY_VERSION_NAME : version.name;
+
+        const view = mapClosedPosition(position, strategyVersionName);
 
         this.broadcastToRoom(WsRoomEnum.POSITIONS, WS_EVENT_POSITION_CLOSED, view);
     }
