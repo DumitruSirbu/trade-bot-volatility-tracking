@@ -734,3 +734,42 @@ contradicts the analysis layer).
 > and letting the walk resolve the fill restores parity. The structural SL is a price level (Bollinger wick
 > boundary), not an anchor+distance TP, and this fix **does not rebase it** — ADR 0045 §D1.1 ("SL is never
 > rebased") is reaffirmed and untouched.
+
+---
+
+## Deferral note — M53 (2026-07-04): portfolio-strategy shadow cohorts NOT yet covered
+
+M53 proposed a multi-ratio xmom shadow cohort (varying `xmom_tp_arm_rr`) to measure the take-profit
+arm decouple (ADR 0047 §6). During the D2 feasibility spike the architect **deferred** that cohort to
+a follow-up milestone. This note records why, so a future author does not re-assume the coverage exists.
+
+**This pipeline is single-symbol VWAP-only.** `runShadows` is invoked solely by
+`StrategyService.onVolatilityDetected` and evaluates each cohort through the per-symbol
+`IStrategy.evaluate(...)` API. `StrategyRegistry` registers only `volatility-vwap` v0–v3 — a
+`name='xmom'` shadow row throws in `resolveShadow`, is skipped, and is never evaluated. And the VWAP
+path is **dormant** whenever xmom is active (`ACTIVE_STRATEGY_VERSION_ID` unset, ADR 0049), so
+`runShadows` is not called at all. Portfolio (`IPortfolioStrategy`, ADR 0047/0048) strategies are
+therefore **outside** this pipeline entirely.
+
+**What a future portfolio-shadow mechanism would need (new work, its own ADR section here or a new ADR):**
+
+- **Rebalance-cascade fan-out** at the `MomentumOrchestratorService` intent-build seam
+  (`buildOpenIntent` → before `evaluateAndEmit`): after building each live OPEN intent, also build the
+  same intent under each `status='shadow'` xmom cohort's `xmom_tp_arm_rr` and record it to a per-cohort
+  virtual ledger, reusing `shadow_decisions` + `simulated_fill`. Only the TP geometry and fill-accept
+  outcome diverge across cohorts (ranking/selection is shared).
+- **Containment invariant (load-bearing, security-critical):** a `status='shadow'` cohort intent must
+  record **only** to `shadow_decisions`/`simulated_fill` and must **never** reach `emitApproval`, the
+  executor, or the risk gate — a leaked cohort intent would place a real/paper-live order at a wider,
+  un-promoted arm. Pin as an adversarial acceptance test.
+- **Gating spikes before any cohort delta is read as signal:** (a) prove the fill path injects realistic
+  entry slippage — else realized R:R ≈ arm ratio for every cohort, force_close rate collapses uniformly,
+  and cohorts become indistinguishable; (b) prove the `arm=1.5` cohort reproduces the live active
+  version's force_close rate + barrier mix within tolerance.
+
+An **offline periodic replay** (route 2, `packages/analysis/research/xmom_tp_ratio_replay.mjs`) is the
+low-risk cross-check for force_close/fill/barrier mix off the real fill tape, but per EXP-018 it **cannot
+settle post-fill expectancy alone** (winner MFE truncated at the 1.5 exit; 0-duration rescues have no
+post-fill path). The follow-up milestone must pre-register its decision rule (winning ratio, metric,
+threshold) and require sub-period robustness before reading the data (multiple-comparisons exposure across
+3–4 noisy ratios).

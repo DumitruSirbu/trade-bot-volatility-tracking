@@ -167,19 +167,21 @@ describe('Migration round-trip (integration — requires Postgres)', () => {
             status: string;
         }[];
 
-        // After all migrations the paper-soak profile produces:
-        //   v0  (id=1): 'shadow'
-        //   v1  (id=2): 'shadow'  — demoted when v2 momentum promoted (M25)
-        //   v2  (id=3): 'active'  — matches ACTIVE_STRATEGY_VERSION_ID=3
-        //   v3  (id=4): 'shadow'
-        //   v11 (M47): 'shadow'   — geometry-coupled clone of v1 (mean-reversion)
-        //   v21 (M47): 'shadow'   — geometry-coupled clone of v2 (momentum)
-        //   v31 (M47): 'shadow'   — geometry-coupled clone of v3 (hybrid)
+        // After all migrations (including M53 D4 ArchiveRetiredVwapShadowRows, which flips the
+        // retired VWAP shadow rows in RETIRED_SHADOW_IDS = [1, 2, 4, 15, 16, 17, 19] from 'shadow'
+        // to 'archived') the paper-soak profile produces:
+        //   v0  (id=1): 'archived' — retired VWAP shadow, archived by M53 D4
+        //   v1  (id=2): 'archived' — retired VWAP shadow, archived by M53 D4
+        //   v2  (id=3): 'active'   — matches ACTIVE_STRATEGY_VERSION_ID=3; NOT in the D4 id list, untouched
+        //   v3  (id=4): 'archived' — retired VWAP shadow, archived by M53 D4
+        //   v11 (id=6): 'shadow'   — M47 geometry-coupled clone of v1; NOT in the D4 id list, stays shadow
+        //   v21 (id=7): 'shadow'   — M47 geometry-coupled clone of v2; NOT in the D4 id list, stays shadow
+        //   v31 (id=8): 'shadow'   — M47 geometry-coupled clone of v3; NOT in the D4 id list, stays shadow
         expect(rows).toHaveLength(7);
-        expect(rows[0]).toMatchObject({ version: 0, direction: 'mean_reversion', status: 'shadow' });
-        expect(rows[1]).toMatchObject({ version: 1, direction: 'mean_reversion', status: 'shadow' });
+        expect(rows[0]).toMatchObject({ version: 0, direction: 'mean_reversion', status: 'archived' });
+        expect(rows[1]).toMatchObject({ version: 1, direction: 'mean_reversion', status: 'archived' });
         expect(rows[2]).toMatchObject({ version: 2, direction: 'momentum', status: 'active' });
-        expect(rows[3]).toMatchObject({ version: 3, direction: 'hybrid', status: 'shadow' });
+        expect(rows[3]).toMatchObject({ version: 3, direction: 'hybrid', status: 'archived' });
         expect(rows[4]).toMatchObject({ version: 11, direction: 'mean_reversion', status: 'shadow' });
         expect(rows[5]).toMatchObject({ version: 21, direction: 'momentum', status: 'shadow' });
         expect(rows[6]).toMatchObject({ version: 31, direction: 'hybrid', status: 'shadow' });

@@ -615,7 +615,12 @@ export class MomentumOrchestratorService {
 
         const stopDistance = atr24h.times(params.xmom_atr_stop_multiplier);
         const stopLossPrice = entryPrice.minus(stopDistance);
-        const takeProfitPrice = entryPrice.plus(stopDistance.times(params.xmom_min_rr));
+        // Arm ratio is decoupled from the guard floor (xmom_min_rr) per M53: xmom_tp_arm_rr drives
+        // the take-profit arm only; xmom_min_rr remains the fill-acceptance guard floor (see :862).
+        // The arm is hardcoded LONG (entryPrice.plus). A future SHORT xmom path MUST apply the ratio
+        // symmetrically as entryPrice.minus(stopDistance.times(params.xmom_tp_arm_rr)) so the two
+        // seams never diverge by side.
+        const takeProfitPrice = entryPrice.plus(stopDistance.times(params.xmom_tp_arm_rr));
 
         const sizingResult = this.sizer.size({
             allocatedCapital: new Money(this.config.accountCapitalUsdt),

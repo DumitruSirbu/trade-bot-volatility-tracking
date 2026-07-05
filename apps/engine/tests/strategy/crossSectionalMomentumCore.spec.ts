@@ -38,6 +38,7 @@ function buildParams(overrides: Partial<IMomentumParams> = {}): IMomentumParams 
         min_universe_size: 3,
         xmom_atr_stop_multiplier: 2.0,
         xmom_min_rr: 1.5,
+        xmom_tp_arm_rr: 1.5,
         ...overrides,
     };
 }

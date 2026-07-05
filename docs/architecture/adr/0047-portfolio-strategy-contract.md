@@ -9,6 +9,8 @@
   (rebalance orchestrator — the impure outer loop that drives this pure core).
 - **Amended by:** [ADR 0050](0050-xmom-cascade-topn-rebalance-anchor.md) §2.1 / §2.5 (M50b) —
   `selected` → `ranked` (full list); core no longer slices to `top_n`; `top_n` is orchestrator-only.
+  [§6 M53 amendment](#6-m53-amendment-2026-07-04--decoupled-tp-arm-ratio) — new `xmom_tp_arm_rr`
+  param decouples the take-profit arm from the fill-acceptance guard floor (no-op at 1.5).
 
 > **ADR numbering note.** The next free number after `0046` is **0047**; this ADR uses it.
 
@@ -219,5 +221,80 @@ This is a **code-enforced** boot gate, not a config convention.
 - **Run momentum live at minimal size immediately.** Rejected. EXP-012 is post-cost positive
   on a single up-regime with `t < 2`; the locked policy (00-overview) is no live capital
   without out-of-sample/down-regime evidence. Paper + shadow only.
-</content>
-</invoke>
+
+---
+
+## 6. M53 amendment (2026-07-04) — decoupled TP-arm ratio
+
+**Milestone:** M53 (D1). **Status:** Accepted. **Source analysis:**
+`docs/analysis/20260704-m52-force-close-retry-soak-analysis.md` (EXP-018).
+
+### 6.1 Context — one param drove two independent seams
+
+Before M53 the single `xmom_min_rr` field (default `1.5`) was read in **two unrelated places**
+inside `MomentumOrchestratorService`:
+
+- **The take-profit arm** (`:618`): `takeProfitPrice = entryPrice + stopDistance × xmom_min_rr`,
+  frozen at the signal (`tpRebaseEligible = false`).
+- **The fill-acceptance guard floor** (`:857` → `gateStrategyParams.min_rr` →
+  `geometryParams.min_rr` on the OPEN approval → `exitGeometryHelper.isRrInsufficient`, ADR 0045).
+
+Because the arm was placed at *exactly* the reject floor, ordinary adverse entry slippage on a
+long tipped realized R:R below `1.5` and the ADR 0045 guard force-closed the fill at 0-duration
+(EXP-018 §2). Raising `xmom_min_rr` alone cannot fix this — it moves the arm **and** the floor
+together and buys zero slack (all four EXP-018 reviews converge on this).
+
+### 6.2 Decision — add `xmom_tp_arm_rr`, drive the arm only
+
+A **second** momentum param, `xmom_tp_arm_rr` (`z.number().positive().default(1.5)`), is added to
+`momentumParamsSchema` and read **only at the arm site**. `xmom_min_rr` stays the guard floor,
+untouched. At `xmom_tp_arm_rr = xmom_min_rr = 1.5` the arithmetic is byte-identical to pre-M53 — a
+**no-op on the active version** (`id=20`, `params={}` parses `xmom_tp_arm_rr = 1.5` via the
+non-strict schema, §2.5, so no data change is needed). Any wider arm (1.8 / 2.0 / …) lives **only**
+on `status='shadow'` cohort rows; no wider ratio touches the active version in M53.
+
+| Param | Type / bound | Default | Meaning |
+|-------|--------------|---------|---------|
+| `xmom_tp_arm_rr` | number > 0 | **1.5** | Signal-time take-profit arm ratio (`TP = entry + stopDistance × xmom_tp_arm_rr`). Decoupled from the guard floor; 1.5 = no-op. |
+| `xmom_min_rr` | number > 0 | **1.5** | Fill-acceptance **guard floor** only (ADR 0045). Not the arm. Not raised in M53. |
+
+**Invariants preserved.** The wider arm produces a *wider* TP that still clears the unchanged
+`min_rr` floor (ADR 0045 pre-fill guarantee intact — the guard is consumed byte-for-byte, not
+modified); the new field is plain versioned data read inside the pure sizing/geometry path (no
+clock/RNG/I/O added — determinism/backtest-parity intact); money stays `decimal`; no live capital
+(active version stays at the 1.5 no-op). **Side symmetry (forward note):** the xmom arm is
+hardcoded LONG; when a SHORT xmom path is ever added, `xmom_tp_arm_rr` must apply symmetrically
+(`entryPrice − stopDistance × xmom_tp_arm_rr`) so the arm and guard seams never diverge by side.
+
+### 6.3 Measurement scaffold (D2/D3) — DEFERRED to a follow-up milestone
+
+M53's brief assumed the multi-ratio shadow cohort was "free plumbing" over the existing
+`ShadowStrategyOrchestratorService`. **Code verification refutes that premise** (see §6.4). Per the
+plan's scope guard, D2 (shadow cohort) and D3 (per-cohort instrumentation) are **deferred**; M53
+ships **D1 (this param) + D4 (archive retired VWAP shadow rows)** only — both independently
+valuable and low-risk. The wider-ratio *value* is unproven (EXP-018 real-price replay, n=31: noisy,
+non-monotonic PnL, TP:SL mix degrades 0.71 → 0.44 as the arm widens) and was always a future,
+soak-gated decision (§Non-goals). See ADR 0029 for where the deferred portfolio-shadow mechanism
+would land.
+
+### 6.4 Why the existing shadow path does NOT cover xmom (verified)
+
+- `ShadowStrategyOrchestratorService.runShadows` is invoked **only** by
+  `StrategyService.onVolatilityDetected` — the single-symbol VWAP trigger path — and evaluates each
+  cohort through the per-symbol `IStrategy.evaluate(...)` API. xmom is a **portfolio** strategy
+  (`XMomPortfolioStrategy` on `UNIVERSE_REBALANCE_DUE_EVENT`, ADR 0048/0050) and never flows through it.
+- `StrategyRegistry` registers only `volatility-vwap` v0–v3 (and aliased rows 11/21/31/32) — there
+  is **no `xmom` entry**. A `name='xmom' status='shadow'` row would throw `StrategyConfigException`
+  in `resolveShadow`, be caught and skipped, and **never evaluated**. `findActiveShadows()`
+  returning it does not mean the momentum path evaluates it.
+- The VWAP path is **dormant** during xmom operation (`ACTIVE_STRATEGY_VERSION_ID` unset, ADR 0049
+  — it must be, else boot would `registry.resolve('xmom', …)` → throw). While dormant,
+  `onVolatilityDetected` returns early, so `runShadows` is **never called at all** — the per-tick
+  shadow fan-out is switched off, not merely single-symbol.
+
+An honest post-fill counterfactual for xmom therefore requires a **new portfolio-shadow mechanism**
+(rebalance-cascade fan-out at the `MomentumOrchestratorService` intent-build seam, recording per-cohort
+to `shadow_decisions`/`simulated_fill` with a hard "shadow intent never reaches `emitApproval`/executor/
+gate" containment invariant). That is a genuinely new mechanism (its own ADR 0029 section or a new ADR),
+gated on proving realistic entry-slippage fill fidelity and a 1.5-baseline calibration — out of scope
+for M53. See ADR 0029 for the deferral record.

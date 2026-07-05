@@ -28,6 +28,7 @@ Also see [live-vs-backtest-contract.md](../live-vs-backtest-contract.md) for the
 | [0019](0019-promotion-gate.md) | Promotion gate (M8) |
 | [0019 § M39 amendment](0019-promotion-gate.md#amendment--m39-2026-06-17) | M39 D3 realized-PnL precondition (W2), force_close abstain guard |
 | [0047](0047-portfolio-strategy-contract.md) | Portfolio-strategy contract — `IPortfolioStrategy` + `momentumParamsSchema` (M50) |
+| [0047 § M53 amendment](0047-portfolio-strategy-contract.md#6-m53-amendment-2026-07-04--decoupled-tp-arm-ratio) | M53 — `xmom_tp_arm_rr` decouples the TP arm from the fill-guard floor (no-op at 1.5); D2/D3 shadow cohort deferred |
 | [0048](0048-rebalance-orchestrator.md) | Rebalance orchestrator — scheduler + momentum orchestrator routing through the unchanged risk gate (M50) |
 | [0048 § M50c amendment](0048-rebalance-orchestrator.md#amendment--m50c-2026-07-02-trigger-source-persisted-to-positionstrigger_source) | M50c — `positions.trigger_source` column + analysis exclusion of manual triggers |
 | [0048 § M51 amendment](0048-rebalance-orchestrator.md#amendment--m51-2026-07-02-the-time-stop-gate-ceiling-must-derive-from-the-same-2-margin-constant-as-the-intent) | M51 — time-stop gate ceiling derives from `MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER` (2×), same constant as the intent |
@@ -81,6 +82,7 @@ Also see [live-vs-backtest-contract.md](../live-vs-backtest-contract.md) for the
 | [0029](0029-shadow-counterfactual-and-fill-simulator-pipeline.md) | Shadow counterfactual + fill-simulator pipeline (M11a) |
 | [0029 § M26 amendment](0029-shadow-counterfactual-and-fill-simulator-pipeline.md#m26-amendment-2026-06-08) | M26 shadow fill wiring |
 | [0029 § M39 amendment](0029-shadow-counterfactual-and-fill-simulator-pipeline.md#amendment--m39-2026-06-17) | M39 shadow close path + next-bar exit walk |
+| [0029 § M53 deferral](0029-shadow-counterfactual-and-fill-simulator-pipeline.md#deferral-note--m53-2026-07-04-portfolio-strategy-shadow-cohorts-not-yet-covered) | M53 — portfolio (xmom) shadow cohorts NOT covered by this pipeline; future mechanism scoped |
 | [0032](0032-paper-mode-architecture.md) | PAPER mode architecture |
 
 ## Observability, auth, control (M9)
