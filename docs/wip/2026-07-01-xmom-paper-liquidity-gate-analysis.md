@@ -1,7 +1,7 @@
 # xmom paper soak: gate blockage analysis (liquidity + time-stop)
 
 **Date:** 2026-07-01 (updated 2026-07-02)  
-**Status:** CLOSED — **M51 shipped and smoke-tested 2026-07-02.** D1 (time-stop alignment) + D2 (paper liquidity relax) delivered; smoke test: 3 gate approvals in one cycle = first real end-to-end xmom lifecycle in 185 prior attempts. D3/D4 (depth=0 investigation, pre-gate-skip visibility) deferred; tech-debt entry added. Plan: [plans/M51-xmom-paper-gate-unblock.md](../plans/M51-xmom-paper-gate-unblock.md).  
+**Status:** CLOSED — **M51 shipped and smoke-tested 2026-07-02.** D1 (time-stop alignment) + D2 (paper liquidity relax) delivered; smoke test: 3 gate approvals in one cycle = first real end-to-end xmom lifecycle in 185 prior attempts. D3/D4 (depth=0 investigation, pre-gate-skip visibility) deferred; tech-debt entry added. Plan: [plans/archive/M51-xmom-paper-gate-unblock.md](../plans/archive/M51-xmom-paper-gate-unblock.md).  
 **Context:** [2026-07-01-xmom-cascade-topn-rebalance-timing.md](done/2026-07-01-xmom-cascade-topn-rebalance-timing.md) (M50b / ADR 0050)  
 **Companion:** [main-architector-paper-soak-fill-and-gate-analysis.md](done/main-architector-paper-soak-fill-and-gate-analysis.md) (M24–M27 gate/fill arc)
 
