@@ -485,3 +485,19 @@ Full replacement of `reconstructReferencePrice` (M48 only adds the drift canary)
     engine-local sub-reason `DEGENERATE_GEOMETRY_AT_FILL` (§D2.1 vocabulary).
 17. **Invoke the new leg in backtest/shadow.** Rejected — `evaluateFillDrift` is live-only (§D2.8);
     backtest fills are deterministic (no slippage), so the leg would invent rejects that cannot occur.
+
+## M54 reference note (2026-07-09) — guard unchanged; its pre-fill anchor is now honest
+
+Status: informational, **not an amendment**. `isRrInsufficient` / `evaluateFillGeometry` are
+byte-for-byte unchanged.
+
+M54 (`docs/plans/M54-xmom-entry-geometry-expected-fill.md`, ADR 0047 §7) arms xmom's SL/TP off an
+**expected fill price** `F_exp = P0 × (1 + halfSpread/100)` instead of the raw signal `P0`, behind
+default-off params. Before M54 the arm anchored to `P0` while this guard measures realized R:R
+against the actual fill `F`, so on thin books (systematically adverse fills) realized R:R was
+biased **below** the arm ratio and the guard rejected fills that were never geometrically doomed —
+only mis-measured at open time. After M54 (when enabled), the arm anchors to `F_exp`, so the R:R
+this guard measures at fill is **centered at the arm ratio** instead of biased below it. The guard's
+**meaning is unchanged** — it still measures realized R:R at the actual fill and rejects below
+`min_rr` — only the pre-fill anchor it is compared against is corrected. No code in this ADR moved;
+M54's change is entirely upstream, at the arm site (`MomentumOrchestratorService`).
