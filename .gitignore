@@ -77,3 +77,7 @@ backup_*.sql.gz
 
 # backtest sweep raw JSON reports (markdown summaries are committed)
 docs/analysis/.runs/
+
+# Aggressive-strategy offline sims (Candidate C etc.) — exploratory, run in a
+# separate repo if promising; script + data extracts kept locally, never committed.
+sims/
