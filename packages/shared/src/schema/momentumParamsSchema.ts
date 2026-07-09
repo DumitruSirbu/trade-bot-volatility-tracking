@@ -16,8 +16,20 @@ const momentumParamsBaseSchema = z.object({
     xmom_min_rr: z.number().positive().default(1.5),
     // Take-profit arm ratio; decoupled from xmom_min_rr (guard floor) per M53.
     xmom_tp_arm_rr: z.number().positive().default(1.5),
+    // Anchor SL/TP to expected fill instead of signal price; false = byte-identical no-op to pre-M54.
+    xmom_expected_fill_enabled: z.boolean().default(false),
+    // Order-size-aware thin-book skip budget; null = skip disabled; finite value = skip when orderNotional/book_depth_10bps_usdt exceeds it.
+    xmom_max_depth_fraction: z.number().positive().finite().nullable().default(null),
 });
 
-export const momentumParamsSchema = momentumParamsBaseSchema;
+export const momentumParamsSchema = momentumParamsBaseSchema.superRefine((data, ctx) => {
+    if (data.xmom_expected_fill_enabled && (data.xmom_max_depth_fraction === null || data.xmom_max_depth_fraction === undefined)) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['xmom_max_depth_fraction'],
+            message: 'xmom_max_depth_fraction must be a finite positive number when xmom_expected_fill_enabled is true',
+        });
+    }
+});
 
 export type IMomentumParams = z.infer<typeof momentumParamsSchema>;

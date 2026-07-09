@@ -741,3 +741,28 @@ So the change is confined to `apps/engine`.
   `exitReason` field now on the engine-internal `IClosedPositionView` (Decision B), this is cheap — but
   it buys no additional *reachable* protection (M52a-6), so it stays LOW tech-debt. Decision A's intent
   exemption remains the sanctioned cooldown fix.
+
+## M54 reference note (2026-07-09) — expected-fill anchor + skip reduce the arrival rate this retry responds to
+
+Status: informational, **not an amendment**. The retry contract (§2–§4), `atrUnitsDrift`
+(`|fill − referencePrice|/atr`, `referencePrice = P0` unchanged), and `MOMENTUM_RETRY_MAX_ATR_DRIFT`
+are unchanged.
+
+M54 (`docs/plans/M54-xmom-entry-geometry-expected-fill.md`, ADR 0047 §7) adds an expected-fill
+geometry anchor + a pre-send thin-book skip at the arm site (`buildMomentumOpenIntent`), behind
+default-off params. Two consequences for this ADR, both informational:
+
+- **Reduced arrival rate.** The anchor makes realized R:R-at-fill honest relative to the ADR 0045
+  guard floor, and the skip removes predictably-degenerate thin-book candidates before any order is
+  sent. Both reduce the rate at which `MOMENTUM_FILL_FORCE_CLOSED_EVENT` fires, which is this ADR's
+  entire trigger — so, when enabled, M54 reduces how often the retry mechanism is invoked at all. It
+  does not change what the retry does once triggered.
+- **The retry rebuild inherits both automatically.** §3.5 already mandates the retry re-runs the
+  **full** `buildMomentumOpenIntent` path (fresh sizing, fresh geometry, never reuse attempt 1). Since
+  M54's anchor + skip live inside that same builder, a retry on a thin-book coin whose depth now fails
+  `xmom_max_depth_fraction` is **skipped, not re-opened-and-force_closed** — a strictly better outcome
+  than the pre-M54 behavior the quant §1.3 concern (§7 "Immediate, uncapped same-coin retry") already
+  worried about, without any change to the retry's own decision logic.
+
+No `MOMENTUM_RETRY_MAX_ATR_DRIFT` recalibration is needed: `atrUnitsDrift` keys on `referencePrice`,
+which M54 explicitly does **not** move (ADR 0047 §7.3) precisely to protect this breaker.

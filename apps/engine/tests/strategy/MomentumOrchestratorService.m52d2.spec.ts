@@ -254,7 +254,7 @@ async function buildTestModule(mocks: IMockSet): Promise<{ service: MomentumOrch
 function primeCycleState(service: MomentumOrchestratorService): void {
     const anyService = service as unknown as {
         activeVersionId: number;
-        activeParams: Record<string, number>;
+        activeParams: Record<string, number | boolean | null>;
         currentCycleId: string;
         currentCycleNowMs: number;
         currentTriggerSource: RebalanceTriggerSourceEnum;
@@ -270,6 +270,8 @@ function primeCycleState(service: MomentumOrchestratorService): void {
         xmom_atr_stop_multiplier: 2.0,
         xmom_min_rr: 1.5,
         xmom_tp_arm_rr: 1.5,
+        xmom_max_depth_fraction: null,
+        xmom_expected_fill_enabled: false,
     };
     anyService.currentCycleId = CYCLE_ID;
     anyService.currentCycleNowMs = NOW_MS;

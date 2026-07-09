@@ -77,6 +77,22 @@ export const MOMENTUM_RETRY_ARMED = 'MOMENTUM_RETRY_ARMED';
 export const MOMENTUM_RETRY_FIRED = 'MOMENTUM_RETRY_FIRED';
 export const MOMENTUM_RETRY_ABANDONED_TIMEOUT = 'MOMENTUM_RETRY_ABANDONED_TIMEOUT';
 
+// M54 D2 (M54 §5/§9) log-only observability markers at the xmom open-arm seam. Never gate.
+// MOMENTUM_EXPECTED_FILL_ANCHOR records the expected-fill offset (s_exp), the anchored F_exp and
+// the order-size depthFraction so D3/EXP-023 can calibrate the skip budget from the measured
+// distribution (mirrors the M48 GEOMETRY_ANCHOR_DRIFT pattern). MOMENTUM_DEPTH_SKIP marks a
+// pre-send thin-book skip (order-size-aware slippage budget, fail-closed on null/≤0 depth).
+export const MOMENTUM_EXPECTED_FILL_ANCHOR = 'MOMENTUM_EXPECTED_FILL_ANCHOR';
+export const MOMENTUM_DEPTH_SKIP = 'MOMENTUM_DEPTH_SKIP';
+
+// Half of the full bid/ask spread — a taker LONG crosses one side of the book, so the expected
+// slippage is halfSpread = bid_ask_spread_pct / HALF_SPREAD_DIVISOR (M54 §3a).
+export const HALF_SPREAD_DIVISOR = 2;
+
+// Percent → fraction: bid_ask_spread_pct is expressed in percent, so divide by 100 before applying
+// it multiplicatively to a price (M54 §3a F_exp = P0 × (1 + halfSpreadPct / PERCENT_TO_FRACTION_DIVISOR)).
+export const PERCENT_TO_FRACTION_DIVISOR = 100;
+
 // --- v1 mean-reversion exhaustion-confirmation tolerances (ADR 0003 §4, M3 brief) ---
 
 // Take-profit target is VWAP pulled in by this many sigma for conservatism: TP sits at

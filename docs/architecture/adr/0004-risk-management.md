@@ -522,6 +522,21 @@ until M19.
 > unreachable in any non-`paper` env. If you are reading §6a to confirm the live floor, it did not
 > move — see ADR 0042 §9 for the paper relax.
 
+> **[M54 pointer note — 2026-07-09]:** M54 (`docs/plans/M54-xmom-entry-geometry-expected-fill.md`,
+> ADR 0047 §7) adds a **second, pre-gate depth guard for xmom only** — an order-size-aware
+> slippage-budget skip inside `buildMomentumOpenIntent` (`depthFraction = orderNotional /
+> book_depth_10bps_usdt`, skip when it exceeds `xmom_max_depth_fraction`, default-off/no-op). This
+> §6a in-gate `isBookTooThin` floor is **unchanged, byte-for-byte** — it remains the last-line
+> eligibility floor for every strategy, xmom included. The two guards are deliberately different
+> shapes: this section's floor is a **static per-tier depth floor independent of order size**;
+> M54's skip is an **order-size-aware slippage budget** — the same coin can pass this floor at small
+> size but fail M54's budget at large size, and vice-versa. M54's skip adopts this section's
+> **fail-closed** convention (`null`/`≤0` depth ⇒ reject) so the two guards never disagree in
+> direction on bad data. M54 does not weaken, replace, or reach the M51 paper-relax (ADR 0042 §9) —
+> that relax stays exactly as it is; M54's skip is the layer that stops the open→force_close→retry
+> churn the relax's intentional permissiveness produces, without re-tightening the eligibility floor
+> the soak depends on. See ADR 0047 §7 for the full M54 record.
+
 Both §6a and §6b are **code-only** — the floors and the breadth distance are `riskConsts`,
 not `strategy_versions.params`. M19 writes nothing to the DB (no migration, no params
 re-seed).
