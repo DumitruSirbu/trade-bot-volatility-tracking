@@ -17,7 +17,7 @@
 > capital is enabled; the rebalance cadence and the momentum signal are unchanged.**
 >
 > This milestone **implements the recommendations** of
-> [`docs/wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md`](../wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md)
+> [`docs/wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md`](../../wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md)
 > (P0/P1 blocking; P3/P4 as stretch). That analysis is the source of every number cited below.
 
 ---
@@ -26,7 +26,7 @@
 
 The `xmom` PAPER soak (M50 / M50b, `strategy_versions` id=20, `EXCHANGE_ENV=paper`) has approved
 **0 positions across 185 gate attempts** spanning two soak eras (source:
-[`docs/wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md`](../wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md)):
+[`docs/wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md`](../../wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md)):
 
 | Era | When | Attempts | Dominant reject | Root cause |
 |-----|------|----------|-----------------|------------|
@@ -394,7 +394,7 @@ with no `ERROR` / DI-cycle / boot-pipeline failure.
 ## Supersedes / links
 
 - **Implements** the P0/P1 (blocking) and P3/P4 (stretch) recommendations of
-  [`docs/wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md`](../wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md).
+  [`docs/wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md`](../../wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md).
   That doc's `Status:` line is updated to reference M51 as the implementing milestone.
 - **Builds on** M50 / M50b (ADR 0048, 0050) and M50c (manual-trigger surface, ADR 0048 § M50c amendment).
 - **Does not affect** the M44 shadow-fidelity soak gate or the M50 live-promotion gate — both remain

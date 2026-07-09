@@ -357,7 +357,7 @@ the momentum leaders NFP/TAIKO sat at depth p50 ≈ $1,581–$2,557, well under 
 ($10,000). `PAPER_RELAX_MARKET_STRESS` (§2) does **not** relax per-coin spread/depth, so no existing
 flag addresses this. Analysis:
 [`docs/wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md`](../../wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md);
-plan: [`docs/plans/M51-xmom-paper-gate-unblock.md`](../../plans/M51-xmom-paper-gate-unblock.md) (D2).
+plan: [`docs/plans/archive/M51-xmom-paper-gate-unblock.md`](../../plans/archive/M51-xmom-paper-gate-unblock.md) (D2).
 
 ### Decision
 
@@ -469,7 +469,7 @@ needed, is a **separate follow-up**, not part of M51.
 
 ## See also
 
-- `docs/plans/M51-xmom-paper-gate-unblock.md` (M51 — the milestone this §9 amendment implements)
+- `docs/plans/archive/M51-xmom-paper-gate-unblock.md` (M51 — the milestone this §9 amendment implements)
 - `docs/plans/archive/M25-paper-exploration-enablement.md` (milestone plan, amendments A1–A6)
 - `docs/architecture/adr/0004-risk-management.md` (§4 slot model, §6/§6a–§6d stress halt + M23
   auto-resume, §8 sizing — the surfaces this ADR amends for paper)

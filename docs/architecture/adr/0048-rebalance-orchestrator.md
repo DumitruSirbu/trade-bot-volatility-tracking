@@ -441,7 +441,7 @@ of 100** attempts — all deep-book symbols (depth p50 ≈ $73,326) that were ot
 two sides of a single hold geometry had **drifted**: the intent used 2×, the ceiling used 1×.
 
 Full analysis: [`docs/wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md`](../../wip/2026-07-01-xmom-paper-liquidity-gate-analysis.md);
-milestone plan: [`docs/plans/M51-xmom-paper-gate-unblock.md`](../../plans/M51-xmom-paper-gate-unblock.md) (D1).
+milestone plan: [`docs/plans/archive/M51-xmom-paper-gate-unblock.md`](../../plans/archive/M51-xmom-paper-gate-unblock.md) (D1).
 
 ### Decision
 
