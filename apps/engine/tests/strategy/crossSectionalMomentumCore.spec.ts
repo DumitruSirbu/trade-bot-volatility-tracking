@@ -39,6 +39,8 @@ function buildParams(overrides: Partial<IMomentumParams> = {}): IMomentumParams 
         xmom_atr_stop_multiplier: 2.0,
         xmom_min_rr: 1.5,
         xmom_tp_arm_rr: 1.5,
+        xmom_expected_fill_enabled: false,
+        xmom_max_depth_fraction: null,
         ...overrides,
     };
 }

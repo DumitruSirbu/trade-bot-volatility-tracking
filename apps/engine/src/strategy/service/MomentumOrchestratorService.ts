@@ -34,6 +34,7 @@ import { ICandle } from '../../market-data/interface/ICandle';
 import { ICandleClosedEvent } from '../../market-data/interface/ICandleClosedEvent';
 import { CandleRepository } from '../../market-data/repository/CandleRepository';
 import { UniverseMembershipRepository } from '../../market-data/repository/UniverseMembershipRepository';
+import { SymbolMarketState } from '../../market-data/state/SymbolMarketState';
 import { SymbolStateRegistry } from '../../market-data/service/SymbolStateRegistry';
 import { UniverseService } from '../../market-data/service/UniverseService';
 import { PositionEntity } from '../../position/entity';
@@ -42,6 +43,8 @@ import { IOrderIntent, IOrderIntentApprovedEvent, IRiskDecision, IRiskGateContex
 import { InstrumentPortAdapter, OpenPositionsPortAdapter, PositionSizer, RiskGateService, RiskStatePortAdapter } from '../../risk/service';
 import {
     CANDLE_INTERVAL_MS,
+    MOMENTUM_DEPTH_SKIP,
+    MOMENTUM_EXPECTED_FILL_ANCHOR,
     MOMENTUM_RETRY_ABANDONED_TIMEOUT,
     MOMENTUM_RETRY_ARMED,
     MOMENTUM_RETRY_BASKET_FULL,
@@ -614,19 +617,27 @@ export class MomentumOrchestratorService {
         }
 
         const stopDistance = atr24h.times(params.xmom_atr_stop_multiplier);
-        const stopLossPrice = entryPrice.minus(stopDistance);
+        // M54 D2 (M54 §3a): anchor SL/TP to the EXPECTED fill F_exp = P0 × (1 + halfSpread/100),
+        // not the signal price P0, so the ADR 0045 fill guard's realized R:R is centered at the arm
+        // ratio instead of biased below it on adverse thin-book slippage. Byte-identical no-op when
+        // xmom_expected_fill_enabled=false or spread is null/≤0 (returns P0 itself — same reference).
+        // referencePrice/midAtTrigger stay P0 below (protect the M48 slFloor + M52 atrUnitsDrift breaker).
+        const expectedFillPrice = this.resolveExpectedFillPrice(entryPrice, state, params);
+        const stopLossPrice = expectedFillPrice.minus(stopDistance);
         // Arm ratio is decoupled from the guard floor (xmom_min_rr) per M53: xmom_tp_arm_rr drives
         // the take-profit arm only; xmom_min_rr remains the fill-acceptance guard floor (see :862).
-        // The arm is hardcoded LONG (entryPrice.plus). A future SHORT xmom path MUST apply the ratio
-        // symmetrically as entryPrice.minus(stopDistance.times(params.xmom_tp_arm_rr)) so the two
-        // seams never diverge by side.
-        const takeProfitPrice = entryPrice.plus(stopDistance.times(params.xmom_tp_arm_rr));
+        // The arm is hardcoded LONG (expectedFillPrice.plus). A future SHORT xmom path MUST apply the
+        // ratio symmetrically as expectedFillPrice.minus(stopDistance.times(params.xmom_tp_arm_rr)) so
+        // the two seams never diverge by side.
+        const takeProfitPrice = expectedFillPrice.plus(stopDistance.times(params.xmom_tp_arm_rr));
 
+        // Size against F_exp so stopDistance fed to the sizer stays D (F_exp − (F_exp − D)) and the
+        // risk notional is unchanged vs the P0 anchor (F_exp ≈ P0). PositionSizer.ts:52.
         const sizingResult = this.sizer.size({
             allocatedCapital: new Money(this.config.accountCapitalUsdt),
             atr14: atr24h,
             atrStopMultiplier: params.xmom_atr_stop_multiplier,
-            entryPrice,
+            entryPrice: expectedFillPrice,
             stopLossPrice,
             tradeSide: PositionSideEnum.LONG,
             // Momentum does not apply funding suppression (long-only follow; funding-fade rules are
@@ -639,6 +650,24 @@ export class MomentumOrchestratorService {
         });
 
         if (sizingResult.kind !== 'sized') {
+            return null;
+        }
+
+        const orderNotional = sizingResult.sizing.notional;
+        const bookDepth10bpsUsdt = state.getBookDepth10bpsUsdt();
+
+        this.logExpectedFillAnchor(symbol, entryPrice, expectedFillPrice, stopDistance, orderNotional, bookDepth10bpsUsdt, params);
+
+        // M54 D2 (M54 §3b): pre-send, order-size-aware thin-book skip — fail-CLOSED on null/≤0 depth
+        // to match the in-gate isBookTooThin convention (RiskGateService.ts:909-921). Runs regardless
+        // of the anchor toggle (skip-only is an allowed config, M54 §6). The M52 retry rebuild routes
+        // through this same builder (processOpen :332), so a budget-failing thin-coin retry is skipped
+        // here rather than re-opened-and-force_closed.
+        if (this.isDepthBudgetExceeded(orderNotional, bookDepth10bpsUsdt, params)) {
+            this.logger.log(
+                `${MOMENTUM_DEPTH_SKIP} symbol=${symbol} orderNotional=${orderNotional.toFixed()} depth10bps=${bookDepth10bpsUsdt?.toFixed() ?? 'null'} maxDepthFraction=${params.xmom_max_depth_fraction}`,
+            );
+
             return null;
         }
 
@@ -686,6 +715,72 @@ export class MomentumOrchestratorService {
             // rebuild — rides to positions.is_retry_entry for the paper-soak attribution.
             isRetryEntry: context.isRetryEntry,
         };
+    }
+
+    // M54 §3a expected-fill anchor. F_exp = P0 × (1 + halfSpread/100) for a taker LONG crossing the
+    // spread; halfSpread = bid_ask_spread_pct / 2. Notional-independent (no sizer circular dependency).
+    // Returns P0 unchanged (same reference — byte-identical no-op) when the anchor is disabled or the
+    // spread reading is missing/≤0 (cold-boot / M51 caveat), so the disabled path never introduces new
+    // rounding. Deterministic function of the snapshot (no clock/RNG) so live == backtest holds.
+    private resolveExpectedFillPrice(signalPrice: MoneyValue, state: SymbolMarketState, params: IMomentumParams): MoneyValue {
+        if (!params.xmom_expected_fill_enabled) {
+            return signalPrice;
+        }
+
+        const spreadPct = state.getSpreadPct();
+
+        if (spreadPct === null || spreadPct <= 0) {
+            return signalPrice;
+        }
+
+        const halfSpreadPct = spreadPct / 2;
+
+        return signalPrice.times(1 + halfSpreadPct / 100);
+    }
+
+    // M54 §3b order-size-aware thin-book skip budget. Fails CLOSED (skip) on a null or ≤0 depth
+    // reading — an empty book is the worst adverse-slippage case — matching the in-gate isBookTooThin
+    // convention (RiskGateService.ts:909-921). Returns false (never skip) only when the budget is
+    // disabled (xmom_max_depth_fraction === null), independent of the anchor toggle so skip-only is a
+    // valid config (M54 §6). skip iff orderNotional / book_depth_10bps_usdt exceeds the budget.
+    private isDepthBudgetExceeded(orderNotional: MoneyValue, bookDepth10bpsUsdt: MoneyValue | null, params: IMomentumParams): boolean {
+        if (params.xmom_max_depth_fraction === null) {
+            return false;
+        }
+
+        if (bookDepth10bpsUsdt === null || bookDepth10bpsUsdt.lessThanOrEqualTo(0)) {
+            return true;
+        }
+
+        return orderNotional.dividedBy(bookDepth10bpsUsdt).greaterThan(params.xmom_max_depth_fraction);
+    }
+
+    // M54 D2 log-only observability (M54 §5). Records s_exp (expected slippage as a fraction of the
+    // stop distance D), the anchored F_exp, and the order-size depthFraction so D3/EXP-023 can
+    // calibrate xmom_max_depth_fraction from the measured distribution. The actual-fill residual r is
+    // NOT computable at open time (needs the real fill — D3/replay territory). Never gates.
+    private logExpectedFillAnchor(
+        symbol: string,
+        signalPrice: MoneyValue,
+        expectedFillPrice: MoneyValue,
+        stopDistance: MoneyValue,
+        orderNotional: MoneyValue,
+        bookDepth10bpsUsdt: MoneyValue | null,
+        params: IMomentumParams,
+    ): void {
+        // Full no-op default (anchor off AND skip off) stays byte-quiet on the active version; the log
+        // emits once either lever is armed (anchor on, or skip-only for skip-first calibration, M54 §6).
+        if (!params.xmom_expected_fill_enabled && params.xmom_max_depth_fraction === null) {
+            return;
+        }
+
+        const expectedSlippageFraction = stopDistance.greaterThan(0) ? expectedFillPrice.minus(signalPrice).dividedBy(stopDistance).toFixed() : '0';
+        const depthFraction = bookDepth10bpsUsdt !== null && bookDepth10bpsUsdt.greaterThan(0) ? orderNotional.dividedBy(bookDepth10bpsUsdt).toFixed() : 'null';
+
+        this.logger.log(
+            `${MOMENTUM_EXPECTED_FILL_ANCHOR} symbol=${symbol} enabled=${params.xmom_expected_fill_enabled} ` +
+                `p0=${signalPrice.toFixed()} fExp=${expectedFillPrice.toFixed()} sExp=${expectedSlippageFraction} depthFraction=${depthFraction}`,
+        );
     }
 
     // De-rank close intent — the exact ReconciliationService.buildCloseIntent blueprint. Risk-

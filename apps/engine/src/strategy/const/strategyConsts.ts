@@ -77,6 +77,14 @@ export const MOMENTUM_RETRY_ARMED = 'MOMENTUM_RETRY_ARMED';
 export const MOMENTUM_RETRY_FIRED = 'MOMENTUM_RETRY_FIRED';
 export const MOMENTUM_RETRY_ABANDONED_TIMEOUT = 'MOMENTUM_RETRY_ABANDONED_TIMEOUT';
 
+// M54 D2 (M54 §5/§9) log-only observability markers at the xmom open-arm seam. Never gate.
+// MOMENTUM_EXPECTED_FILL_ANCHOR records the expected-fill offset (s_exp), the anchored F_exp and
+// the order-size depthFraction so D3/EXP-023 can calibrate the skip budget from the measured
+// distribution (mirrors the M48 GEOMETRY_ANCHOR_DRIFT pattern). MOMENTUM_DEPTH_SKIP marks a
+// pre-send thin-book skip (order-size-aware slippage budget, fail-closed on null/≤0 depth).
+export const MOMENTUM_EXPECTED_FILL_ANCHOR = 'MOMENTUM_EXPECTED_FILL_ANCHOR';
+export const MOMENTUM_DEPTH_SKIP = 'MOMENTUM_DEPTH_SKIP';
+
 // --- v1 mean-reversion exhaustion-confirmation tolerances (ADR 0003 §4, M3 brief) ---
 
 // Take-profit target is VWAP pulled in by this many sigma for conservatism: TP sits at
