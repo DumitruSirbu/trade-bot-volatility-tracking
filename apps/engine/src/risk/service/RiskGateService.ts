@@ -1217,14 +1217,19 @@ export class RiskGateService {
     //
     // Anchor (BLOCKER 1): both distances are measured against `intent.referencePrice`, which on
     // the gate intent is the BAR-CLOSE SIGNAL REFERENCE used for SL/TP distance math (see
-    // IOrderIntent.referencePrice doc, ADR 0003 §3 / ADR 0004 §8) — the SAME anchor the cores used
-    // when they computed `proposedExit`'s SL and TP. We deliberately measure side-relative from
-    // the SL/TP LEVELS (not from any fill estimate): for LONG `tp_dist = takeProfitPrice − ref`,
-    // `sl_dist = ref − stopLossPrice`; mirror for SHORT. This must NEVER anchor to `nextBarOpen`
-    // (the backtest fill estimate), or live and backtest would compute different R:R for the same
-    // signal (invariant 7). Sound under Task 0 Option B: the momentum TP is frozen at signal time
-    // (never rebased), so the intent TP equals the held TP; the SL is the clamped (worst-case)
-    // value — exactly the geometry the position holds for its life.
+    // IOrderIntent.referencePrice doc, ADR 0003 §3 / ADR 0004 §8). For most cores this is the SAME
+    // anchor they used when they computed `proposedExit`'s SL and TP. EXCEPTION (M54 D2): when xmom
+    // runs with xmom_expected_fill_enabled=true it arms SL/TP off the expected fill F_exp while
+    // leaving referencePrice at the raw signal price P0, so this pre-fill RR reads (a + s_exp)/(1 −
+    // s_exp) rather than exactly the arm ratio a (s_exp = the half-spread as a fraction of the stop
+    // distance). That is SAFE — it inflates RR ABOVE a, MIN_RR_GATE_FLOOR is a loose 1.0 floor, and
+    // the BINDING fill-time R:R guard lives in exitGeometryHelper.ts (unchanged by M54), not here.
+    // We deliberately measure side-relative from the SL/TP LEVELS (not from any fill estimate): for
+    // LONG `tp_dist = takeProfitPrice − ref`, `sl_dist = ref − stopLossPrice`; mirror for SHORT.
+    // This must NEVER anchor to `nextBarOpen` (the backtest fill estimate), or live and backtest
+    // would compute different R:R for the same signal (invariant 7). Sound under Task 0 Option B:
+    // the momentum TP is frozen at signal time (never rebased), so the intent TP equals the held TP;
+    // the SL is the clamped (worst-case) value — exactly the geometry the position holds for its life.
     private isRewardRiskTooLow(clampedExit: IProposedExit, intent: IOrderIntent): boolean {
         const referencePrice = intent.referencePrice;
         const isLong = intent.tradeSide === PositionSideEnum.LONG;

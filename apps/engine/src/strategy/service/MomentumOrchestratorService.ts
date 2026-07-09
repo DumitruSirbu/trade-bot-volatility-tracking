@@ -43,6 +43,7 @@ import { IOrderIntent, IOrderIntentApprovedEvent, IRiskDecision, IRiskGateContex
 import { InstrumentPortAdapter, OpenPositionsPortAdapter, PositionSizer, RiskGateService, RiskStatePortAdapter } from '../../risk/service';
 import {
     CANDLE_INTERVAL_MS,
+    HALF_SPREAD_DIVISOR,
     MOMENTUM_DEPTH_SKIP,
     MOMENTUM_EXPECTED_FILL_ANCHOR,
     MOMENTUM_RETRY_ABANDONED_TIMEOUT,
@@ -57,6 +58,7 @@ import {
     MOMENTUM_RETRY_SKIPPED_DRIFT,
     MOMENTUM_RETRY_SUPERSEDED,
     MOMENTUM_TIME_STOP_MARGIN_MULTIPLIER,
+    PERCENT_TO_FRACTION_DIVISOR,
 } from '../const';
 import { DecisionRepository } from '../repository/DecisionRepository';
 import { StrategyVersionRepository } from '../repository/StrategyVersionRepository';
@@ -118,6 +120,21 @@ interface IArmedRetry {
     readonly rebalanceCycleId: string;
     readonly triggerSource: RebalanceTriggerSourceEnum;
     readonly armedAtMs: number;
+}
+
+// The M54 §3a/§3b expected-fill leg context (M54 D2). Groups the seven values the depth-budget
+// skip and the log-only anchor observability share for one open leg — the raw signal price P0, the
+// anchored expected fill F_exp, the stop distance D, the sized order notional, the per-coin book
+// depth, and the resolved momentum params — so those methods take one cohesive object instead of a
+// 7-scalar positional call. Built once in buildMomentumOpenIntent after sizing resolves the notional.
+interface IExpectedFillContext {
+    readonly symbol: string;
+    readonly signalPrice: MoneyValue;
+    readonly expectedFillPrice: MoneyValue;
+    readonly stopDistance: MoneyValue;
+    readonly orderNotional: MoneyValue;
+    readonly bookDepth10bpsUsdt: MoneyValue | null;
+    readonly params: IMomentumParams;
 }
 
 // The M50 rebalance orchestrator (ADR 0048 §2.3). On each UNIVERSE_REBALANCE_DUE_EVENT it builds
@@ -655,15 +672,24 @@ export class MomentumOrchestratorService {
 
         const orderNotional = sizingResult.sizing.notional;
         const bookDepth10bpsUsdt = state.getBookDepth10bpsUsdt();
+        const expectedFillContext: IExpectedFillContext = {
+            symbol,
+            signalPrice: entryPrice,
+            expectedFillPrice,
+            stopDistance,
+            orderNotional,
+            bookDepth10bpsUsdt,
+            params,
+        };
 
-        this.logExpectedFillAnchor(symbol, entryPrice, expectedFillPrice, stopDistance, orderNotional, bookDepth10bpsUsdt, params);
+        this.logExpectedFillAnchor(expectedFillContext);
 
         // M54 D2 (M54 §3b): pre-send, order-size-aware thin-book skip — fail-CLOSED on null/≤0 depth
         // to match the in-gate isBookTooThin convention (RiskGateService.ts:909-921). Runs regardless
         // of the anchor toggle (skip-only is an allowed config, M54 §6). The M52 retry rebuild routes
         // through this same builder (processOpen :332), so a budget-failing thin-coin retry is skipped
         // here rather than re-opened-and-force_closed.
-        if (this.isDepthBudgetExceeded(orderNotional, bookDepth10bpsUsdt, params)) {
+        if (this.isDepthBudgetExceeded(expectedFillContext)) {
             this.logger.log(
                 `${MOMENTUM_DEPTH_SKIP} symbol=${symbol} orderNotional=${orderNotional.toFixed()} depth10bps=${bookDepth10bpsUsdt?.toFixed() ?? 'null'} maxDepthFraction=${params.xmom_max_depth_fraction}`,
             );
@@ -685,6 +711,13 @@ export class MomentumOrchestratorService {
             correlationMode: CorrelationModeEnum.IDIOSYNCRATIC,
             coinTier,
             idiosyncrasyScore: 1,
+            // M54 D2 anchor asymmetry (INTENTIONAL — do NOT "fix" by moving entryPrice to F_exp): the
+            // sizer received entryPrice=F_exp so its stopDistance is D exactly, but the intent's
+            // entryPrice/referencePrice/midAtTrigger stay at the raw signal price P0. Downstream
+            // consumers that re-derive SL/TP distance from intent.entryPrice (the risk gate's RR check,
+            // RiskGateService.ts:1228) therefore see a distance that differs from the sizer's D by the
+            // half-spread. This is safe-direction and required: referencePrice MUST stay P0 to protect
+            // the M48 slFloor and the M52 atrUnitsDrift breaker, both of which key off P0.
             entryPrice,
             referencePrice: entryPrice,
             midAtTrigger: entryPrice,
@@ -733,9 +766,9 @@ export class MomentumOrchestratorService {
             return signalPrice;
         }
 
-        const halfSpreadPct = spreadPct / 2;
+        const halfSpreadPct = spreadPct / HALF_SPREAD_DIVISOR;
 
-        return signalPrice.times(1 + halfSpreadPct / 100);
+        return signalPrice.times(1 + halfSpreadPct / PERCENT_TO_FRACTION_DIVISOR);
     }
 
     // M54 §3b order-size-aware thin-book skip budget. Fails CLOSED (skip) on a null or ≤0 depth
@@ -743,7 +776,9 @@ export class MomentumOrchestratorService {
     // convention (RiskGateService.ts:909-921). Returns false (never skip) only when the budget is
     // disabled (xmom_max_depth_fraction === null), independent of the anchor toggle so skip-only is a
     // valid config (M54 §6). skip iff orderNotional / book_depth_10bps_usdt exceeds the budget.
-    private isDepthBudgetExceeded(orderNotional: MoneyValue, bookDepth10bpsUsdt: MoneyValue | null, params: IMomentumParams): boolean {
+    private isDepthBudgetExceeded(context: IExpectedFillContext): boolean {
+        const { orderNotional, bookDepth10bpsUsdt, params } = context;
+
         if (params.xmom_max_depth_fraction === null) {
             return false;
         }
@@ -759,15 +794,9 @@ export class MomentumOrchestratorService {
     // stop distance D), the anchored F_exp, and the order-size depthFraction so D3/EXP-023 can
     // calibrate xmom_max_depth_fraction from the measured distribution. The actual-fill residual r is
     // NOT computable at open time (needs the real fill — D3/replay territory). Never gates.
-    private logExpectedFillAnchor(
-        symbol: string,
-        signalPrice: MoneyValue,
-        expectedFillPrice: MoneyValue,
-        stopDistance: MoneyValue,
-        orderNotional: MoneyValue,
-        bookDepth10bpsUsdt: MoneyValue | null,
-        params: IMomentumParams,
-    ): void {
+    private logExpectedFillAnchor(context: IExpectedFillContext): void {
+        const { symbol, signalPrice, expectedFillPrice, stopDistance, orderNotional, bookDepth10bpsUsdt, params } = context;
+
         // Full no-op default (anchor off AND skip off) stays byte-quiet on the active version; the log
         // emits once either lever is armed (anchor on, or skip-only for skip-first calibration, M54 §6).
         if (!params.xmom_expected_fill_enabled && params.xmom_max_depth_fraction === null) {
